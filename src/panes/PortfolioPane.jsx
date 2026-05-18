@@ -14,7 +14,7 @@ export default function PortfolioPane() {
   const [positions, setPositions] = useState([]);
   const [holdings, setHoldings]   = useState([]);
   const [updTime, setUpdTime]     = useState('');
-  const [tab, setTab]             = useState('positions');
+  const [tab, setTab]             = useState('holdings');
 
   // ── Collect all instrument keys for WebSocket ──
   const allKeys = useMemo(() => {
@@ -61,7 +61,10 @@ export default function PortfolioPane() {
   }
 
   const enrichedPos = useMemo(() => enrich(positions), [positions, lastPrices]); // eslint-disable-line
-  const enrichedHld = useMemo(() => enrich(holdings),  [holdings,  lastPrices]); // eslint-disable-line
+  const enrichedHld = useMemo(() =>
+    enrich(holdings).sort((a, b) =>
+      (a.tradingsymbol || a.symbol || '').localeCompare(b.tradingsymbol || b.symbol || '')
+    ), [holdings, lastPrices]); // eslint-disable-line
 
   const totalPnl  = [...enrichedPos, ...enrichedHld].reduce((s, i) => s + (i.pnl || 0), 0);
   const invested  = enrichedHld.reduce((s, i) => s + (i.avg * i.qty), 0);
@@ -125,8 +128,8 @@ export default function PortfolioPane() {
           {/* Tab toggle */}
           <div style={{ display: 'flex', gap: 0, marginBottom: 12, background: '#f1f5f9', borderRadius: 10, padding: 3 }}>
             {[
-              { id: 'positions', label: `📊 Positions (${positions.length})` },
               { id: 'holdings',  label: `💼 Holdings (${holdings.length})`   },
+              { id: 'positions', label: `📊 Positions (${positions.length})` },
             ].map((t) => (
               <button key={t.id} onClick={() => setTab(t.id)} style={{
                 flex: 1, padding: '8px 0', borderRadius: 8, border: 'none',
