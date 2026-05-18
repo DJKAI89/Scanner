@@ -487,3 +487,148 @@ export function boSLTarget(ltp, atr, isBull, pdh, pdl, ema200) {
   const rr = sl > 0 && ltp !== sl ? +((Math.abs(target - ltp) / Math.abs(ltp - sl))).toFixed(2) : 1;
   return { sl, target, rr };
 }
+
+// ── Fibonacci Levels ──────────────────────────────────────────
+export function calcFibLevels(swingLow, swingHigh) {
+  const range = swingHigh - swingLow;
+  if (range <= 0) return null;
+  return {
+    range, swingLow, swingHigh,
+    fib236: +(swingHigh - range * 0.236).toFixed(2),
+    fib382: +(swingHigh - range * 0.382).toFixed(2),
+    fib500: +(swingHigh - range * 0.500).toFixed(2),
+    fib618: +(swingHigh - range * 0.618).toFixed(2),
+    fib786: +(swingHigh - range * 0.786).toFixed(2),
+    ext618: +(swingHigh + range * 0.618).toFixed(2),
+    ext100: +(swingHigh + range * 1.000).toFixed(2),
+    ext162: +(swingHigh + range * 1.618).toFixed(2),
+  };
+}
+
+// ── Professional SL (VIX + RSI + ATR + Pivot) ────────────────
+export function calcProfessionalSL(entry, sr, atr, swingL, low, vix, rsi) {
+  const v        = atr || entry * 0.02;
+  const liveVix  = vix || 15;
+  const vixMult  = 1.3 + liveVix / 100;
+  const rsiAdj   = (rsi || 50) > 70 ? -0.15 : (rsi || 50) < 35 ? 0.15 : 0;
+  const finalMult = vixMult + rsiAdj;
+  const atrSL    = +(entry - v * finalMult).toFixed(2);
+  const slSwing  = swingL > 0 ? +(swingL * 0.995).toFixed(2) : 0;
+  const slS1     = sr?.pivotS1 > 0 ? +(sr.pivotS1 * 0.995).toFixed(2) : 0;
+  let sl = atrSL;
+  if (slSwing > 0 && sl > slSwing) sl = slSwing;
+  if (slS1    > 0 && sl > slS1)    sl = slS1;
+  sl = Math.min(sl, +(entry - v * 1.0).toFixed(2));
+  sl = Math.max(sl, +(entry - v * 3.0).toFixed(2));
+  if (low > 0) sl = Math.max(sl, +(low * 0.99).toFixed(2));
+  return +sl.toFixed(2);
+}
+
+// ── Professional Targets (R2/R1 Pivot + Fibonacci) ───────────
+export function calcProfessionalTargets(entry, sl, sr, atr, vix) {
+  let risk = entry - sl;
+  if (risk <= 0) risk = entry * 0.02;
+  const r1   = sr?.pivotR1 || 0, r2 = sr?.pivotR2 || 0;
+  const w52H = sr?.week52H || 0, v  = atr || risk;
+  const rrOf = (t) => risk > 0 ? (t - entry) / risk : 0;
+  const rrT15 = +(entry + risk * 1.5).toFixed(2);
+  let cons = (r1 > entry && rrOf(r1) >= 1.2 && rrOf(r1) <= 3.0) ? +r1.toFixed(2) : rrT15;
+  const rrT20 = +(entry + risk * 2.0).toFixed(2);
+  let mod;
+  if (r2 > entry && rrOf(r2) >= 1.8 && rrOf(r2) <= 4.0)      mod = +r2.toFixed(2);
+  else if (r1 > entry && rrOf(r1) >= 1.8)                      mod = +r1.toFixed(2);
+  else                                                          mod = rrT20;
+  const fibT3 = +(entry + risk * 1.618).toFixed(2);
+  let agg = Math.max(fibT3, +(entry + risk * 3.0).toFixed(2));
+  if (w52H > entry && w52H < agg) agg = +w52H.toFixed(2);
+  if ((vix || 15) > 22) agg = Math.min(agg, +(entry + risk * 2.5).toFixed(2));
+  mod = Math.max(mod, +(cons + risk * 0.5).toFixed(2));
+  agg = Math.max(agg, +(mod  + risk * 0.5).toFixed(2));
+  return { cons, mod, agg, rrCons: +rrOf(cons).toFixed(2), rrMod: +rrOf(mod).toFixed(2), rrAgg: +rrOf(agg).toFixed(2), risk: +risk.toFixed(2) };
+}
+
+// ── Smart Options SL/Target (IV + DTE + Delta) ───────────────
+export function calcSmartOptionSLTarget(entry, spot, strike, iv, delta, theta, expiry, vix) {
+  const today   = new Date();
+  const expDate = expiry ? new Date(expiry) : today;
+  const dte     = Math.max(0, Math.round((expDate - today) / 86400000));
+  const ivDec   = (iv || 20) / 100;
+  const timeFrac = dte === 0 ? (1 / 252) * 0.5 : (1 / 252);
+  const dailySpotMove    = spot * ivDec * Math.sqrt(timeFrac);
+  const absDelta         = Math.abs(delta) || 0.4;
+  const dailyPremiumMove = dailySpotMove * absDelta;
+  const liveVix   = vix || 15;
+  const vixFactor = liveVix > 20 ? 1.15 : liveVix < 13 ? 0.90 : 1.0;
+  const moneyness = spot > 0 ? Math.abs(strike - spot) / spot : 0;
+  const atmFactor = moneyness < 0.01 ? 1.1 : moneyness > 0.04 ? 0.85 : 1.0;
+  const thetaEatsPct = entry > 0 ? Math.abs(theta || 0) / entry : 0;
+  let slMinPct, slMaxPct;
+  if (absDelta >= 0.45)       { slMinPct = 0.15; slMaxPct = 0.25; }
+  else if (absDelta >= 0.35)  { slMinPct = 0.20; slMaxPct = 0.30; }
+  else                        { slMinPct = 0.15; slMaxPct = 0.25; }
+  const slWidth = dailyPremiumMove * vixFactor * atmFactor;
+  const rawSL   = entry - Math.max(slWidth, entry * slMinPct);
+  const sl      = +Math.min(entry * (1 - slMinPct), Math.max(entry * (1 - slMaxPct), rawSL)).toFixed(2);
+  const risk    = entry - sl;
+  let baseRR = dte === 0 ? 1.2 : dte <= 2 ? 1.5 : dte <= 7 ? 1.8 : 2.0;
+  if (thetaEatsPct > 0.10) baseRR = Math.max(1.2, baseRR - 0.30);
+  else if (thetaEatsPct > 0.06) baseRR = Math.max(1.2, baseRR - 0.15);
+  const maxGainPct = dte === 0 ? 0.40 : dte <= 2 ? 0.60 : 1.00;
+  const rawTarget  = +(entry + risk * baseRR).toFixed(2);
+  const tgt        = +Math.min(entry * (1 + maxGainPct), rawTarget).toFixed(2);
+  const rr         = risk > 0 ? +((tgt - entry) / risk).toFixed(2) : baseRR;
+  return { sl, tgt, rr, dte, method: `IV ${(iv||20).toFixed(0)}% | DTE ${dte} | Δ ${absDelta.toFixed(2)}` };
+}
+
+// ── Max Pain ─────────────────────────────────────────────────
+export function calcMaxPain(chain) {
+  if (!chain || chain.length < 3) return 0;
+  const strikes = chain.map((r) => r.strike_price).filter(Boolean).sort((a, b) => a - b);
+  let minLoss = Infinity, maxPainStrike = strikes[0];
+  for (const testStrike of strikes) {
+    let totalLoss = 0;
+    for (const row of chain) {
+      const sp     = row.strike_price;
+      const callOI = row.call_options?.market_data?.oi || 0;
+      const putOI  = row.put_options?.market_data?.oi  || 0;
+      if (testStrike > sp) totalLoss += (testStrike - sp) * callOI;
+      if (testStrike < sp) totalLoss += (sp - testStrike) * putOI;
+    }
+    if (totalLoss < minLoss) { minLoss = totalLoss; maxPainStrike = testStrike; }
+  }
+  return maxPainStrike;
+}
+
+// ── OI Walls ─────────────────────────────────────────────────
+export function calcOIWalls(chain) {
+  if (!chain || chain.length < 3) return { callWall: 0, putWall: 0 };
+  let maxCallOI = 0, maxPutOI = 0, callWall = 0, putWall = 0;
+  for (const row of chain) {
+    const callOI = row.call_options?.market_data?.oi || 0;
+    const putOI  = row.put_options?.market_data?.oi  || 0;
+    if (callOI > maxCallOI) { maxCallOI = callOI; callWall = row.strike_price; }
+    if (putOI  > maxPutOI)  { maxPutOI  = putOI;  putWall  = row.strike_price; }
+  }
+  return { callWall, putWall, callWallOI: maxCallOI, putWallOI: maxPutOI };
+}
+
+// ── FII/DII Interpretation ────────────────────────────────────
+export function interpretFIIDII(d) {
+  if (!d) return { bias: 0, label: 'No Data', color: '#94a3b8', detail: '' };
+  const fiiNet = d.fii_net || 0, diiNet = d.dii_net || 0;
+  const netFlow = fiiNet + diiNet;
+  let cashBias = netFlow > 5000 ? 10 : netFlow > 2000 ? 7 : netFlow > 500 ? 4 : netFlow > -500 ? 0 : netFlow > -2000 ? -4 : netFlow > -5000 ? -7 : -10;
+  if (fiiNet > 1000)  cashBias = Math.min(cashBias + 2, 10);
+  if (fiiNet < -1000) cashBias = Math.max(cashBias - 2, -10);
+  let futBias = 0;
+  const futLong = d.fii_idx_fut_long || 0, futShort = d.fii_idx_fut_short || 0;
+  if (futLong + futShort > 0) {
+    const lp = futLong / (futLong + futShort) * 100;
+    futBias = lp > 65 ? 5 : lp > 55 ? 3 : lp > 45 ? 0 : lp > 35 ? -3 : -5;
+  }
+  const totalBias = cashBias + futBias;
+  const label = totalBias >= 8 ? 'STRONG BUY' : totalBias >= 3 ? 'FII BUYING' : totalBias >= -2 ? 'NEUTRAL' : totalBias >= -7 ? 'FII SELLING' : 'HEAVY SELL';
+  const color = totalBias >= 8 ? '#16a34a' : totalBias >= 3 ? '#22c55e' : totalBias >= -2 ? '#d97706' : totalBias >= -7 ? '#f97316' : '#dc2626';
+  const crFmt = (v) => (v >= 0 ? '+₹' : '-₹') + Math.abs(v).toFixed(0) + ' Cr';
+  return { bias: totalBias, label, color, detail: `FII ${crFmt(fiiNet)} · DII ${crFmt(diiNet)} · Net ${crFmt(netFlow)}`, fiiNet, diiNet, netFlow };
+}
