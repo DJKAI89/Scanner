@@ -169,3 +169,128 @@ export async function ghReadMultipleDays(gh, maxDays = 30) {
   }
   return all;
 }
+
+// ══════════════════════════════════════════════════════════════
+// SIGNAL BUILDERS — EXACT port from HTML
+// ══════════════════════════════════════════════════════════════
+
+function _istNow() {
+  const d = new Date();
+  return {
+    date: d.toLocaleDateString('en-CA',    { timeZone: 'Asia/Kolkata' }),
+    time: d.toLocaleTimeString('en-IN',    { timeZone: 'Asia/Kolkata', hour12: false }),
+  };
+}
+
+export function buildStockSignal(p, vixVal) {
+  const { date, time } = _istNow();
+  const rec = (p.rec || '').toUpperCase();
+  const holdDays = rec.includes('STRONG') ? 5 : rec === 'BUY' || rec === 'SELL' ? 3 : rec === 'MODERATE' ? 2 : 1;
+  return {
+    id:             `${date}-${time.replace(/:/g,'').slice(0,4)}-${p.s}-STOCK`,
+    date, time,
+    type:           'STOCK',
+    stock:          p.s,
+    instrKey:       p.key || null,
+    name:           p.n,
+    signal:         p.rec,
+    confidence:     p.conf,
+    strength:       p.strength || '',
+    numInds:        p.numInds  || 0,
+    entry:          +p.ltp.toFixed(2),
+    sl:             +p.sl.toFixed(2),
+    target:         +(p.target || p.pot?.mod || 0).toFixed(2),
+    targetCons:     +(p.pot?.cons || 0).toFixed(2),
+    targetMod:      +(p.pot?.mod  || 0).toFixed(2),
+    targetAgg:      +(p.pot?.agg  || 0).toFixed(2),
+    rr:             p.pot?.rr || 0,
+    winRateEst:     p.pot?.wr || 0,
+    risk:           p.risk || 0,
+    rsi:            p.rsi  || null,
+    vix:            vixVal || null,
+    reversal:       p.reversal?.type || 'NONE',
+    trigger:        p.entryTrigger?.trigger || p.ltp,
+    triggerMethod:  p.entryTrigger?.method  || 'Market',
+    compositeScore: p.compositeScore || null,
+    status:         'OPEN',
+    holdDays,
+    exitPrice: null, exitTime: null, exitDate: null, pnlPct: null, note: '',
+  };
+}
+
+export function buildOptionSignal(p, vixVal) {
+  const { date, time } = _istNow();
+  return {
+    id:             `${date}-${time.replace(/:/g,'').slice(0,4)}-${p.und}-${p.strike}-${p.type}`,
+    date, time,
+    type:           'OPTION',
+    stock:          p.und,
+    instrKey:       p.instrKey || null,
+    name:           `${p.und} ${p.strike} ${p.type}`,
+    optType:        p.type,
+    strike:         p.strike,
+    expiry:         p.expiry,
+    signal:         p.action === 'BUY' ? (p.type === 'CE' ? 'CALL' : 'PUT') : p.action,
+    confidence:     p.confidence || 0,
+    entry:          +p.entry.toFixed(2),
+    sl:             +p.sl.toFixed(2),
+    target:         +(p.tgt || 0).toFixed(2),
+    rr:             p.rr || 0,
+    lot:            p.lot  || 0,
+    iv:             p.iv   || 0,
+    delta:          p.delta || 0,
+    theta:          p.theta || 0,
+    vix:            vixVal || null,
+    compositeScore: p.compositeScore || null,
+    priceZone:      p.priceZone || '',
+    oiBuildType:    p.oiBuildType || '',
+    trendAligned:   p.trendAligned || false,
+    status:         'OPEN',
+    holdDays: 1,
+    exitPrice: null, exitTime: null, exitDate: null, pnlPct: null, note: '',
+  };
+}
+
+// ── logSignals — auto-log after each scan (port from HTML logSignals) ──
+function signalChangedSignificantly(existing, newSig) {
+  const pctDiff = (a, b) => a && b ? Math.abs((a - b) / a * 100) : 0;
+  return pctDiff(existing.entry, newSig.entry) > 1 ||
+         pctDiff(existing.sl,    newSig.sl)    > 1 ||
+         pctDiff(existing.target, newSig.target) > 1;
+}
+
+export async function logSignals(gh, newSignals, vixVal, lg = () => {}) {
+  if (!gh.token || !gh.user || !gh.repo) { lg('Signal log: GitHub not configured', 'w'); return; }
+  if (!newSignals?.length) return;
+  try {
+    const istDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const { signals, sha } = await ghReadDay(gh, istDate);
+    let added = 0, skipped = 0;
+    for (const ns of newSignals) {
+      const existing = signals.filter(s =>
+        s.date === istDate && s.status === 'OPEN' &&
+        (s.type === 'STOCK'
+          ? s.stock === ns.stock && s.type === 'STOCK'
+          : s.stock === ns.stock && s.strike === ns.strike && s.optType === (ns.optType || ns.type))
+      ).sort((a, b) => b.time.localeCompare(a.time))[0];
+      if (existing && !signalChangedSignificantly(existing, ns)) { skipped++; continue; }
+      signals.push(ns);
+      added++;
+    }
+    if (!added) { lg(`Signal log: ${skipped} skipped (no change)`, 'o'); return; }
+    const newSha = await ghWriteDay(gh, signals, sha, istDate);
+    if (newSha) {
+      const stats = {
+        total: signals.length,
+        hits:  signals.filter(s => s.status === 'TARGET_HIT').length,
+        sls:   signals.filter(s => s.status === 'SL_HIT').length,
+        open:  signals.filter(s => s.status === 'OPEN').length,
+        winRate: null,
+      };
+      const closed = signals.filter(s => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
+      if (closed.length) stats.winRate = Math.round(stats.hits / closed.length * 100);
+      ghUpdateIndex(gh, istDate, stats).catch(() => {});
+    }
+    lg(`Signal log: ✅ +${added} · ${skipped} unchanged`, 'o');
+  } catch (e) { lg('logSignals: ' + e.message, 'w'); }
+}

@@ -1,5 +1,4 @@
-// ── Technical Analysis Engine ──
-// Ported from original index.html — all functions mirror the vanilla JS exactly
+// ── Technical Analysis Engine — EXACT port from index.html ──
 
 // ── EMA ──────────────────────────────────────────────────────
 export function calcEMA(closes, period) {
@@ -10,25 +9,18 @@ export function calcEMA(closes, period) {
   return +ema.toFixed(2);
 }
 
-export function isAboveMA(closes, period) {
-  if (!closes || closes.length < period) return null;
-  return closes[closes.length - 1] > calcEMA(closes, period);
-}
-
 export function calcEMACrossover(closes) {
   if (!closes || closes.length < 10) return null;
-  const e50  = calcEMA(closes, Math.min(50, closes.length));
+  const e50  = calcEMA(closes, Math.min(50,  closes.length));
   const e200 = calcEMA(closes, Math.min(200, closes.length));
-  const prev50  = calcEMA(closes.slice(0, -1), Math.min(50, closes.length - 1));
+  const prev50  = calcEMA(closes.slice(0, -1), Math.min(50,  closes.length - 1));
   const prev200 = calcEMA(closes.slice(0, -1), Math.min(200, closes.length - 1));
   const ltp = closes[closes.length - 1];
-
   const goldenCross = closes.length >= 200 && prev50 <= prev200 && e50 > e200;
   const deathCross  = closes.length >= 200 && prev50 >= prev200 && e50 < e200;
-  const nearCross   = closes.length >= 50 && !goldenCross && !deathCross && Math.abs(e50 - e200) / e200 < 0.005;
+  const nearCross   = closes.length >= 50 && !goldenCross && !deathCross && Math.abs(e50 - e200) / (e200 || 1) < 0.005;
   const uptrend     = e50 > e200 || (closes.length < 200 && ltp > e50);
-
-  return { e50, e200, goldenCross, deathCross, nearCross, uptrend, ema50: e50, ema200: e200 };
+  return { e50, e200, ema50: e50, ema200: e200, goldenCross, deathCross, nearCross, uptrend };
 }
 
 // ── RSI ──────────────────────────────────────────────────────
@@ -37,29 +29,56 @@ export function calcRSI(closes, period = 14) {
   const gains = [], losses = [];
   for (let i = 1; i < closes.length; i++) {
     const d = closes[i] - closes[i - 1];
-    gains.push(d > 0 ? d : 0);
-    losses.push(d < 0 ? -d : 0);
+    gains.push(d > 0 ? d : 0); losses.push(d < 0 ? -d : 0);
   }
-  const slice = (arr) => arr.slice(-period);
-  const avgG = slice(gains).reduce((s, v) => s + v, 0) / period || 1e-10;
-  const avgL = slice(losses).reduce((s, v) => s + v, 0) / period || 1e-10;
+  const sl = (arr) => arr.slice(-period);
+  const avgG = sl(gains).reduce((s, v) => s + v, 0) / period || 1e-10;
+  const avgL = sl(losses).reduce((s, v) => s + v, 0) / period || 1e-10;
   return +(100 - 100 / (1 + avgG / avgL)).toFixed(2);
 }
 
-// ── MACD ─────────────────────────────────────────────────────
+// ── RSI Divergence ────────────────────────────────────────────
+export function calcRSIDivergence(closes, period = 14) {
+  if (!closes || closes.length < 30) return null;
+  const rsiValues = [];
+  for (let i = period + 1; i <= closes.length; i++) rsiValues.push(calcRSI(closes.slice(0, i), period));
+  if (rsiValues.length < 10) return null;
+  const prices = closes.slice(-(rsiValues.length));
+  const lookback = 10;
+  const rSlice = rsiValues.slice(-lookback), pSlice = prices.slice(-lookback);
+  const pMin1 = Math.min(...pSlice.slice(0, -1)), pMin2 = pSlice[pSlice.length - 1];
+  const rMin1 = Math.min(...rSlice.slice(0, -1)), rMin2 = rSlice[rSlice.length - 1];
+  const pMax1 = Math.max(...pSlice.slice(0, -1)), pMax2 = pSlice[pSlice.length - 1];
+  const rMax1 = Math.max(...rSlice.slice(0, -1)), rMax2 = rSlice[rSlice.length - 1];
+  const bullish        = pMin2 < pMin1 && rMin2 > rMin1 && rMin2 < 40;
+  const bearish        = pMax2 > pMax1 && rMax2 < rMax1 && rMax2 > 60;
+  const hidden_bullish = pMin2 > pMin1 && rMin2 < rMin1 && rMin2 < 45;
+  const hidden_bearish = pMax2 < pMax1 && rMax2 > rMax1 && rMax2 > 55;
+  const strength = bullish || bearish ? Math.abs(rMin2 - rMin1) : 0;
+  return { bullish, bearish, hidden_bullish, hidden_bearish, strength: +strength.toFixed(1) };
+}
+
+// ── MACD Advanced ─────────────────────────────────────────────
 export function calcMACD(closes) {
-  if (!closes || closes.length < 35) return { macdLine: 0, signal: 0, hist: 0, bull: null };
-  const fast   = calcEMA(closes, 12);
-  const slow   = calcEMA(closes, 26);
+  if (!closes || closes.length < 35) return { macdLine: 0, signal: 0, hist: 0, bull: null, bullCross: false, bearCross: false, histRising: false, bullish: false };
+  const fast = calcEMA(closes, 12), slow = calcEMA(closes, 26);
   const macdLine = fast - slow;
-  // 9-period EMA of MACD (approximate with last 9 values)
   const macdValues = [];
   for (let i = 9; i <= closes.length; i++) macdValues.push(calcEMA(closes.slice(0, i), 12) - calcEMA(closes.slice(0, i), 26));
   const signal = calcEMA(macdValues, 9);
-  return { macdLine: +macdLine.toFixed(4), signal: +signal.toFixed(4), hist: +(macdLine - signal).toFixed(4), bull: macdLine > signal };
+  const hist = macdLine - signal;
+  const prevMacdValues = macdValues.slice(0, -1);
+  const prevSignal = calcEMA(prevMacdValues, 9);
+  const prevMacdLine = prevMacdValues[prevMacdValues.length - 1] || 0;
+  const prevHist = prevMacdLine - prevSignal;
+  const bullCross = prevMacdLine <= prevSignal && macdLine > signal;
+  const bearCross = prevMacdLine >= prevSignal && macdLine < signal;
+  const histRising = hist > prevHist;
+  const bullish = macdLine > signal;
+  return { macdLine: +macdLine.toFixed(4), signal: +signal.toFixed(4), hist: +hist.toFixed(4), bull: bullish, bullCross, bearCross, histRising, bullish };
 }
 
-// ── ATR ──────────────────────────────────────────────────────
+// ── ATR ───────────────────────────────────────────────────────
 export function calcATR(candles, period = 14) {
   if (!candles || candles.length < 2) return 0;
   const trs = [];
@@ -67,67 +86,58 @@ export function calcATR(candles, period = 14) {
     const h = +candles[i][2], l = +candles[i][3], pc = +candles[i - 1][4];
     trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
   }
-  const recent = trs.slice(-period);
-  return +(recent.reduce((s, v) => s + v, 0) / recent.length).toFixed(2);
+  return +(trs.slice(-period).reduce((s, v) => s + v, 0) / Math.min(period, trs.length)).toFixed(2);
 }
 
 // ── Supertrend (7,3) ─────────────────────────────────────────
 export function calcSupertrend(candles, period = 7, mult = 3) {
   if (!candles || candles.length < period + 2) return null;
-  const data = candles.slice().reverse(); // oldest→newest
+  const data = candles.slice().reverse();
   const atrs = [];
   for (let i = 1; i < data.length; i++) {
     const h = +data[i][2], l = +data[i][3], pc = +data[i - 1][4];
     atrs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
   }
-  let trend = 'UP', prevUB = 0, prevLB = 0;
-  let crossed = false;
+  let trend = 'UP', prevUB = 0, prevLB = 0, crossed = false;
   for (let i = period; i < data.length; i++) {
-    const sliceATR = atrs.slice(i - period, i);
-    const atr = sliceATR.reduce((s, v) => s + v, 0) / sliceATR.length;
+    const atr = atrs.slice(i - period, i).reduce((s, v) => s + v, 0) / period;
     const hl2 = (+data[i][2] + +data[i][3]) / 2;
-    const ub = hl2 + mult * atr;
-    const lb = hl2 - mult * atr;
+    const ub = hl2 + mult * atr, lb = hl2 - mult * atr;
     const finalUB = ub < prevUB || +data[i - 1][4] > prevUB ? ub : prevUB;
     const finalLB = lb > prevLB || +data[i - 1][4] < prevLB ? lb : prevLB;
     const prevTrend = trend;
     const close = +data[i][4];
     if (prevTrend === 'DOWN' && close > finalUB) trend = 'UP';
-    else if (prevTrend === 'UP'  && close < finalLB) trend = 'DOWN';
+    else if (prevTrend === 'UP' && close < finalLB) trend = 'DOWN';
     if (i === data.length - 1 && prevTrend !== trend) crossed = true;
     prevUB = finalUB; prevLB = finalLB;
   }
-  const last   = data[data.length - 1];
-  const value  = trend === 'UP' ? prevLB : prevUB;
-  const dist   = +((+last[4] - value) / +last[4] * 100).toFixed(2);
-  return { trend, crossed, value: +value.toFixed(2), dist };
+  const last = data[data.length - 1];
+  const value = trend === 'UP' ? prevLB : prevUB;
+  return { trend, crossed, value: +value.toFixed(2), dist: +((+last[4] - value) / +last[4] * 100).toFixed(2) };
 }
 
-// ── Bollinger Bands Squeeze ───────────────────────────────────
+// ── Bollinger Bands Advanced ──────────────────────────────────
 export function calcBBSqueeze(closes, period = 20) {
   if (!closes || closes.length < period) return null;
   const recent = closes.slice(-period);
-  const mean   = recent.reduce((s, v) => s + v, 0) / period;
-  const std    = Math.sqrt(recent.reduce((s, v) => s + (v - mean) ** 2, 0) / period);
-  const upper  = mean + 2 * std, lower = mean - 2 * std;
-  const bw     = (upper - lower) / mean;   // bandwidth
-  const squeeze = bw < 0.05;
-  const extremeSqueeze = bw < 0.025;
-  const ltp    = closes[closes.length - 1];
-  return { upper: +upper.toFixed(2), lower: +lower.toFixed(2), mean: +mean.toFixed(2), bw: +bw.toFixed(4), squeeze, extremeSqueeze, aboveUpper: ltp > upper, belowLower: ltp < lower };
+  const mean = recent.reduce((s, v) => s + v, 0) / period;
+  const std  = Math.sqrt(recent.reduce((s, v) => s + (v - mean) ** 2, 0) / period);
+  const upper = mean + 2 * std, lower = mean - 2 * std;
+  const bw    = (upper - lower) / mean;
+  const ltp   = closes[closes.length - 1];
+  const percentB = std > 0 ? (ltp - lower) / (upper - lower) : 0.5;
+  return {
+    upper: +upper.toFixed(2), lower: +lower.toFixed(2), mean: +mean.toFixed(2),
+    bw: +bw.toFixed(4), squeeze: bw < 0.05, extremeSqueeze: bw < 0.025,
+    aboveUpper: ltp > upper, belowLower: ltp < lower,
+    nearLowerBand: percentB < 0.2,  // within lower 20% of band = oversold
+    nearUpperBand: percentB > 0.8,
+    percentB: +percentB.toFixed(3),
+  };
 }
 
-// ── NR7 (Narrow Range 7 / 4) ─────────────────────────────────
-export function calcNR7(candles) {
-  if (!candles || candles.length < 7) return null;
-  const ranges = candles.slice(0, 7).map((c) => +c[2] - +c[3]);
-  const todayR = ranges[0];
-  const isNR7  = todayR === Math.min(...ranges);
-  const isNR4  = todayR === Math.min(...ranges.slice(0, 4));
-  return { isNR7, isNR4, range: +todayR.toFixed(2), avgRange: +(ranges.reduce((s,v)=>s+v,0)/7).toFixed(2) };
-}
-
-// ── ADX ──────────────────────────────────────────────────────
+// ── ADX Advanced ──────────────────────────────────────────────
 export function calcADX(candles, period = 14) {
   if (!candles || candles.length < period + 2) return null;
   const data = candles.slice().reverse();
@@ -135,28 +145,54 @@ export function calcADX(candles, period = 14) {
   for (let i = 1; i < data.length; i++) {
     const h = +data[i][2], l = +data[i][3], ph = +data[i-1][2], pl = +data[i-1][3], pc = +data[i-1][4];
     trs.push(Math.max(h-l, Math.abs(h-pc), Math.abs(l-pc)));
-    const upMove = h - ph, downMove = pl - l;
-    plusDMs.push(upMove > downMove && upMove > 0 ? upMove : 0);
-    minusDMs.push(downMove > upMove && downMove > 0 ? downMove : 0);
+    const u = h - ph, d = pl - l;
+    plusDMs.push(u > d && u > 0 ? u : 0);
+    minusDMs.push(d > u && d > 0 ? d : 0);
   }
-  const slice = (arr) => arr.slice(-period);
-  const smoothTR  = slice(trs).reduce((s,v)=>s+v, 0);
-  const smoothPDM = slice(plusDMs).reduce((s,v)=>s+v, 0);
-  const smoothMDM = slice(minusDMs).reduce((s,v)=>s+v, 0);
-  if (!smoothTR) return null;
-  const plusDI  = (smoothPDM / smoothTR) * 100;
-  const minusDI = (smoothMDM / smoothTR) * 100;
-  const dx = Math.abs(plusDI - minusDI) / (plusDI + minusDI) * 100;
-  return { adx: +dx.toFixed(1), plusDI: +plusDI.toFixed(1), minusDI: +minusDI.toFixed(1) };
+  const sl = (arr) => arr.slice(-period);
+  const sTR = sl(trs).reduce((s,v)=>s+v,0) || 1;
+  const plusDI  = sl(plusDMs).reduce((s,v)=>s+v,0) / sTR * 100;
+  const minusDI = sl(minusDMs).reduce((s,v)=>s+v,0) / sTR * 100;
+  const adx = +( Math.abs(plusDI - minusDI) / (plusDI + minusDI || 1) * 100 ).toFixed(1);
+  const bullTrend = adx >= 25 && plusDI > minusDI;
+  const bearTrend = adx >= 25 && minusDI > plusDI;
+  const trending  = adx >= 20;
+  const weakTrend = adx >= 15 && adx < 20;
+  return { adx, plusDI: +plusDI.toFixed(1), minusDI: +minusDI.toFixed(1), bullTrend, bearTrend, trending, weakTrend, strong: adx >= 25 };
 }
 
-// ── Support & Resistance ──────────────────────────────────────
+// ── Pivot Points ──────────────────────────────────────────────
+export function calcPivots(high, low, close) {
+  const pp = (high + low + close) / 3;
+  return {
+    pp:     +pp.toFixed(2),
+    pivotR1: +(2 * pp - low).toFixed(2),
+    pivotR2: +(pp + (high - low)).toFixed(2),
+    pivotS1: +(2 * pp - high).toFixed(2),
+    pivotS2: +(pp - (high - low)).toFixed(2),
+  };
+}
+
+// ── Support & Resistance (includes Pivots + 52-week) ─────────
 export function calcSR(candles, lookback = 20) {
-  if (!candles || candles.length < lookback) return { support: 0, resistance: 0 };
-  const slice = candles.slice(0, lookback);
-  const highs = slice.map((c) => +c[2]);
-  const lows  = slice.map((c) => +c[3]);
-  return { support: +Math.min(...lows).toFixed(2), resistance: +Math.max(...highs).toFixed(2) };
+  if (!candles || candles.length < 2) return { support: 0, resistance: 0 };
+  const recent  = candles.slice(0, lookback);
+  const support     = +Math.min(...recent.map(c => +c[3])).toFixed(2);
+  const resistance  = +Math.max(...recent.map(c => +c[2])).toFixed(2);
+  const prevH = +candles[1][2], prevL = +candles[1][3], prevC = +candles[1][4];
+  const pivots = calcPivots(prevH, prevL, prevC);
+  const week52H = +Math.max(...candles.map(c => +c[2])).toFixed(2);
+  const week52L = +Math.min(...candles.map(c => +c[3])).toFixed(2);
+  return { support, resistance, week52H, week52L, ...pivots };
+}
+
+export function isNearSupport(ltp, sr, low) {
+  if (!sr || !ltp) return false;
+  const threshold = 0.02; // within 2%
+  if (sr.pivotS1 > 0 && Math.abs((ltp - sr.pivotS1) / ltp) < threshold) return true;
+  if (sr.pivotS2 > 0 && Math.abs((ltp - sr.pivotS2) / ltp) < threshold) return true;
+  if (low > 0 && Math.abs((ltp - low) / ltp) < threshold) return true;
+  return false;
 }
 
 // ── VWAP ─────────────────────────────────────────────────────
@@ -166,257 +202,383 @@ export function calcVWAP(candles) {
   return vol > 0 ? +(tpv / vol).toFixed(2) : 0;
 }
 
-// ── Candle patterns ───────────────────────────────────────────
-export function detectPatterns(candles) {
-  if (!candles || candles.length < 3) return [];
-  const patterns = [];
-  const [c0, c1, c2] = candles.map((c) => ({ o: +c[1], h: +c[2], l: +c[3], c: +c[4] }));
-  const body0 = Math.abs(c0.c - c0.o), body1 = Math.abs(c1.c - c1.o);
-  // Hammer
-  const lowerWick0 = c0.o > c0.c ? c0.c - c0.l : c0.o - c0.l;
-  if (c0.c > c0.o && lowerWick0 > body0 * 2 && (c0.h - c0.c) < body0 * 0.5)
-    patterns.push('HAMMER');
-  // Bullish Engulfing
-  if (c1.c < c1.o && c0.c > c0.o && c0.o <= c1.c && c0.c >= c1.o)
-    patterns.push('BULLISH_ENGULFING');
-  // Bearish Engulfing
-  if (c1.c > c1.o && c0.c < c0.o && c0.o >= c1.c && c0.c <= c1.o)
-    patterns.push('BEARISH_ENGULFING');
-  // Doji
-  if (body0 < (c0.h - c0.l) * 0.1)
-    patterns.push('DOJI');
-  // Morning Star
-  if (c2.c < c2.o && body1 < body0 * 0.3 && c0.c > c0.o && c0.c > (c2.o + c2.c) / 2)
-    patterns.push('MORNING_STAR');
-  return patterns;
+export function calcVWAPBands(candles) {
+  if (!candles || candles.length < 5) return null;
+  const vwap = calcVWAP(candles);
+  if (!vwap) return null;
+  const ltp = +candles[0][4];
+  const distPct = (ltp - vwap) / vwap * 100;
+  return {
+    vwap,
+    distPct: +distPct.toFixed(2),
+    position: distPct > 1.5 ? 'FAR_ABOVE' : distPct > 0.5 ? 'ABOVE' : distPct < -1.5 ? 'FAR_BELOW' : distPct < -0.5 ? 'BELOW' : 'AT',
+    nearLowerBand: distPct < -0.5 && distPct > -2.0,
+    aboveVWAP: ltp >= vwap,
+  };
 }
 
-// ── PDH/PDL Breakout ─────────────────────────────────────────
+// ── Candle Patterns — returns object with boolean fields ──────
+export function detectPatterns(candles) {
+  if (!candles || candles.length < 3) return {};
+  const c0 = { o:+candles[0][1], h:+candles[0][2], l:+candles[0][3], c:+candles[0][4] };
+  const c1 = { o:+candles[1][1], h:+candles[1][2], l:+candles[1][3], c:+candles[1][4] };
+  const c2 = { o:+candles[2][1], h:+candles[2][2], l:+candles[2][3], c:+candles[2][4] };
+  const body0 = Math.abs(c0.c - c0.o), range0 = c0.h - c0.l || 1;
+  const body1 = Math.abs(c1.c - c1.o);
+  const lowerWick0 = Math.min(c0.o, c0.c) - c0.l;
+  const upperWick0 = c0.h - Math.max(c0.o, c0.c);
+
+  const hammer           = c0.c > c0.o && lowerWick0 > body0 * 2 && upperWick0 < body0 * 0.5;
+  const shootingStar     = c0.c < c0.o && upperWick0 > body0 * 2 && lowerWick0 < body0 * 0.5;
+  const doji             = body0 < range0 * 0.1;
+  const bullishEngulfing = c1.c < c1.o && c0.c > c0.o && c0.o <= c1.c && c0.c >= c1.o;
+  const bearishEngulfing = c1.c > c1.o && c0.c < c0.o && c0.o >= c1.c && c0.c <= c1.o;
+  const morningStar      = c2.c < c2.o && body1 < body0 * 0.3 && c0.c > c0.o && c0.c > (c2.o + c2.c) / 2;
+  const eveningStar      = c2.c > c2.o && body1 < body0 * 0.3 && c0.c < c0.o && c0.c < (c2.o + c2.c) / 2;
+
+  return { hammer, shootingStar, doji, bullishEngulfing, bearishEngulfing, morningStar, eveningStar };
+}
+
+// ── Pivot/PDH/PDL Breakout ────────────────────────────────────
 export function detectPDHLBreakout(ltp, candles) {
   if (!candles || candles.length < 2) return null;
   const pdh = +candles[1][2], pdl = +candles[1][3];
   const pdHDist = pdh > 0 ? +((ltp - pdh) / pdh * 100).toFixed(2) : 0;
   const pdLDist = pdl > 0 ? +((ltp - pdl) / pdl * 100).toFixed(2) : 0;
-  return {
-    pdh, pdl,
-    bullBreakout: pdHDist >= 0.3,
-    bearBreakout: pdLDist <= -0.3,
-    nearPDH:      pdHDist >= 0 && pdHDist < 0.3,
-    nearPDL:      pdLDist <= 0 && pdLDist > -0.3,
-    pdHDist, pdLDist,
-  };
+  return { pdh, pdl, bullBreakout: pdHDist >= 0.3, bearBreakout: pdLDist <= -0.3, nearPDH: pdHDist >= 0 && pdHDist < 0.3, nearPDL: pdLDist <= 0 && pdLDist > -0.3, pdHDist, pdLDist };
 }
 
-// ── 52-Week High/Low ─────────────────────────────────────────
 export function calc52WkBreakout(ltp, candles) {
   if (!candles || candles.length < 10) return null;
-  const highs = candles.map((c) => +c[2]), lows = candles.map((c) => +c[3]);
-  const hi52 = Math.max(...highs), lo52 = Math.min(...lows);
+  const hi52 = Math.max(...candles.map(c => +c[2])), lo52 = Math.min(...candles.map(c => +c[3]));
   const rangePos = hi52 > lo52 ? +(((ltp - lo52) / (hi52 - lo52)) * 100).toFixed(1) : 50;
-  return {
-    hi52: +hi52.toFixed(2), lo52: +lo52.toFixed(2), rangePos,
-    breakHigh: ltp > hi52 * 0.997,
-    atHigh:    ltp >= hi52 * 0.97 && ltp <= hi52 * 0.997,
-    breakLow:  ltp < lo52 * 1.003,
-    atLow:     ltp <= lo52 * 1.03  && ltp >= lo52 * 1.003,
-  };
+  return { hi52: +hi52.toFixed(2), lo52: +lo52.toFixed(2), rangePos, breakHigh: ltp > hi52 * 0.997, atHigh: ltp >= hi52 * 0.97 && ltp <= hi52 * 0.997, breakLow: ltp < lo52 * 1.003, atLow: ltp <= lo52 * 1.03 && ltp >= lo52 * 1.003 };
 }
 
-// ── Volume Surge ─────────────────────────────────────────────
 export function calcVolumeSurge(candles, lookback = 20) {
   if (!candles || candles.length < 5) return null;
-  const recent = candles.slice(0, lookback);
-  const avgVol = recent.reduce((s, c) => s + +c[5], 0) / recent.length;
+  const avgVol = candles.slice(0, lookback).reduce((s, c) => s + +c[5], 0) / Math.min(lookback, candles.length);
   const todayVol = +candles[0][5];
   const ratio = avgVol > 0 ? +(todayVol / avgVol).toFixed(2) : 1;
-  return {
-    todayVol, avgVol: +avgVol.toFixed(0), ratio,
-    strong:    ratio >= 2,
-    confirmed: ratio >= 1.2,
-    weak:      ratio >= 0.8 && ratio < 1.2,
-    dry:       ratio < 0.5,
-  };
+  return { todayVol, avgVol: +avgVol.toFixed(0), ratio, strong: ratio >= 2, confirmed: ratio >= 1.2, weak: ratio >= 0.8 && ratio < 1.2, dry: ratio < 0.5 };
 }
 
-// ── Gap Detection ─────────────────────────────────────────────
 export function detectGap(candles) {
   if (!candles || candles.length < 2) return null;
   const todayOpen = +candles[0][1], prevClose = +candles[1][4];
   if (!todayOpen || !prevClose) return null;
   const gapPct = +((todayOpen - prevClose) / prevClose * 100).toFixed(2);
-  return {
-    gapPct, gapUp: gapPct >= 0.5, gapDown: gapPct <= -0.5,
-    bigGapUp: gapPct >= 1.5, bigGapDown: gapPct <= -1.5,
-    todayOpen: +todayOpen.toFixed(2), prevClose: +prevClose.toFixed(2),
-  };
+  return { gapPct, gapUp: gapPct >= 0.5, gapDown: gapPct <= -0.5, bigGapUp: gapPct >= 1.5, bigGapDown: gapPct <= -1.5, todayOpen: +todayOpen.toFixed(2), prevClose: +prevClose.toFixed(2) };
 }
 
-// ── Wick Rejection ───────────────────────────────────────────
 export function calcWickRejection(candles) {
   if (!candles || candles.length < 1) return null;
-  const c = candles[0];
-  const o = +c[1], h = +c[2], l = +c[3], cl = +c[4];
-  const body      = Math.abs(cl - o);
-  const range     = h - l || 1;
-  const upperWick = h - Math.max(o, cl);
-  const lowerWick = Math.min(o, cl) - l;
-  const closePos  = range > 0 ? (cl - l) / range : 0.5;
-  const bearRejected = upperWick > body * 2 && upperWick > range * 0.4; // long upper wick = bears rejected bulls
-  const bullRejected = lowerWick > body * 2 && lowerWick > range * 0.4; // long lower wick = bulls rejected bears
-  const bullStrong   = closePos > 0.7;
-  return { upperWick: +upperWick.toFixed(2), lowerWick: +lowerWick.toFixed(2), closePos: +closePos.toFixed(2), bearRejected, bullRejected, bullStrong };
+  const c = candles[0], o = +c[1], h = +c[2], l = +c[3], cl = +c[4];
+  const body = Math.abs(cl - o), range = h - l || 1;
+  const upperWick = h - Math.max(o, cl), lowerWick = Math.min(o, cl) - l;
+  const closePos = range > 0 ? (cl - l) / range : 0.5;
+  return { upperWick: +upperWick.toFixed(2), lowerWick: +lowerWick.toFixed(2), closePos: +closePos.toFixed(2), bearRejected: upperWick > body * 2 && upperWick > range * 0.4, bullRejected: lowerWick > body * 2 && lowerWick > range * 0.4, bullStrong: closePos > 0.7 };
 }
 
-// ── Relative Strength vs Nifty ───────────────────────────────
+export function calcNR7(candles) {
+  if (!candles || candles.length < 7) return null;
+  const ranges = candles.slice(0, 7).map(c => +c[2] - +c[3]);
+  const todayR = ranges[0];
+  return { isNR7: todayR === Math.min(...ranges), isNR4: todayR === Math.min(...ranges.slice(0, 4)), range: +todayR.toFixed(2), avgRange: +(ranges.reduce((s,v)=>s+v,0)/7).toFixed(2) };
+}
+
 export function calcRelativeStrength(closes, niftyCloses) {
   if (!closes || !niftyCloses || closes.length < 6 || niftyCloses.length < 6) return null;
-  const n    = Math.min(closes.length, niftyCloses.length, 20);
+  const n = Math.min(closes.length, niftyCloses.length, 20);
   const sRet = +((closes.at(-1) - closes.at(-n)) / closes.at(-n) * 100).toFixed(2);
   const nRet = +((niftyCloses.at(-1) - niftyCloses.at(-n)) / niftyCloses.at(-n) * 100).toFixed(2);
-  const rs   = +(sRet - nRet).toFixed(2);
+  const rs = +(sRet - nRet).toFixed(2);
   return { rs, stockRet: sRet, niftyRet: nRet, outperforming: rs > 1, underperforming: rs < -1, strongly: Math.abs(rs) > 3 };
 }
 
-// ── Momentum Confluence ───────────────────────────────────────
 export function calcMomentumConfluence(closes, isBull) {
   if (!closes || closes.length < 35) return null;
-  const rsi  = calcRSI(closes);
-  const macd = calcMACD(closes);
-  const rsiBull = rsi < 55 && rsi > 40;
-  const rsiBear = rsi > 45 && rsi < 60;
-  const macdBull = macd.bull === true;
-  const macdBear = macd.bull === false;
-  const bullConf = macdBull && rsiBull;
-  const bearConf = macdBear && rsiBear;
-  const contra   = isBull ? (!macdBull && rsi > 60) : (macdBull && rsi < 40);
-  return { rsi, macdBull, macdBear, rsiBull, rsiBear, bullConf, bearConf, contra };
+  const rsi = calcRSI(closes), macd = calcMACD(closes);
+  return { rsi, macdBull: macd.bull === true, macdBear: macd.bull === false, rsiBull: rsi < 55 && rsi > 40, rsiBear: rsi > 45 && rsi < 60, bullConf: macd.bull && rsi < 55, bearConf: !macd.bull && rsi > 45, contra: isBull ? (!macd.bull && rsi > 60) : (macd.bull && rsi < 40) };
 }
 
-// ── Weekly MTF ────────────────────────────────────────────────
 export function calcWeeklyMTF(weeklyCandles, ltp, isBull) {
   if (!weeklyCandles || weeklyCandles.length < 2) return null;
   const [wc0, wc1] = weeklyCandles;
-  const wOpen  = +wc0[1], wHigh = +wc0[2], wLow = +wc0[3], wClose = +wc0[4];
+  const wOpen = +wc0[1], wHigh = +wc0[2], wLow = +wc0[3], wClose = +wc0[4];
   const prevWHigh = +wc1[2], prevWLow = +wc1[3];
-  const wBullish   = wClose > wOpen && wClose >= wOpen + (wHigh - wOpen) * 0.5;
-  const wBearish   = wClose < wOpen && wClose <= wOpen - (wOpen - wLow) * 0.5;
+  const wBullish  = wClose > wOpen && wClose >= wOpen + (wHigh - wOpen) * 0.5;
+  const wBearish  = wClose < wOpen && wClose <= wOpen - (wOpen - wLow) * 0.5;
   const wBreakHigh = wHigh > prevWHigh, wBreakLow = wLow < prevWLow;
-  const wCloses    = weeklyCandles.map((c) => +c[4]).reverse();
-  const wEMA20     = wCloses.length >= 20 ? calcEMA(wCloses, 20) : null;
-  const aboveWEMA  = wEMA20 != null ? ltp > wEMA20 : null;
-  const aligned    = isBull ? (wBullish || wBreakHigh) && aboveWEMA !== false : (wBearish || wBreakLow) && aboveWEMA === false;
-  const confirms   = isBull ? wBullish && wBreakHigh : wBearish && wBreakLow;
+  const wCloses = weeklyCandles.map(c => +c[4]).reverse();
+  const wEMA20  = wCloses.length >= 20 ? calcEMA(wCloses, 20) : null;
+  const aboveWEMA = wEMA20 != null ? ltp > wEMA20 : null;
+  const aligned   = isBull ? (wBullish || wBreakHigh) && aboveWEMA !== false : (wBearish || wBreakLow) && aboveWEMA === false;
+  const confirms  = isBull ? wBullish && wBreakHigh : wBearish && wBreakLow;
   return { wBullish, wBearish, wBreakHigh, wBreakLow, wEMA20: wEMA20 ? +wEMA20.toFixed(2) : null, aboveWEMA, aligned, confirms };
 }
 
-// ── Risk Calculator (PRO port) ────────────────────────────────
+// ── Time of Day Penalty — EXACT port from HTML ────────────────
+export function getTimeOfDayPenalty() {
+  const now = new Date();
+  const h   = +now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }) % 24;
+  const m   = +now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', minute: 'numeric' });
+  const day = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', weekday: 'short' });
+  if (day === 'Sat' || day === 'Sun') return -8;
+  const t = h * 60 + m;
+  if (t < 9 * 60 + 15)  return -8;  // pre-market
+  if (t <= 9 * 60 + 45)  return -8;  // opening volatility
+  if (t <= 10 * 60 + 30) return 0;   // early session
+  if (t <= 14 * 60)       return 3;   // midday — most reliable
+  if (t <= 15 * 60)       return -2;  // pre-close
+  return -8;                          // closing noise
+}
+
+export function getIntradayPhase() {
+  const now = new Date();
+  const h   = +now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }) % 24;
+  const m   = +now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', minute: 'numeric' });
+  const day = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', weekday: 'short' });
+  if (day === 'Sat' || day === 'Sun') return 'holiday';
+  const t = h * 60 + m;
+  if (t < 9 * 60 + 15)  return 'pre';
+  if (t > 15 * 60 + 30) return 'closed';
+  if (t <= 9 * 60 + 45)  return 'opening';
+  if (t <= 10 * 60 + 30) return 'early';
+  if (t <= 14 * 60)       return 'midday';
+  if (t <= 15 * 60)       return 'pre_close';
+  return 'closing';
+}
+
+// ── Sector Mapping — EXACT port from HTML getSector ───────────
+export function getSector(sym) {
+  const SECTORS = {
+    BANKING: ['HDFCBANK','ICICIBANK','SBIN','KOTAKBANK','AXISBANK','INDUSINDBK','IDFCFIRSTB','BANDHANBNK','RBLBANK','FEDERALBNK','INDIANB','BANKINDIA','BANKBARODA','CANBK','PNB','UNIONBANK'],
+    IT:      ['TCS','INFY','WIPRO','HCLTECH','TECHM','LTIM','MPHASIS','COFORGE','PERSISTENT','KPITTECH','TATAELXSI','OFSS'],
+    AUTO:    ['MARUTI','TATAMOTORS','M&M','EICHERMOT','HEROMOTOCO','BAJAJ-AUTO','TVSMOTOR','ASHOKLEY'],
+    PHARMA:  ['SUNPHARMA','DRREDDY','CIPLA','DIVISLAB','APOLLOHOSP','LUPIN','AUROPHARMA','ALKEM','MANKIND'],
+    ENERGY:  ['RELIANCE','ONGC','BPCL','IOC','COALINDIA','NTPC','POWERGRID','GAIL','HINDPETRO','ADANIENT','ADANIENSOL','TATAPOWER'],
+    FMCG:    ['HINDUNILVR','ITC','NESTLEIND','BRITANNIA','TATACONSUM','DABUR','MARICO','COLPAL'],
+    METAL:   ['TATASTEEL','JSWSTEEL','HINDALCO','VEDL','SAIL','NMDC','HINDZINC'],
+    NBFC:    ['BAJFINANCE','BAJAJFINSV','SHRIRAMFIN','CHOLAFIN','MUTHOOTFIN','LTF'],
+    INFRA:   ['LT','DLF','GODREJPROP','LODHA','PRESTIGE','OBEROIRLTY'],
+    CEMENT:  ['ULTRACEMCO','SHREECEM','AMBUJACEM','ACC','DALBHARAT','JKCEMENT'],
+    TELECOM: ['BHARTIARTL','VBL','IDEA'],
+  };
+  for (const [sector, stocks] of Object.entries(SECTORS)) {
+    if (stocks.includes(sym)) return sector;
+  }
+  return 'OTHER';
+}
+
+// ── countIndicatorsEx — EXACT port from HTML ──────────────────
+export function countIndicatorsEx(rsi, macdBull, a50, a200, volOk, nearSupp, patterns, rec, macdObj, bbObj, adxObj, rsiDivObj) {
+  const isBuy = rec === 'BUY' || rec === 'STRONG BUY' || rec === 'MODERATE';
+  let count = 0;
+  if (rsi !== null && rsi !== undefined && rsi >= 40 && rsi <= 70) count++;
+  if (macdObj?.bullCross && isBuy)     count++;
+  else if (macdBull === true && isBuy) count++;
+  if (a50  === true && isBuy) count++;
+  if (a200 === true && isBuy) count++;
+  if (volOk === true)         count++;
+  if (nearSupp && isBuy)      count++;
+  if (patterns && (patterns.bullishEngulfing || patterns.hammer || patterns.morningStar)) count++;
+  if (bbObj?.nearLowerBand && isBuy)  count++;
+  if (adxObj?.bullTrend && isBuy)     count++;
+  if (rsiDivObj?.bullish && isBuy)    count++;
+  return count;
+}
+
+// ── calcConfidence — EXACT port from HTML ─────────────────────
+// Weighted: SignalStrength(35%) + MarketContext(25%) + VolumeProfile(20%) + PriceAction(20%) + timeAdj
+export function calcConfidence(inds, vixSc, pcrSc, niftyBull, secSc, vol, avgVol, patterns, rec, numIndsOverride) {
+  const numInds = (numIndsOverride !== undefined && numIndsOverride !== null)
+    ? numIndsOverride
+    : (inds ? inds.filter(Boolean).length : 0);
+
+  // Component 1: Signal Strength (35%)
+  let sigScore = numInds >= 5 ? 90 : numInds === 4 ? 75 : numInds === 3 ? 60 : numInds === 2 ? 45 : 30;
+  if      (rec === 'STRONG BUY') sigScore = Math.min(100, sigScore + 10);
+  else if (rec === 'BUY')        sigScore = Math.min(100, sigScore + 5);
+  else if (rec === 'AVOID')      sigScore = Math.max(0,   sigScore - 10);
+
+  // Component 2: Market Context (25%)
+  const mktScore = Math.min(100, (niftyBull ? 60 : 25) + (secSc || 50) * 0.4);
+
+  // Component 3: Volume Profile (20%)
+  const volRatio = avgVol > 0 ? vol / avgVol : 1;
+  const volScore = volRatio >= 2.0 ? 95 : volRatio >= 1.5 ? 85 : volRatio >= 1.2 ? 70 : volRatio >= 0.8 ? 50 : 30;
+
+  // Component 4: Price Action Quality (20%)
+  let paScore = 50;
+  if (patterns?.bullishEngulfing) paScore += 15;
+  if (patterns?.hammer)           paScore += 10;
+  if (patterns?.morningStar)      paScore += 15;
+  if (rec === 'BUY' || rec === 'STRONG BUY') {
+    if (patterns?.bearishEngulfing) paScore -= 15;
+    if (patterns?.shootingStar)     paScore -= 10;
+    if (patterns?.eveningStar)      paScore -= 15;
+  }
+  paScore = Math.min(100, Math.max(0, paScore));
+
+  const timeAdj = getTimeOfDayPenalty();
+  return +(Math.min(99, Math.max(1, sigScore * 0.35 + mktScore * 0.25 + volScore * 0.20 + paScore * 0.20 + timeAdj))).toFixed(1);
+}
+
+// ── getRec — EXACT port from HTML ─────────────────────────────
+export function getRec(conf, pot, risk, rr) {
+  if (conf >= 80 && pot >= 5  && risk <= 30 && rr >= 2.5) return 'STRONG BUY';
+  if (conf >= 70 && pot >= 3  && risk <= 40 && rr >= 2.0) return 'BUY';
+  if (conf >= 60 && pot >= 2  && risk <= 50)               return 'MODERATE';
+  if (conf >= 50 || pot >= 3)                               return 'WATCH';
+  return 'AVOID';
+}
+
+// ── detectReversal — EXACT port from HTML ─────────────────────
+export function detectReversal(ltp, rsi, patterns, sr, vix, pcr, nBull, chgPct, atr, high, low) {
+  const signals = [];
+  let bullRev = 0, bearRev = 0;
+  if (rsi != null) {
+    if (rsi <= 25)      { bullRev += 3; signals.push('RSI Extreme Oversold (' + rsi + ')'); }
+    else if (rsi <= 32) { bullRev += 2; signals.push('RSI Oversold (' + rsi + ')'); }
+    if (rsi >= 75)      { bearRev += 3; signals.push('RSI Extreme Overbought (' + rsi + ')'); }
+    else if (rsi >= 68) { bearRev += 2; signals.push('RSI Overbought (' + rsi + ')'); }
+  }
+  if (pcr > 0) {
+    if (pcr >= 1.5)       { bullRev += 3; signals.push('PCR Extreme Bearish (' + pcr + ')'); }
+    else if (pcr >= 1.3)  { bullRev += 2; signals.push('PCR High (' + pcr + ')'); }
+    if (pcr <= 0.5)       { bearRev += 3; signals.push('PCR Extreme Bullish (' + pcr + ')'); }
+    else if (pcr <= 0.65) { bearRev += 2; signals.push('PCR Low (' + pcr + ')'); }
+  }
+  if (patterns) {
+    if (patterns.hammer           && !nBull) { bullRev += 3; signals.push('Hammer'); }
+    if (patterns.morningStar      && !nBull) { bullRev += 4; signals.push('Morning Star'); }
+    if (patterns.bullishEngulfing && !nBull) { bullRev += 3; signals.push('Bullish Engulfing'); }
+    if (patterns.shootingStar     && nBull)  { bearRev += 3; signals.push('Shooting Star'); }
+    if (patterns.eveningStar      && nBull)  { bearRev += 4; signals.push('Evening Star'); }
+    if (patterns.bearishEngulfing && nBull)  { bearRev += 3; signals.push('Bearish Engulfing'); }
+  }
+  if (sr && ltp > 0) {
+    if (sr.pivotS1 > 0 && Math.abs((ltp - sr.pivotS1) / ltp * 100) < 1.5) { bullRev += 2; signals.push('Price at Pivot Support'); }
+    if (sr.week52L > 0 && Math.abs((ltp - sr.week52L) / ltp * 100) < 2)   { bullRev += 3; signals.push('Near 52-Week Low'); }
+    if (sr.pivotR1 > 0 && Math.abs((ltp - sr.pivotR1) / ltp * 100) < 1.5) { bearRev += 2; signals.push('Price at Pivot R1'); }
+    if (sr.week52H > 0 && Math.abs((ltp - sr.week52H) / ltp * 100) < 2)   { bearRev += 3; signals.push('Near 52-Week High'); }
+  }
+  if (vix > 25)     { bullRev += 2; signals.push('VIX High Fear (' + vix.toFixed(1) + ')'); }
+  else if (vix < 12){ bearRev += 1; signals.push('VIX Very Low (' + vix.toFixed(1) + ')'); }
+  if (chgPct != null) {
+    if (chgPct <= -3 && sr?.pivotS1 > 0) { bullRev += 2; signals.push('Large down day near support'); }
+    if (chgPct >= 3  && sr?.pivotR1 > 0) { bearRev += 2; signals.push('Large up day near resistance'); }
+  }
+  const maxRev = Math.max(bullRev, bearRev);
+  if (maxRev < 4) return { type: 'NONE', strength: '', signalCount: 0, signals: [], bullScore: bullRev, bearScore: bearRev };
+  const type = bullRev >= bearRev ? 'BULLISH_REVERSAL' : 'BEARISH_REVERSAL';
+  const strength = maxRev >= 9 ? 'STRONG' : maxRev >= 6 ? 'MODERATE' : 'WEAK';
+  return { type, strength, signalCount: signals.length, signals, bullScore: bullRev, bearScore: bearRev };
+}
+
+// ── calcEntryTrigger — EXACT port from HTML ───────────────────
+export function calcEntryTrigger(ltp, high, sr, atr, rec, vwap, chgPct) {
+  if (rec === 'BUY' || rec === 'STRONG BUY' || rec === 'MODERATE') {
+    const a = atr || ltp * 0.015;
+    let trigger = 0, method = '', note = '';
+    if (sr?.pivotR1 > 0 && sr.pivotR1 > ltp && (sr.pivotR1 - ltp) / ltp * 100 < 3) {
+      if (!trigger || sr.pivotR1 < trigger) { trigger = +(sr.pivotR1 * 1.002).toFixed(2); method = 'Break above Pivot R1'; note = 'R1 ₹' + sr.pivotR1.toFixed(0); }
+    }
+    if (high > ltp * 1.001) {
+      const dhTrig = +(high * 1.003).toFixed(2);
+      if (!trigger || dhTrig < trigger) { trigger = dhTrig; method = 'Break above Day High'; note = 'Day high ₹' + high.toFixed(0); }
+    }
+    if (vwap > 0 && vwap > ltp && (vwap - ltp) / ltp * 100 < 1.5) {
+      if (!trigger || vwap < trigger) { trigger = +(vwap * 1.002).toFixed(2); method = 'Break above VWAP'; note = 'VWAP ₹' + vwap.toFixed(0); }
+    }
+    if (!trigger) { trigger = +(ltp + a * 0.5).toFixed(2); method = 'ATR Breakout'; note = '+0.5× ATR'; }
+    if (trigger && trigger <= ltp * 1.001) return { trigger: ltp, method: 'Market (already triggered)', note: 'Act now', alreadyTriggered: true };
+    return { trigger: trigger || ltp, method, note, alreadyTriggered: false };
+  }
+  return { trigger: ltp, method: 'Market', note: '', alreadyTriggered: false };
+}
+
+// ── autoSLTarget — EXACT port from HTML ──────────────────────
+export function autoSLTarget(ltp, high, low, atr, sr, vix, rsi) {
+  const a = atr || ltp * 0.02;
+  const liveVix = vix || 15;
+  const vixMult = 1.3 + liveVix / 100;
+  const rsiAdj  = (rsi || 50) > 70 ? -0.15 : (rsi || 50) < 35 ? 0.15 : 0;
+  const finalMult = vixMult + rsiAdj;
+  const atrSL   = +(ltp - a * finalMult).toFixed(2);
+  const slSwing = low > 0 ? +(low * 0.995).toFixed(2) : 0;
+  const slS1    = sr?.pivotS1 > 0 ? +(sr.pivotS1 * 0.995).toFixed(2) : 0;
+  let sl = atrSL;
+  if (slSwing > 0 && sl > slSwing) sl = slSwing;
+  if (slS1    > 0 && sl > slS1)    sl = slS1;
+  sl = Math.min(sl, +(ltp - a * 1.0).toFixed(2));
+  sl = Math.max(sl, +(ltp - a * 3.0).toFixed(2));
+  if (low > 0) sl = Math.max(sl, +(low * 0.99).toFixed(2));
+  sl = Math.max(0, +sl.toFixed(2));
+  // Targets using pivots + fibonacci
+  const risk = ltp - sl;
+  const r1 = sr?.pivotR1 || 0, r2 = sr?.pivotR2 || 0;
+  const rrOf = (t) => risk > 0 ? (t - ltp) / risk : 0;
+  const rrT15 = +(ltp + risk * 1.5).toFixed(2);
+  let cons = (r1 > ltp && rrOf(r1) >= 1.2 && rrOf(r1) <= 3.0) ? +r1.toFixed(2) : rrT15;
+  const rrT20 = +(ltp + risk * 2.0).toFixed(2);
+  let mod;
+  if (r2 > ltp && rrOf(r2) >= 1.8 && rrOf(r2) <= 4.0)     mod = +r2.toFixed(2);
+  else if (r1 > ltp && rrOf(r1) >= 1.8)                    mod = +r1.toFixed(2);
+  else                                                       mod = rrT20;
+  const fibT3 = +(ltp + risk * 1.618).toFixed(2);
+  let target = Math.max(fibT3, +(ltp + risk * 3.0).toFixed(2));
+  if ((vix || 15) > 22) target = Math.min(target, +(ltp + risk * 2.5).toFixed(2));
+  mod = Math.max(mod, +(cons + risk * 0.5).toFixed(2));
+  target = Math.max(target, +(mod + risk * 0.5).toFixed(2));
+  const targets = { cons, mod, agg: target };
+  return { sl, target: mod, targets };
+}
+
+// ── calcRisk — EXACT port from HTML ──────────────────────────
 export function calcRisk(ltp, sl, target, atr, vix) {
   const atrPct  = atr && ltp > 0 ? (atr / ltp) * 100 : 2;
   const volRisk = atrPct < 1.5 ? 15 : atrPct < 3.0 ? 30 : atrPct < 5.0 ? 50 : 70;
   const slPct   = ltp > 0 && sl > 0 ? Math.abs((ltp - sl) / ltp) * 100 : 4;
   let posRisk   = slPct < 2 ? 10 : slPct < 4 ? 20 : slPct < 6 ? 35 : slPct < 10 ? 50 : 70;
-  const rr      = sl > 0 && ltp > sl ? (target - ltp) / (ltp - sl) : 0.5;
-  if (rr >= 3.0) posRisk *= 0.70; else if (rr >= 2.0) posRisk *= 0.85; else if (rr < 1.0) posRisk *= 1.30;
+  const rr      = sl > 0 && ltp > sl && ltp !== sl ? (target - ltp) / (ltp - sl) : 0.5;
+  if      (rr >= 3.0) posRisk *= 0.70;
+  else if (rr >= 2.0) posRisk *= 0.85;
+  else if (rr < 1.0)  posRisk *= 1.30;
   posRisk = Math.min(100, posRisk);
   const mktRisk  = vix < 12 ? 10 : vix < 15 ? 20 : vix < 18 ? 30 : vix < 22 ? 45 : vix < 28 ? 60 : 80;
-  const timeRisk = 15;
-  return +(volRisk * 0.30 + posRisk * 0.25 + mktRisk * 0.25 + timeRisk * 0.20).toFixed(1);
+  return +(volRisk * 0.30 + posRisk * 0.25 + mktRisk * 0.25 + 15 * 0.20).toFixed(1);
 }
 
-// ── Potential Calculator (PRO port) ──────────────────────────
+// ── calcPotential — EXACT port from HTML ─────────────────────
 export function calcPotential(ltp, target, sl, numInds, rec) {
   const base = ltp > 0 ? (target - ltp) / ltp * 100 : 0;
   const rr   = Math.min(3.0, ltp > sl && sl > 0 ? (target - ltp) / (ltp - sl) : 1);
   let wr = rec === 'STRONG BUY' ? 68 : rec === 'BUY' ? 62 : rec === 'MODERATE' ? 57 : rec === 'WATCH' ? 52 : 45;
-  if (numInds >= 5) wr += 8; else if (numInds >= 4) wr += 5; else if (numInds >= 3) wr += 2; else if (numInds <= 1) wr -= 6;
+  if      (numInds >= 5) wr += 8;
+  else if (numInds >= 4) wr += 5;
+  else if (numInds >= 3) wr += 2;
+  else if (numInds <= 1) wr -= 6;
   wr = Math.min(75, Math.max(35, wr));
-  const adj     = base * (wr / 100) * rr;
-  const slDist  = ltp > 0 && sl > 0 ? Math.abs((ltp - sl) / ltp * 100) : base / 2;
-  const ev      = (wr / 100) * base - (1 - wr / 100) * slDist;
+  const adj    = base * (wr / 100) * rr;
+  const slDist = ltp > 0 && sl > 0 ? Math.abs((ltp - sl) / ltp * 100) : base / 2;
+  const ev     = (wr / 100) * base - (1 - wr / 100) * slDist;
   const riskAmt = sl > 0 && ltp > sl ? ltp - sl : ltp * 0.03;
-  return {
-    base: +base.toFixed(2), rr: +rr.toFixed(2), wr: +wr.toFixed(0),
-    adj: +adj.toFixed(2), ev: +ev.toFixed(2),
-    cons: +(ltp + riskAmt * 1.5).toFixed(2),
-    mod:  +target.toFixed(2),
-    agg:  +(ltp + riskAmt * 4.0).toFixed(2),
-  };
+  return { base: +base.toFixed(2), rr: +rr.toFixed(2), wr: +wr.toFixed(0), adj: +adj.toFixed(2), ev: +ev.toFixed(2), cons: +(ltp + riskAmt * 1.5).toFixed(2), mod: +target.toFixed(2), agg: +(ltp + riskAmt * 4.0).toFixed(2) };
 }
 
-// ── Confidence Calculator (PRO port) ─────────────────────────
-// Technical 35% + Market 25% + Volume 20% + Pattern 20%
-export function calcConfidence(rsi, macdBull, aboveMa50, aboveMa200, volRatio, patterns, vix, pcrNeutral, niftyChgPct) {
-  // Technical 35%
-  let tech = 50;
-  if (rsi < 35)       tech = 90; else if (rsi < 45) tech = 75; else if (rsi > 70) tech = 15; else if (rsi > 60) tech = 30; else tech = 55;
-  if (macdBull)       tech = Math.min(95, tech + 15); else if (macdBull === false) tech = Math.max(10, tech - 15);
-  if (aboveMa50)      tech = Math.min(95, tech + 10); else if (aboveMa50 === false) tech = Math.max(10, tech - 10);
-  if (aboveMa200)     tech = Math.min(95, tech + 5);  else if (aboveMa200 === false) tech = Math.max(5, tech - 5);
-
-  // Market 25%
-  let mkt = 50;
-  if (vix < 13)        mkt = 80; else if (vix < 16) mkt = 65; else if (vix > 24) mkt = 20; else if (vix > 20) mkt = 30;
-  if (pcrNeutral)      mkt = Math.min(80, mkt + 10);
-  if (Math.abs(niftyChgPct || 0) < 0.5) mkt = Math.max(20, mkt - 10);
-
-  // Volume 20%
-  const vol = volRatio >= 2 ? 95 : volRatio >= 1.2 ? 70 : volRatio >= 0.8 ? 40 : 20;
-
-  // Pattern 20%
-  const bullPatterns = ['BULLISH_ENGULFING','HAMMER','MORNING_STAR'];
-  const bearPatterns = ['BEARISH_ENGULFING'];
-  const hasBull = patterns?.some((p) => bullPatterns.includes(p));
-  const hasBear = patterns?.some((p) => bearPatterns.includes(p));
-  const pat = hasBull ? 85 : hasBear ? 20 : 50;
-
-  return Math.min(98, Math.max(5, Math.round(tech * 0.35 + mkt * 0.25 + vol * 0.20 + pat * 0.20)));
-}
-
-// ── IV Percentile ─────────────────────────────────────────────
-export function calcIVPercentile(iv, closes) {
-  if (!iv || iv <= 0 || !closes || closes.length < 30) return null;
-  const returns = [];
-  for (let i = 1; i < closes.length; i++) returns.push(Math.log(closes[i] / closes[i - 1]));
-  const recent = returns.slice(-20);
-  const mean   = recent.reduce((s, r) => s + r, 0) / recent.length;
-  const variance = recent.reduce((s, r) => s + (r - mean) ** 2, 0) / recent.length;
-  const hv20   = +(Math.sqrt(variance * 252) * 100).toFixed(1);
-  const ivHvRatio = hv20 > 0 ? +(iv / hv20).toFixed(2) : 1;
-  const cheap  = ivHvRatio < 0.75;
-  const rich   = ivHvRatio > 1.30;
-  return { iv: +iv.toFixed(1), hv20, ivHvRatio, cheap, rich, fair: !cheap && !rich };
-}
-
-// ── Intraday Phase ────────────────────────────────────────────
-export function getIntradayPhase() {
-  const now  = new Date();
-  const h    = +now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }) % 24;
-  const m    = +now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', minute: 'numeric' });
-  const day  = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', weekday: 'short' });
-  if (day === 'Sat' || day === 'Sun') return 'holiday';
-  const total = h * 60 + m;
-  if (total < 9 * 60 + 15)  return 'pre';
-  if (total > 15 * 60 + 30) return 'closed';
-  if (total <= 9 * 60 + 45)  return 'opening';
-  if (total <= 10 * 60 + 30) return 'early';
-  if (total <= 14 * 60)      return 'midday';
-  if (total <= 15 * 60)      return 'pre_close';
-  return 'closing';
-}
-
-// ── Composite Breakout Score (0–10) ──────────────────────────
+// ── Breakout Scoring — EXACT port from HTML boScore ───────────
 export function boScore(ema, pdhl, st, vol, wk52, mom, nr7, bb, weeklyMTF, gap, adx, rs, wick, sectorScore, phase) {
   let bull = 0, bear = 0;
   if (ema) {
-    if (ema.goldenCross)     bull += 4;
-    else if (ema.deathCross) bear += 4;
-    else if (ema.nearCross)  { bull += 2; bear += 2; }
-    else if (ema.uptrend)    bull += 1;
-    else                     bear += 1;
+    if (ema.goldenCross) bull += 4; else if (ema.deathCross) bear += 4;
+    else if (ema.nearCross) { bull += 2; bear += 2; }
+    else if (ema.uptrend) bull += 1; else bear += 1;
   }
   if (pdhl) {
-    if (pdhl.bullBreakout)      bull += 3; else if (pdhl.bearBreakout) bear += 3;
-    else if (pdhl.nearPDH)      bull += 1; else if (pdhl.nearPDL)      bear += 1;
+    if (pdhl.bullBreakout) bull += 3; else if (pdhl.bearBreakout) bear += 3;
+    else if (pdhl.nearPDH) bull += 1; else if (pdhl.nearPDL) bear += 1;
   }
   if (st) { if (st.crossed) { st.trend === 'UP' ? (bull += 3) : (bear += 3); } else { st.trend === 'UP' ? (bull += 1) : (bear += 1); } }
   if (vol) {
@@ -432,20 +594,14 @@ export function boScore(ema, pdhl, st, vol, wk52, mom, nr7, bb, weeklyMTF, gap, 
     if (mom.bullConf) bull += 2; else if (mom.rsiBull || mom.macdBull) bull += 1;
     if (mom.bearConf) bear += 2; else if (mom.rsiBear || mom.macdBear) bear += 1;
   }
-  if (nr7 && (nr7.isNR7 || nr7.isNR4))         { bull += 2; bear += 2; }
+  if (nr7 && (nr7.isNR7 || nr7.isNR4)) { bull += 2; bear += 2; }
   if (bb  && (bb.squeeze || bb.extremeSqueeze)) { bull += 2; bear += 2; }
-  if (weeklyMTF) {
-    if (weeklyMTF.confirms)     { bull += 2; bear += 2; }
-    else if (weeklyMTF.aligned) { weeklyMTF.wBullish ? (bull += 1) : (bear += 1); }
-  }
+  if (weeklyMTF) { if (weeklyMTF.confirms) { bull += 2; bear += 2; } else if (weeklyMTF.aligned) { weeklyMTF.wBullish ? (bull += 1) : (bear += 1); } }
   if (gap) {
     if (gap.bigGapUp)   bull += 2; else if (gap.gapUp)   bull += 1;
     if (gap.bigGapDown) bear += 2; else if (gap.gapDown) bear += 1;
   }
-  if (adx) {
-    if (adx.strong)  { bull += 1; bear += 1; }
-    if (adx.adx < 20) { bull = Math.max(0, bull - 2); bear = Math.max(0, bear - 2); }
-  }
+  if (adx) { if (adx.strong) { bull += 1; bear += 1; } if (adx.adx < 20) { bull = Math.max(0, bull - 2); bear = Math.max(0, bear - 2); } }
   if (rs) {
     if (rs.outperforming  && rs.strongly) bull += 1;
     if (rs.underperforming && rs.strongly) bear += 1;
@@ -457,32 +613,24 @@ export function boScore(ema, pdhl, st, vol, wk52, mom, nr7, bb, weeklyMTF, gap, 
   }
   if (sectorScore > 0) bull += 1; else if (sectorScore < 0) bear += 1;
   const phaseMulti = phase === 'midday' ? 1.0 : phase === 'early' ? 0.95 : phase === 'pre_close' ? 0.9 : 0.8;
-  const finalBull  = Math.min(10, Math.round(bull * phaseMulti));
-  const finalBear  = Math.min(10, Math.round(bear * phaseMulti));
-  return { bullScore: finalBull, bearScore: finalBear, score: Math.max(finalBull, finalBear) };
+  return { bullScore: Math.min(10, Math.round(bull * phaseMulti)), bearScore: Math.min(10, Math.round(bear * phaseMulti)), score: Math.min(10, Math.round(Math.max(bull, bear) * phaseMulti)) };
 }
 
 export function boDirection(ema, pdhl, st) {
   let bull = 0, bear = 0;
-  if (ema?.goldenCross)     bull += 3; if (ema?.deathCross)      bear += 3;
-  if (ema?.uptrend)         bull += 1; if (ema && !ema.uptrend)  bear += 1;
-  if (pdhl?.bullBreakout)   bull += 3; if (pdhl?.bearBreakout)   bear += 3;
-  if (pdhl?.nearPDH)        bull += 1; if (pdhl?.nearPDL)        bear += 1;
-  if (st?.trend === 'UP')   bull += 2; if (st?.trend === 'DOWN') bear += 2;
+  if (ema?.goldenCross)    bull += 3; if (ema?.deathCross)    bear += 3;
+  if (ema?.uptrend)        bull += 1; if (ema && !ema.uptrend) bear += 1;
+  if (pdhl?.bullBreakout)  bull += 3; if (pdhl?.bearBreakout) bear += 3;
+  if (pdhl?.nearPDH)       bull += 1; if (pdhl?.nearPDL)      bear += 1;
+  if (st?.trend === 'UP')  bull += 2; if (st?.trend === 'DOWN') bear += 2;
   return bull >= bear ? 'BULL' : 'BEAR';
 }
 
-// ── SL / Target for breakout ──────────────────────────────────
 export function boSLTarget(ltp, atr, isBull, pdh, pdl, ema200) {
   const atrMult = 1.5;
   let sl, target;
-  if (isBull) {
-    sl     = pdl > 0 ? Math.min(ltp - atr * atrMult, pdl * 0.99) : ltp - atr * atrMult;
-    target = pdh > ltp ? pdh * 1.005 : ltp + atr * 3;
-  } else {
-    sl     = pdh > 0 ? Math.max(ltp + atr * atrMult, pdh * 1.01) : ltp + atr * atrMult;
-    target = pdl < ltp ? pdl * 0.995 : ltp - atr * 3;
-  }
+  if (isBull) { sl = pdl > 0 ? Math.min(ltp - atr * atrMult, pdl * 0.99) : ltp - atr * atrMult; target = pdh > ltp ? pdh * 1.005 : ltp + atr * 3; }
+  else        { sl = pdh > 0 ? Math.max(ltp + atr * atrMult, pdh * 1.01) : ltp + atr * atrMult; target = pdl < ltp ? pdl * 0.995 : ltp - atr * 3; }
   sl = Math.max(0, +sl.toFixed(2)); target = Math.max(0, +target.toFixed(2));
   const rr = sl > 0 && ltp !== sl ? +((Math.abs(target - ltp) / Math.abs(ltp - sl))).toFixed(2) : 1;
   return { sl, target, rr };
@@ -492,105 +640,35 @@ export function boSLTarget(ltp, atr, isBull, pdh, pdl, ema200) {
 export function calcFibLevels(swingLow, swingHigh) {
   const range = swingHigh - swingLow;
   if (range <= 0) return null;
-  return {
-    range, swingLow, swingHigh,
-    fib236: +(swingHigh - range * 0.236).toFixed(2),
-    fib382: +(swingHigh - range * 0.382).toFixed(2),
-    fib500: +(swingHigh - range * 0.500).toFixed(2),
-    fib618: +(swingHigh - range * 0.618).toFixed(2),
-    fib786: +(swingHigh - range * 0.786).toFixed(2),
-    ext618: +(swingHigh + range * 0.618).toFixed(2),
-    ext100: +(swingHigh + range * 1.000).toFixed(2),
-    ext162: +(swingHigh + range * 1.618).toFixed(2),
-  };
+  return { range, swingLow, swingHigh, fib236: +(swingHigh - range * 0.236).toFixed(2), fib382: +(swingHigh - range * 0.382).toFixed(2), fib500: +(swingHigh - range * 0.500).toFixed(2), fib618: +(swingHigh - range * 0.618).toFixed(2), ext618: +(swingHigh + range * 0.618).toFixed(2), ext100: +(swingHigh + range * 1.000).toFixed(2) };
 }
 
-// ── Professional SL (VIX + RSI + ATR + Pivot) ────────────────
-export function calcProfessionalSL(entry, sr, atr, swingL, low, vix, rsi) {
-  const v        = atr || entry * 0.02;
-  const liveVix  = vix || 15;
-  const vixMult  = 1.3 + liveVix / 100;
-  const rsiAdj   = (rsi || 50) > 70 ? -0.15 : (rsi || 50) < 35 ? 0.15 : 0;
-  const finalMult = vixMult + rsiAdj;
-  const atrSL    = +(entry - v * finalMult).toFixed(2);
-  const slSwing  = swingL > 0 ? +(swingL * 0.995).toFixed(2) : 0;
-  const slS1     = sr?.pivotS1 > 0 ? +(sr.pivotS1 * 0.995).toFixed(2) : 0;
-  let sl = atrSL;
-  if (slSwing > 0 && sl > slSwing) sl = slSwing;
-  if (slS1    > 0 && sl > slS1)    sl = slS1;
-  sl = Math.min(sl, +(entry - v * 1.0).toFixed(2));
-  sl = Math.max(sl, +(entry - v * 3.0).toFixed(2));
-  if (low > 0) sl = Math.max(sl, +(low * 0.99).toFixed(2));
-  return +sl.toFixed(2);
+// ── calcOptConfidence — port from HTML calcOptConfidence ──────
+export function calcOptConfidence(delta, iv, oiChg, theta, spot, strike, optType, niftyBullish, vix, maxPain, pcr = 1.0) {
+  const absD = Math.abs(delta), isCE = optType === 'CE';
+  const cs = niftyBullish ? 1.5 : -1.5, aligned = (isCE && cs > 0) || (!isCE && cs < 0), absCs = Math.abs(cs);
+  const dirMult = aligned ? (absCs >= 3 ? 1.05 : absCs >= 2 ? 1.0 : 0.95) : (absCs >= 3 ? 0.25 : absCs >= 2 ? 0.35 : 0.45);
+  const deltaScore = absD >= 0.7 ? 90 : absD >= 0.5 ? 78 : absD >= 0.3 ? 60 : absD >= 0.15 ? 42 : 25;
+  const ivScore    = iv >= 60 ? 20 : iv >= 40 ? 35 : iv >= 25 ? 60 : iv >= 15 ? 80 : 55;
+  const pcrBullish = pcr > 1.2, pcrAligned = (isCE && pcrBullish) || (!isCE && !pcrBullish);
+  const oiScore    = pcrAligned ? 72 : 45;
+  const moneyness  = spot > 0 ? Math.abs((strike - spot) / spot * 100) : 10;
+  const atmScore   = moneyness <= 1 ? 90 : moneyness <= 3 ? 80 : moneyness <= 6 ? 65 : moneyness <= 10 ? 45 : 25;
+  const thetaScore = theta < -10 ? 20 : theta < -3 ? 40 : theta < -1 ? 62 : theta < -0.3 ? 75 : 85;
+  let raw = deltaScore*0.30 + ivScore*0.20 + oiScore*0.25 + atmScore*0.15 + thetaScore*0.10;
+  if      (vix > 30) raw -= 15; else if (vix > 25) raw -= 8; else if (vix > 20) raw -= 4; else if (vix < 14) raw += 5;
+  return Math.round(Math.min(100, Math.max(0, raw * dirMult)));
 }
 
-// ── Professional Targets (R2/R1 Pivot + Fibonacci) ───────────
-export function calcProfessionalTargets(entry, sl, sr, atr, vix) {
-  let risk = entry - sl;
-  if (risk <= 0) risk = entry * 0.02;
-  const r1   = sr?.pivotR1 || 0, r2 = sr?.pivotR2 || 0;
-  const w52H = sr?.week52H || 0, v  = atr || risk;
-  const rrOf = (t) => risk > 0 ? (t - entry) / risk : 0;
-  const rrT15 = +(entry + risk * 1.5).toFixed(2);
-  let cons = (r1 > entry && rrOf(r1) >= 1.2 && rrOf(r1) <= 3.0) ? +r1.toFixed(2) : rrT15;
-  const rrT20 = +(entry + risk * 2.0).toFixed(2);
-  let mod;
-  if (r2 > entry && rrOf(r2) >= 1.8 && rrOf(r2) <= 4.0)      mod = +r2.toFixed(2);
-  else if (r1 > entry && rrOf(r1) >= 1.8)                      mod = +r1.toFixed(2);
-  else                                                          mod = rrT20;
-  const fibT3 = +(entry + risk * 1.618).toFixed(2);
-  let agg = Math.max(fibT3, +(entry + risk * 3.0).toFixed(2));
-  if (w52H > entry && w52H < agg) agg = +w52H.toFixed(2);
-  if ((vix || 15) > 22) agg = Math.min(agg, +(entry + risk * 2.5).toFixed(2));
-  mod = Math.max(mod, +(cons + risk * 0.5).toFixed(2));
-  agg = Math.max(agg, +(mod  + risk * 0.5).toFixed(2));
-  return { cons, mod, agg, rrCons: +rrOf(cons).toFixed(2), rrMod: +rrOf(mod).toFixed(2), rrAgg: +rrOf(agg).toFixed(2), risk: +risk.toFixed(2) };
-}
-
-// ── Smart Options SL/Target (IV + DTE + Delta) ───────────────
-export function calcSmartOptionSLTarget(entry, spot, strike, iv, delta, theta, expiry, vix) {
-  const today   = new Date();
-  const expDate = expiry ? new Date(expiry) : today;
-  const dte     = Math.max(0, Math.round((expDate - today) / 86400000));
-  const ivDec   = (iv || 20) / 100;
-  const timeFrac = dte === 0 ? (1 / 252) * 0.5 : (1 / 252);
-  const dailySpotMove    = spot * ivDec * Math.sqrt(timeFrac);
-  const absDelta         = Math.abs(delta) || 0.4;
-  const dailyPremiumMove = dailySpotMove * absDelta;
-  const liveVix   = vix || 15;
-  const vixFactor = liveVix > 20 ? 1.15 : liveVix < 13 ? 0.90 : 1.0;
-  const moneyness = spot > 0 ? Math.abs(strike - spot) / spot : 0;
-  const atmFactor = moneyness < 0.01 ? 1.1 : moneyness > 0.04 ? 0.85 : 1.0;
-  const thetaEatsPct = entry > 0 ? Math.abs(theta || 0) / entry : 0;
-  let slMinPct, slMaxPct;
-  if (absDelta >= 0.45)       { slMinPct = 0.15; slMaxPct = 0.25; }
-  else if (absDelta >= 0.35)  { slMinPct = 0.20; slMaxPct = 0.30; }
-  else                        { slMinPct = 0.15; slMaxPct = 0.25; }
-  const slWidth = dailyPremiumMove * vixFactor * atmFactor;
-  const rawSL   = entry - Math.max(slWidth, entry * slMinPct);
-  const sl      = +Math.min(entry * (1 - slMinPct), Math.max(entry * (1 - slMaxPct), rawSL)).toFixed(2);
-  const risk    = entry - sl;
-  let baseRR = dte === 0 ? 1.2 : dte <= 2 ? 1.5 : dte <= 7 ? 1.8 : 2.0;
-  if (thetaEatsPct > 0.10) baseRR = Math.max(1.2, baseRR - 0.30);
-  else if (thetaEatsPct > 0.06) baseRR = Math.max(1.2, baseRR - 0.15);
-  const maxGainPct = dte === 0 ? 0.40 : dte <= 2 ? 0.60 : 1.00;
-  const rawTarget  = +(entry + risk * baseRR).toFixed(2);
-  const tgt        = +Math.min(entry * (1 + maxGainPct), rawTarget).toFixed(2);
-  const rr         = risk > 0 ? +((tgt - entry) / risk).toFixed(2) : baseRR;
-  return { sl, tgt, rr, dte, method: `IV ${(iv||20).toFixed(0)}% | DTE ${dte} | Δ ${absDelta.toFixed(2)}` };
-}
-
-// ── Max Pain ─────────────────────────────────────────────────
+// ── Max Pain & OI Walls ───────────────────────────────────────
 export function calcMaxPain(chain) {
   if (!chain || chain.length < 3) return 0;
-  const strikes = chain.map((r) => r.strike_price).filter(Boolean).sort((a, b) => a - b);
+  const strikes = chain.map(r => r.strike_price).filter(Boolean).sort((a, b) => a - b);
   let minLoss = Infinity, maxPainStrike = strikes[0];
   for (const testStrike of strikes) {
     let totalLoss = 0;
     for (const row of chain) {
-      const sp     = row.strike_price;
-      const callOI = row.call_options?.market_data?.oi || 0;
-      const putOI  = row.put_options?.market_data?.oi  || 0;
+      const sp = row.strike_price, callOI = row.call_options?.market_data?.oi || 0, putOI = row.put_options?.market_data?.oi || 0;
       if (testStrike > sp) totalLoss += (testStrike - sp) * callOI;
       if (testStrike < sp) totalLoss += (sp - testStrike) * putOI;
     }
@@ -599,36 +677,524 @@ export function calcMaxPain(chain) {
   return maxPainStrike;
 }
 
-// ── OI Walls ─────────────────────────────────────────────────
 export function calcOIWalls(chain) {
   if (!chain || chain.length < 3) return { callWall: 0, putWall: 0 };
   let maxCallOI = 0, maxPutOI = 0, callWall = 0, putWall = 0;
   for (const row of chain) {
-    const callOI = row.call_options?.market_data?.oi || 0;
-    const putOI  = row.put_options?.market_data?.oi  || 0;
+    const callOI = row.call_options?.market_data?.oi || 0, putOI = row.put_options?.market_data?.oi || 0;
     if (callOI > maxCallOI) { maxCallOI = callOI; callWall = row.strike_price; }
     if (putOI  > maxPutOI)  { maxPutOI  = putOI;  putWall  = row.strike_price; }
   }
   return { callWall, putWall, callWallOI: maxCallOI, putWallOI: maxPutOI };
 }
 
+// ── IV Percentile ─────────────────────────────────────────────
+export function calcIVPercentile(iv, closes) {
+  if (!iv || iv <= 0 || !closes || closes.length < 30) return null;
+  const returns = [];
+  for (let i = 1; i < closes.length; i++) returns.push(Math.log(closes[i] / closes[i - 1]));
+  const recent = returns.slice(-20), mean = recent.reduce((s, r) => s + r, 0) / recent.length;
+  const variance = recent.reduce((s, r) => s + (r - mean) ** 2, 0) / recent.length;
+  const hv20 = +(Math.sqrt(variance * 252) * 100).toFixed(1);
+  const ivHvRatio = hv20 > 0 ? +(iv / hv20).toFixed(2) : 1;
+  return { iv: +iv.toFixed(1), hv20, ivHvRatio, cheap: ivHvRatio < 0.75, rich: ivHvRatio > 1.30, fair: ivHvRatio >= 0.75 && ivHvRatio <= 1.30 };
+}
+
+// ── Smart Options SL/Target (IV+DTE+Delta) ────────────────────
+export function calcSmartOptionSLTarget(entry, spot, strike, iv, delta, theta, expiry, vix) {
+  const today = new Date(), expDate = expiry ? new Date(expiry) : today;
+  const dte   = Math.max(0, Math.round((expDate - today) / 86400000));
+  const ivDec = (iv || 20) / 100, timeFrac = dte === 0 ? (1/252)*0.5 : (1/252);
+  const dailySpotMove = spot * ivDec * Math.sqrt(timeFrac);
+  const absD = Math.abs(delta) || 0.4;
+  const dailyPremiumMove = dailySpotMove * absD;
+  const vixFactor = (vix||15) > 20 ? 1.15 : (vix||15) < 13 ? 0.90 : 1.0;
+  const moneyness = spot > 0 ? Math.abs(strike - spot) / spot : 0;
+  const atmFactor = moneyness < 0.01 ? 1.1 : moneyness > 0.04 ? 0.85 : 1.0;
+  let slMinPct = 0.20, slMaxPct = 0.30;
+  if (absD >= 0.45) { slMinPct = 0.15; slMaxPct = 0.25; }
+  const slWidth = dailyPremiumMove * vixFactor * atmFactor;
+  const rawSL = entry - Math.max(slWidth, entry * slMinPct);
+  const sl = +Math.min(entry * (1 - slMinPct), Math.max(entry * (1 - slMaxPct), rawSL)).toFixed(2);
+  const risk = entry - sl;
+  let baseRR = dte === 0 ? 1.2 : dte <= 2 ? 1.5 : dte <= 7 ? 1.8 : 2.0;
+  const maxGainPct = dte === 0 ? 0.40 : dte <= 2 ? 0.60 : 1.00;
+  const tgt = +Math.min(entry * (1 + maxGainPct), +(entry + risk * baseRR).toFixed(2)).toFixed(2);
+  const rr  = risk > 0 ? +((tgt - entry) / risk).toFixed(2) : baseRR;
+  return { sl, tgt, rr, dte, method: `IV ${(iv||20).toFixed(0)}% | DTE ${dte} | Δ ${absD.toFixed(2)}` };
+}
+
 // ── FII/DII Interpretation ────────────────────────────────────
 export function interpretFIIDII(d) {
   if (!d) return { bias: 0, label: 'No Data', color: '#94a3b8', detail: '' };
-  const fiiNet = d.fii_net || 0, diiNet = d.dii_net || 0;
-  const netFlow = fiiNet + diiNet;
+  const fiiNet = d.fii_net || 0, diiNet = d.dii_net || 0, netFlow = fiiNet + diiNet;
   let cashBias = netFlow > 5000 ? 10 : netFlow > 2000 ? 7 : netFlow > 500 ? 4 : netFlow > -500 ? 0 : netFlow > -2000 ? -4 : netFlow > -5000 ? -7 : -10;
-  if (fiiNet > 1000)  cashBias = Math.min(cashBias + 2, 10);
-  if (fiiNet < -1000) cashBias = Math.max(cashBias - 2, -10);
+  if (fiiNet > 1000) cashBias = Math.min(cashBias + 2, 10); if (fiiNet < -1000) cashBias = Math.max(cashBias - 2, -10);
   let futBias = 0;
   const futLong = d.fii_idx_fut_long || 0, futShort = d.fii_idx_fut_short || 0;
-  if (futLong + futShort > 0) {
-    const lp = futLong / (futLong + futShort) * 100;
-    futBias = lp > 65 ? 5 : lp > 55 ? 3 : lp > 45 ? 0 : lp > 35 ? -3 : -5;
-  }
+  if (futLong + futShort > 0) { const lp = futLong / (futLong + futShort) * 100; futBias = lp > 65 ? 5 : lp > 55 ? 3 : lp > 45 ? 0 : lp > 35 ? -3 : -5; }
   const totalBias = cashBias + futBias;
   const label = totalBias >= 8 ? 'STRONG BUY' : totalBias >= 3 ? 'FII BUYING' : totalBias >= -2 ? 'NEUTRAL' : totalBias >= -7 ? 'FII SELLING' : 'HEAVY SELL';
   const color = totalBias >= 8 ? '#16a34a' : totalBias >= 3 ? '#22c55e' : totalBias >= -2 ? '#d97706' : totalBias >= -7 ? '#f97316' : '#dc2626';
   const crFmt = (v) => (v >= 0 ? '+₹' : '-₹') + Math.abs(v).toFixed(0) + ' Cr';
   return { bias: totalBias, label, color, detail: `FII ${crFmt(fiiNet)} · DII ${crFmt(diiNet)} · Net ${crFmt(netFlow)}`, fiiNet, diiNet, netFlow };
+}
+
+// ── getChgPct helper ──────────────────────────────────────────
+export function getChgPctFromQ(q) {
+  if (!q) return 0;
+  const ltp = q.last_price || 0, prev = (q.ohlc && q.ohlc.close) || ltp;
+  return prev > 0 ? ((ltp - prev) / prev) * 100 : 0;
+}
+
+// ── isWeeklyExpiryDay — EXACT port from HTML ─────────────────
+export function isWeeklyExpiryDay() {
+  const day = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', weekday: 'short' });
+  return day === 'Thu';
+}
+
+// ── applyExpiryDayAdjustment — EXACT port ─────────────────────
+export function applyExpiryDayAdjustment(slTgt, delta, iv, entry, spot, strike) {
+  if (!isWeeklyExpiryDay()) return slTgt;
+  const moneyness = spot > 0 ? Math.abs(strike - spot) / spot : 0;
+  let { sl, tgt, rr, method, dte } = slTgt;
+  if (dte > 1) return slTgt;
+  if (moneyness < 0.01) {
+    sl  = Math.max(sl,  +(entry * 0.75).toFixed(2));
+    tgt = Math.max(tgt, +(entry * 1.60).toFixed(2));
+  } else if (moneyness > 0.03) {
+    sl  = +(entry * 0.70).toFixed(2);
+    tgt = +(entry * 1.40).toFixed(2);
+  }
+  const risk = entry - sl;
+  rr = risk > 0 ? +((tgt - entry) / risk).toFixed(2) : rr;
+  return { sl, tgt, rr, method: method + ' | EXPIRY DAY', dte };
+}
+
+// ── applyFIIBias — EXACT port from HTML ──────────────────────
+// Call after calcConfidence/calcOptConfidence with FII data from context
+export function applyFIIBias(baseConf, isBuySignal, fiiData) {
+  if (!fiiData) return baseConf;
+  const { bias } = interpretFIIDII(fiiData);
+  const direction  = isBuySignal ? 1 : -1;
+  const adjustment = Math.round((bias / 20) * 8 * direction);
+  return Math.min(99, Math.max(1, baseConf + adjustment));
+}
+
+// ── applyCalibration — EXACT port from HTML ──────────────────
+// Uses GitHub signal history to calibrate confidence scores
+export function applyCalibration(rawConf, calibration) {
+  if (!calibration) return rawConf;
+  const bucket = Math.floor(rawConf / 10) * 10;
+  const cal = calibration[bucket] || calibration[bucket - 10] || null;
+  if (!cal || cal.total < 5) return rawConf;
+  return Math.min(99, Math.max(1, rawConf + cal.adj));
+}
+
+// ── getSignalStrength — EXACT port from HTML ─────────────────
+export function getSignalStrength(numInds, conf, reversal) {
+  const revBoost = reversal?.type !== 'NONE' ? 1 : 0;
+  const eff = numInds + revBoost;
+  if (eff >= 5 && conf >= 70) return { label: 'STRONG',   color: '#16a34a', bg: '#dcfce7', border: '#86efac' };
+  if (eff >= 3 || conf >= 55) return { label: 'MODERATE', color: '#d97706', bg: '#fef3c7', border: '#fcd34d' };
+  return                              { label: 'WEAK',     color: '#dc2626', bg: '#fee2e2', border: '#fca5a5' };
+}
+
+// ── computeCtxFromCandles — EXACT port from HTML ─────────────
+// Builds composite market direction from 5-min intraday candles
+// Used for EVERY index individually and for stock option scanning
+export function computeCtxFromCandles(candles, spot, chgPct, vix, pdhl = null) {
+  const _ema = (closes, period) => {
+    if (closes.length < period) return null;
+    const k = 2 / (period + 1);
+    let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    for (let i = period; i < closes.length; i++) ema = closes[i] * k + ema * (1 - k);
+    return ema;
+  };
+
+  let momentumScore = 0, momentumLabel = 'N/A', intradayVWAP = 0;
+  let emaCtx = {
+    ema9: null, ema21: null, emaCross: null, emaCrossCandles: 999,
+    emaTrendBull: null, momentumFresh: false, volumeSpike: false, volRatio: null,
+  };
+
+  if (candles.length >= 3) {
+    const closes  = candles.map(c => +c[4]);
+    const volumes = candles.map(c => +c[5]);
+    const n       = candles.length;
+
+    if (n >= 9)  emaCtx.ema9  = _ema(closes, 9);
+    if (n >= 21) emaCtx.ema21 = _ema(closes, 21);
+    if (emaCtx.ema9 != null && emaCtx.ema21 != null)
+      emaCtx.emaTrendBull = emaCtx.ema9 > emaCtx.ema21;
+
+    if (n >= 22) {
+      let crossFound = null, crossAge = 999;
+      for (let lb = 1; lb <= 3; lb++) {
+        const prev9  = _ema(closes.slice(0, n - lb), 9);
+        const prev21 = _ema(closes.slice(0, n - lb), 21);
+        if (prev9 == null || prev21 == null) break;
+        const wasBull = prev9 > prev21;
+        if (emaCtx.emaTrendBull && !wasBull) { crossFound = 'bullish_cross'; crossAge = lb; break; }
+        if (!emaCtx.emaTrendBull && wasBull) { crossFound = 'bearish_cross'; crossAge = lb; break; }
+      }
+      emaCtx.emaCross        = crossFound || 'no_cross';
+      emaCtx.emaCrossCandles = crossAge;
+    }
+
+    if (n >= 3) {
+      const last2 = candles.slice(-2), prev2 = candles.slice(-4, -2);
+      const last2Bull = last2.every(c => +c[4] > +c[1]);
+      const last2Bear = last2.every(c => +c[4] < +c[1]);
+      const prev2Bear = prev2.length >= 2 && prev2.every(c => +c[4] < +c[1]);
+      const prev2Bull = prev2.length >= 2 && prev2.every(c => +c[4] > +c[1]);
+      emaCtx.momentumFresh = (last2Bull && prev2Bear) || (last2Bear && prev2Bull);
+    }
+
+    if (n >= 5) {
+      const lb  = Math.min(10, n - 1);
+      const avg = volumes.slice(-lb - 1, -1).reduce((a, b) => a + b, 0) / lb;
+      emaCtx.volRatio    = avg > 0 ? +(volumes[n - 1] / avg).toFixed(2) : null;
+      emaCtx.volumeSpike = emaCtx.volRatio != null && emaCtx.volRatio >= 1.5;
+    }
+
+    const recent    = candles.slice(-6);
+    const movePct   = (+recent[recent.length - 1][4] - +recent[0][1]) / +recent[0][1] * 100;
+    const upCandles = recent.filter(c => +c[4] > +c[1]).length;
+    const dnCandles = recent.filter(c => +c[4] < +c[1]).length;
+    if      (movePct > 0.4)  momentumScore += 2;
+    else if (movePct > 0.15) momentumScore += 1;
+    else if (movePct < -0.4)  momentumScore -= 2;
+    else if (movePct < -0.15) momentumScore -= 1;
+    if      (upCandles >= 4)  momentumScore += 1;
+    else if (dnCandles >= 4)  momentumScore -= 1;
+    momentumScore = Math.max(-3, Math.min(3, momentumScore));
+
+    momentumLabel = momentumScore >= 2 ? 'RISING STRONGLY' : momentumScore >= 1 ? 'RISING' :
+                    momentumScore <= -2 ? 'FALLING STRONGLY' : momentumScore <= -1 ? 'FALLING' : 'FLAT';
+
+    let tpvSum = 0, volSum = 0;
+    for (const c of candles) { const tp = (+c[2] + +c[3] + +c[4]) / 3, v = +c[5]; tpvSum += tp * v; volSum += v; }
+    intradayVWAP = volSum > 0 ? tpvSum / volSum : 0;
+  }
+
+  // ── Composite score — 4-factor model (EXACT weights from HTML) ──
+  // EMA(2.0) + VWAP(1.5) + Momentum(1.0) + DayChange(0.3)
+  const dayScore  = chgPct > 1 ? 2 : chgPct > 0.3 ? 1 : chgPct < -1 ? -2 : chgPct < -0.3 ? -1 : 0;
+  const vwapScore = intradayVWAP > 0 ? (spot >= intradayVWAP ? 1 : -1) : 0;
+  const emaScore  = emaCtx.emaTrendBull == null ? 0 : emaCtx.emaTrendBull ? 1 : -1;
+  const emaCrossBonus = (emaCtx.emaCross === 'bullish_cross' && emaCtx.emaCrossCandles <= 2) ?  0.5
+                      : (emaCtx.emaCross === 'bearish_cross' && emaCtx.emaCrossCandles <= 2) ? -0.5
+                      : 0;
+  const emaFactor      = emaScore + emaCrossBonus;
+  const compositeScore = +(momentumScore * 1.0 + dayScore * 0.3 + vwapScore * 1.5 + emaFactor * 2.0).toFixed(2);
+
+  const deadBand  = candles.length >= 3 ? 0.5 : 1.0;
+  const isBullish = compositeScore > 0;
+  const isNeutral = Math.abs(compositeScore) < deadBand;
+
+  return {
+    spot, vwap: intradayVWAP, momentumScore, momentumLabel,
+    dayChange: chgPct, dayScore, vwapScore,
+    compositeScore, bullish: isBullish, neutral: isNeutral, vix,
+    ema9:            emaCtx.ema9,
+    ema21:           emaCtx.ema21,
+    emaTrendBull:    emaCtx.emaTrendBull,
+    emaCross:        emaCtx.emaCross,
+    emaCrossCandles: emaCtx.emaCrossCandles,
+    momentumFresh:   emaCtx.momentumFresh,
+    volumeSpike:     emaCtx.volumeSpike,
+    volRatio:        emaCtx.volRatio,
+    pdh: pdhl?.pdh || null,
+    pdl: pdhl?.pdl || null,
+    pdc: pdhl?.pdc || null,
+  };
+}
+
+// ── Full calcOptConfidence — EXACT port with marketCtx ────────
+export function calcOptConfidenceFull(delta, iv, oiChg, theta, signals, spot, strike, optType, niftyBullish, vix, maxPain, stockPCR, marketCtx) {
+  const absD = Math.abs(delta), isCE = optType === 'CE';
+
+  // Direction multiplier using compositeScore (not binary niftyBullish)
+  let dirMult;
+  const cs = marketCtx?.compositeScore ?? (niftyBullish ? 1 : -1);
+  const isNeutral = marketCtx?.neutral === true;
+  if (isNeutral || Math.abs(cs) < 1.0) {
+    dirMult = 0.90;
+  } else {
+    const aligned = (isCE && cs > 0) || (!isCE && cs < 0);
+    const absCs   = Math.abs(cs);
+    dirMult = aligned
+      ? (absCs >= 3 ? 1.05 : absCs >= 2 ? 1.0 : absCs >= 1.5 ? 0.90 : 0.78)
+      : (absCs >= 3 ? 0.25 : absCs >= 2 ? 0.35 : 0.45);
+  }
+
+  // Momentum bonus
+  let momentumBonus = 0;
+  if (marketCtx?.momentumScore != null) {
+    const ms = marketCtx.momentumScore;
+    const mAligned = (isCE && ms > 0) || (!isCE && ms < 0);
+    if      (mAligned  && Math.abs(ms) >= 2) momentumBonus =  8;
+    else if (mAligned  && Math.abs(ms) >= 1) momentumBonus =  4;
+    else if (!mAligned && Math.abs(ms) >= 2) momentumBonus = -6;
+  }
+
+  // EMA crossover bonus
+  let emaBonus = 0;
+  if (marketCtx?.emaTrendBull != null) {
+    const emaAligned = (isCE && marketCtx.emaTrendBull) || (!isCE && !marketCtx.emaTrendBull);
+    const cross    = marketCtx.emaCross;
+    const crossAge = marketCtx.emaCrossCandles ?? 999;
+    if (emaAligned) {
+      emaBonus = cross === (isCE ? 'bullish_cross' : 'bearish_cross')
+        ? (crossAge <= 1 ? 15 : crossAge <= 2 ? 10 : 6)
+        : 5;
+    } else {
+      emaBonus = cross === (isCE ? 'bearish_cross' : 'bullish_cross') ? -15 : -8;
+    }
+  }
+
+  // Freshness bonus
+  let freshnessBonus = 0;
+  if (marketCtx?.momentumFresh === true) {
+    const freshAligned = (isCE && (marketCtx.compositeScore ?? 0) > 0) || (!isCE && (marketCtx.compositeScore ?? 0) < 0);
+    freshnessBonus = freshAligned ? 8 : 0;
+  }
+
+  // Volume bonus
+  let volumeBonus = 0;
+  if (marketCtx?.volRatio != null) {
+    if      (marketCtx.volRatio >= 2.0) volumeBonus =  10;
+    else if (marketCtx.volRatio >= 1.5) volumeBonus =   6;
+    else if (marketCtx.volRatio <  0.7) volumeBonus =  -8;
+  }
+
+  // Delta score (30%)
+  const deltaScore = absD >= 0.7 ? 90 : absD >= 0.5 ? 78 : absD >= 0.3 ? 60 : absD >= 0.15 ? 42 : 25;
+
+  // IV score (20%)
+  const ivScore = iv >= 60 ? 20 : iv >= 40 ? 35 : iv >= 25 ? 60 : iv >= 15 ? 80 : 55;
+
+  // OI/PCR trend score (25%) — uses pcrTrend from marketCtx (not raw oiChg)
+  const pcrTrend = marketCtx?.pcrTrend ?? 0;
+  let oiScore;
+  if (Math.abs(pcrTrend) < 0.03) {
+    oiScore = 50;
+  } else {
+    const pcrBull = pcrTrend < 0;
+    const aligned = (isCE && pcrBull) || (!isCE && !pcrBull);
+    const strength = Math.abs(pcrTrend);
+    oiScore = aligned
+      ? (strength > 0.15 ? 90 : strength > 0.08 ? 75 : 62)
+      : (strength > 0.15 ? 25 : strength > 0.08 ? 35 : 45);
+  }
+
+  // Moneyness (15%)
+  const moneyness = spot > 0 ? Math.abs((strike - spot) / spot * 100) : 10;
+  const atmScore  = moneyness <= 1 ? 90 : moneyness <= 3 ? 80 : moneyness <= 6 ? 65 : moneyness <= 10 ? 45 : 25;
+
+  // Theta (10%)
+  const thetaScore = theta < -10 ? 20 : theta < -3 ? 40 : theta < -1 ? 62 : theta < -0.3 ? 75 : 85;
+
+  // Signal bonus
+  const sigBonus = Math.min(12, (signals || []).filter(s => s.s >= 2).length * 6);
+
+  // Expiry bonus
+  let expiryBonus = 0;
+  if (isWeeklyExpiryDay()) {
+    const expMoney = spot > 0 ? Math.abs(strike - spot) / spot : 0;
+    if      (expMoney < 0.005) expiryBonus = 12;
+    else if (expMoney < 0.01)  expiryBonus =  7;
+    else if (expMoney > 0.04)  expiryBonus = -10;
+    else if (expMoney > 0.025) expiryBonus =  -5;
+  }
+
+  // IV percentile adjustment
+  const _ivRatioConf = vix > 0 && iv > 0 ? iv / vix : 1;
+  const ivPercentileAdj = _ivRatioConf < 0.80 ? 6 : _ivRatioConf > 1.40 ? -8 : 0;
+  const isBuyAction  = (isCE && (marketCtx?.compositeScore ?? 1) > 0) || (!isCE && (marketCtx?.compositeScore ?? -1) < 0);
+  const ivAdjFinal   = isBuyAction ? ivPercentileAdj : -ivPercentileAdj;
+
+  // IV trend bonus
+  let ivTrendBonus = 0;
+  const ivTrend = marketCtx?.ivTrend ?? 0;
+  if (isBuyAction) {
+    if      (ivTrend >= 1.5)  ivTrendBonus =  10;
+    else if (ivTrend >= 0.5)  ivTrendBonus =   5;
+    else if (ivTrend <= -1.5) ivTrendBonus = -15;
+    else if (ivTrend <= -0.5) ivTrendBonus =  -8;
+  } else {
+    if      (ivTrend <= -1.0) ivTrendBonus =  6;
+    else if (ivTrend >= 1.5)  ivTrendBonus = -5;
+  }
+
+  const _timeAdj = getTimeOfDayPenalty();
+  let raw = deltaScore * 0.30 + ivScore * 0.20 + oiScore * 0.25 + atmScore * 0.15 + thetaScore * 0.10
+    + sigBonus + momentumBonus + emaBonus + freshnessBonus + volumeBonus + ivTrendBonus + expiryBonus + ivAdjFinal;
+
+  // VIX impact
+  if      (vix > 30) raw -= 15;
+  else if (vix > 25) raw -= 8;
+  else if (vix > 20) raw -= 4;
+  else if (vix < 14) raw += 5;
+
+  // Max Pain gravity (expiry day only)
+  if (maxPain && maxPain > 0 && spot > 0 && isWeeklyExpiryDay()) {
+    const towardMP = (optType === 'CE' && maxPain > spot && strike <= maxPain)
+                  || (optType === 'PE' && maxPain < spot && strike >= maxPain);
+    const mpDist   = Math.abs((maxPain - spot) / spot * 100);
+    if (towardMP && mpDist > 1.5) raw += 6;
+    else if (towardMP && mpDist > 0.5) raw += 3;
+  }
+
+  raw = raw * dirMult;
+  raw += _timeAdj;
+  return Math.round(Math.min(100, Math.max(0, raw)));
+}
+
+// ── Full scanChain — EXACT port from HTML ─────────────────────
+export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish, vix, maxPain, stockPCR, marketCtx, cfg) {
+  const picks = [];
+  const isNeutral      = marketCtx?.neutral === true;
+  const compositeScore = marketCtx?.compositeScore ?? (niftyBullish ? 1 : -1);
+
+  // Gate: consolidating market
+  if (marketCtx?.isConsolidating) return [];
+
+  // PDH/PDL zone
+  const pdh = marketCtx?.pdh || null, pdl = marketCtx?.pdl || null;
+  let priceZone = 'mid';
+  if (pdh && pdl && spot > 0) {
+    const pdhDist = (spot - pdh) / pdh * 100;
+    const pdlDist = (pdl - spot) / pdl * 100;
+    if      (pdhDist >= 0)    priceZone = 'abovePDH';
+    else if (pdhDist >= -0.3) priceZone = 'nearPDH';
+    else if (pdlDist >= 0)    priceZone = 'belowPDL';
+    else if (pdlDist >= -0.3) priceZone = 'nearPDL';
+  }
+
+  const dirFlipPenalty = marketCtx?.directionFlipped ? -15 : 0;
+  const delta_thresh   = cfg?.delta || 0.40;
+  const iv_thresh      = cfg?.iv    || 15;
+  const oi_thresh      = cfg?.oi    || 15;
+
+  for (const row of chain) {
+    const sp = row.strike_price;
+    if (!spot || Math.abs(sp - atm) > spot * 0.15) continue;
+
+    for (const [side, optType] of [['call_options', 'CE'], ['put_options', 'PE']]) {
+      const opt = row[side]; if (!opt) continue;
+      const md = opt.market_data, gr = opt.option_greeks;
+      if (!md?.ltp || md.ltp < 0.5) continue;
+      const ltp = md.ltp, delta = gr?.delta || 0, iv = gr?.iv || 0, theta = gr?.theta || 0;
+      const absD0 = Math.abs(delta);
+      if (iv === 0 && absD0 > 0.95) continue;
+      if (iv === 0 && ltp < 1)      continue;
+      const oi = md?.oi || 0, prevOI = md?.prev_oi || oi;
+      const oiChg = prevOI > 0 ? ((oi - prevOI) / prevOI * 100) : 0;
+      const absD  = Math.abs(delta);
+
+      // Signals array (same gate as HTML: need ≥2)
+      const signals = [];
+      if (absD  >= delta_thresh)  signals.push({ l: 'Delta ' + delta.toFixed(2),        s: 3 });
+      if (iv    >= iv_thresh)     signals.push({ l: 'IV ' + iv.toFixed(1) + '%',          s: 2 });
+      if (oiChg >= oi_thresh)     signals.push({ l: 'OI +' + oiChg.toFixed(0) + '%',     s: 2 });
+      if (oiChg <= -oi_thresh)    signals.push({ l: 'OI ' + oiChg.toFixed(0) + '% UW',   s: 1 });
+      if (theta < -0.5)           signals.push({ l: 'Θ ' + theta.toFixed(2),              s: 1 });
+      if (sp === atm)             signals.push({ l: 'ATM',                                 s: 1 });
+      if (signals.length < 2)     continue;
+
+      // OI build classification
+      const priceBull = compositeScore > 0.5, priceBear = compositeScore < -0.5;
+      const oiRising  = oiChg >= oi_thresh,   oiFalling = oiChg <= -oi_thresh;
+      const isCEOpt   = optType === 'CE';
+      let oiBuildType = 'NEUTRAL', oiBuildBonus = 0;
+      if (isCEOpt) {
+        if (priceBull && oiRising)  { oiBuildType = 'LONG_BUILD';  oiBuildBonus = +15; }
+        if (priceBull && oiFalling) { oiBuildType = 'SHORT_COVER'; oiBuildBonus =  +5; }
+        if (priceBear && oiRising)  { oiBuildType = 'SHORT_BUILD'; oiBuildBonus = -15; }
+        if (priceBear && oiFalling) { oiBuildType = 'LONG_UNWIND'; oiBuildBonus =  -8; }
+      } else {
+        if (priceBear && oiRising)  { oiBuildType = 'LONG_BUILD';  oiBuildBonus = +15; }
+        if (priceBear && oiFalling) { oiBuildType = 'SHORT_COVER'; oiBuildBonus =  +5; }
+        if (priceBull && oiRising)  { oiBuildType = 'SHORT_BUILD'; oiBuildBonus = -15; }
+        if (priceBull && oiFalling) { oiBuildType = 'LONG_UNWIND'; oiBuildBonus =  -8; }
+      }
+      if (!oiRising && !oiFalling) oiBuildBonus = 0;
+
+      // IV environment
+      const ivTrendVal = marketCtx?.ivTrend ?? 0;
+      const ivEnv = ivTrendVal >= 1.5 ? 'EXPANDING' : ivTrendVal >= 0.5 ? 'RISING' :
+                    ivTrendVal <= -1.5 ? 'CONTRACTING' : ivTrendVal <= -0.5 ? 'FALLING' : 'STABLE';
+      if (ivEnv === 'EXPANDING')   signals.push({ l: 'IV Expanding ↑',   s: 2 });
+      if (ivEnv === 'CONTRACTING') signals.push({ l: 'IV Contracting ↓', s: 1 });
+
+      // SL/Target
+      const entry    = ltp;
+      const _opt     = calcSmartOptionSLTarget(entry, spot, sp, iv, delta, theta, expiry, vix);
+      const _optAdj  = applyExpiryDayAdjustment(_opt, delta, iv, entry, spot, sp);
+      let { sl, tgt, rr, method: slTgtMethod } = _optAdj;
+
+      // Confidence — full formula with marketCtx
+      let confidence = calcOptConfidenceFull(delta, iv, oiChg, theta, signals, spot, sp, optType, niftyBullish, vix, maxPain, stockPCR, marketCtx);
+
+      // Zone adjustment
+      let zoneAdj = 0;
+      const isCE_ = optType === 'CE';
+      if      (priceZone === 'abovePDH' &&  isCE_) zoneAdj = +10;
+      else if (priceZone === 'nearPDH'  &&  isCE_) zoneAdj =  +5;
+      else if (priceZone === 'belowPDL' && !isCE_) zoneAdj = +10;
+      else if (priceZone === 'nearPDL'  && !isCE_) zoneAdj =  +5;
+      else if (priceZone === 'mid')                 zoneAdj = -18;
+      if (priceZone === 'belowPDL' &&  isCE_) zoneAdj = -25;
+      if (priceZone === 'abovePDH' && !isCE_) zoneAdj = -25;
+
+      confidence = Math.round(Math.min(100, Math.max(0, confidence + zoneAdj + dirFlipPenalty + oiBuildBonus)));
+
+      // Direction
+      const effectiveNeutral = isNeutral || Math.abs(compositeScore) < 1.0;
+      const isCE = optType === 'CE';
+      const trendAligned = effectiveNeutral ? true : (isCE ? compositeScore > 0 : compositeScore < 0);
+      const momentumDir  = isNeutral ? 'NEUTRAL' : compositeScore > 2 ? 'STRONGLY BULLISH' : compositeScore > 0 ? 'BULLISH' : compositeScore < -2 ? 'STRONGLY BEARISH' : 'BEARISH';
+
+      // Action
+      const aligned = (isCE && niftyBullish) || (!isCE && !niftyBullish);
+      let action = 'WATCH';
+      if (!aligned && !isNeutral) { if (absD >= delta_thresh && oiChg <= -oi_thresh) action = 'SELL'; }
+      else                        { if (absD >= delta_thresh) action = 'BUY'; }
+      if (iv >= iv_thresh && oiChg <= -oi_thresh) action = 'SELL';
+
+      // SELL: flip SL/Target
+      if (action === 'SELL') {
+        const riskPct   = entry > 0 ? (entry - sl)  / entry : 0.25;
+        const rewardPct = entry > 0 ? (tgt - entry) / entry : 0.50;
+        sl  = +(entry * (1 + riskPct)).toFixed(2);
+        tgt = +Math.max(0.5, entry * (1 - rewardPct)).toFixed(2);
+        rr  = riskPct > 0 ? +(rewardPct / riskPct).toFixed(2) : rr;
+        slTgtMethod += ' · SELL (flipped)';
+      }
+
+      const lot       = lotSize || 1;
+      const maxLoss   = +(action === 'SELL' ? (sl - entry) * lot : (entry - sl) * lot).toFixed(0);
+      const maxProfit = +(action === 'SELL' ? (entry - tgt) * lot : (tgt - entry) * lot).toFixed(0);
+
+      picks.push({
+        strike: sp, type: optType, entry, sl, tgt, rr,
+        iv, delta, theta, oi, oiChg, action, signals,
+        score: signals.reduce((a, s) => a + s.s, 0),
+        confidence, atm: sp === atm, spot, expiry, und: name,
+        lot, amtRequired: +(ltp * lot).toFixed(0), maxLoss, maxProfit,
+        trendAligned, trendDir: momentumDir, compositeScore, slTgtMethod,
+        stockPCR: stockPCR || null, vix: vix || 15, priceZone,
+        pdh: pdh || null, pdl: pdl || null,
+        zoneAdj, dirFlipPenalty, oiBuildType, oiBuildBonus, ivEnv,
+        emaTrendBull: marketCtx?.emaTrendBull ?? null,
+        emaCross: marketCtx?.emaCross ?? null,
+        momentumFresh: marketCtx?.momentumFresh || false,
+        volRatio: marketCtx?.volRatio ?? null,
+        candles: marketCtx?.candles?.slice(-20) || [],
+      });
+    }
+  }
+  return picks.sort((a, b) => b.confidence - a.confidence);
 }
