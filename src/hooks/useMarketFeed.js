@@ -108,7 +108,7 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
   const retryTimer  = useRef(null);
   const pollTimer   = useRef(null);
   const keysRef     = useRef([]);
-  //const tokenRef    = useRef(token);
+  const tokenRef    = useRef(token);
   const onPriceRef  = useRef(null);
 
   const [connected,   setConnected]   = useState(false);
