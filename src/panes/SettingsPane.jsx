@@ -24,7 +24,7 @@ export default function SettingsPane() {
   const {
     cfg, saveCfg, resetCfg, ghSettingsPulled,
     gh, saveGh,
-    clearToken, showToast,
+    saveToken,clearToken, showToast,
     stocksStatus, loadStocks,
     fiiInterp, loadFIIDII,
   } = useApp();
