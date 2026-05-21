@@ -32,6 +32,7 @@ const BO_FILTERS = [
 
 export default function StocksPane() {
   const { token, cfg, marketStatus, lg, onTokenExpired, updateBadge, gh,
+          activeTab,
           setScanning, setStatusDot, setStatusTxt, setScanSecs,
           stocks, fiiInterp } = useApp();
 
@@ -56,10 +57,13 @@ export default function StocksPane() {
   const { connected: wsConnected, lastPrices } = useMarketFeed(token, topKeys, marketStatus.open && picks.length > 0);
 
   useEffect(() => {
-    const onScan = () => { mode === 'breakout' ? runBreakoutScan() : runPicksScan(); };
+    const onScan = () => {
+      if (activeTab !== 'stocks') return;
+      mode === 'breakout' ? runBreakoutScan() : runPicksScan();
+    };
     document.addEventListener('friday:scan', onScan);
     return () => document.removeEventListener('friday:scan', onScan);
-  }, [mode]); // eslint-disable-line
+  }, [activeTab, mode]); // eslint-disable-line
 
   // Auto-load stats always; auto-scan if market open (same as HTML boot())
   useEffect(() => {

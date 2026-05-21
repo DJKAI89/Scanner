@@ -166,7 +166,10 @@ function OptionCard({ pick }) {
 }
 
 export default function OptionsPane() {
-  const { token, cfg, marketStatus, lg, onTokenExpired, updateBadge, fiiInterp, fiiData, gh } = useApp();
+  const {
+    token, cfg, marketStatus, lg, onTokenExpired, updateBadge, fiiInterp, fiiData, gh,
+    activeTab, setScanning, setStatusDot, setStatusTxt, setScanSecs,
+  } = useApp();
   const accessToken = resolveAccessToken(token);
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState('');
@@ -204,6 +207,13 @@ export default function OptionsPane() {
 
   useEffect(() => { if (accessToken && marketStatus.open) loadOptions(); }, [accessToken]); // eslint-disable-line
   useEffect(() => {
+    const onScan = () => {
+      if (activeTab === 'options') loadOptions(true);
+    };
+    document.addEventListener('friday:scan', onScan);
+    return () => document.removeEventListener('friday:scan', onScan);
+  }, [activeTab, accessToken]); // eslint-disable-line
+  useEffect(() => {
     const liveVix = liveIndexPrices[VIX_KEY]?.ltp;
     if (liveVix > 0) setVix(liveVix);
     if (Object.keys(liveIndexPrices).length > 0) setUpdTime('Live: ' + getIST());
@@ -211,6 +221,7 @@ export default function OptionsPane() {
 
   async function loadOptions(force = false) {
     if (loading && !force) return;
+    setScanning(true); setStatusDot('scan'); setStatusTxt('Scanning options...');
     setLoading(true); setError(''); setProgress('Step 1: Fetching Nifty direction + VIX...');
     try {
       // Step 1: index quotes + VIX
@@ -323,12 +334,14 @@ export default function OptionsPane() {
       const total     = built.reduce((s, g) => s + g.picks.length, 0);
       updateBadge('options', withTrend > 0 ? withTrend + ' signals' : '—');
       setUpdTime('Updated: ' + getIST());
+      setScanSecs((cfg.scanOpts || 15) * 60);
+      setStatusDot('live'); setStatusTxt('Live');
       const allPicks = built.flatMap(g => g.picks);
       if (allPicks.length && gh?.token) logSignals(gh, allPicks.map(p => buildOptionSignal(p, vixVal)), vixVal, lg);
       lg(`✅ Options: ${total} signals (${withTrend} with-trend)`, 'o');
     } catch (e) {
-      setError(e.message); lg('Options error: ' + e.message, 'e');
-    } finally { setLoading(false); }
+      setError(e.message); setStatusDot('err'); setStatusTxt('Error'); lg('Options error: ' + e.message, 'e');
+    } finally { setLoading(false); setScanning(false); }
   }
 
   const { txt: vixTxt } = interpVIX(vix);
