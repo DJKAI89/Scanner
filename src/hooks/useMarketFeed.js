@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { fetchQ } from '../services/api';
+import { fetchQ, resolveAccessToken } from '../services/api';
 import { sleep } from '../utils/marketTime';
 
 // ── Minimal Protobuf binary reader for Upstox v3 ltpc feed ───
@@ -108,7 +108,7 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
   const [lastPrices,  setLastPrices]  = useState({});
   const [wsMode,      setWsMode]      = useState('connecting'); // 'ws'|'poll'|'connecting'
 
-  //tokenRef.current = token;
+  tokenRef.current = resolveAccessToken(token);
 
   // ── Price update helper ──
   const applyPrices = useCallback((map) => {
@@ -131,12 +131,12 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
     setConnected(true);
     pollTimer.current = setInterval(async () => {
       const keys = keysRef.current;
-      if (!keys.length || !localStorage.friday_token) return;
+      if (!keys.length || !tokenRef.current) return;
       try {
         const batches = [];
         for (let i = 0; i < keys.length; i += 50) batches.push(keys.slice(i, i + 50));
         for (const batch of batches) {
-          const map = await fetchQ(batch.join(','), localStorage.friday_token, () => {});
+          const map = await fetchQ(batch.join(','), tokenRef.current, () => {});
           const priceMap = {};
           for (const [k, q] of Object.entries(map)) {
             const ltp = q.last_price || 0;
@@ -155,15 +155,20 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
 
   // ── WebSocket connect ────────────────────────────────────────
   const connect = useCallback(async () => {
-    if (!localStorage.friday_token || !keysRef.current.length || !enabled) return;
+    const accessToken = resolveAccessToken(token);
+    if (!accessToken || !keysRef.current.length || !enabled) return;
     if (ws.current?.readyState === WebSocket.OPEN) return;
 
     try {
       // Step 1: Get authorized WebSocket URL
       const authRes = await fetch(AUTHORIZE_URL, {
-        headers: { Authorization: 'Bearer ' + localStorage.friday_token, Accept: 'application/json' },
+        headers: { Authorization: 'Bearer ' + accessToken, Accept: 'application/json' },
       });
-      if (!authRes.ok) throw new Error('Auth failed: ' + authRes.status);
+      if (!authRes.ok) {
+        let detail = '';
+        try { detail = await authRes.text(); } catch (e) { /* ignore */ }
+        throw new Error('Auth failed: ' + authRes.status + (detail ? ' ' + detail.slice(0, 120) : ''));
+      }
       const authData = await authRes.json();
       const wsUrl    = authData?.data?.authorized_redirect_uri
                     || authData?.authorized_redirect_uri
@@ -252,8 +257,9 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
   }, []);
 
   useEffect(() => {
+    const accessToken = resolveAccessToken(token);
     keysRef.current = instrumentKeys;
-    if (!enabled || !token || !instrumentKeys.length) { disconnect(); return; }
+    if (!enabled || !accessToken || !instrumentKeys.length) { disconnect(); return; }
     if (ws.current?.readyState === WebSocket.OPEN) {
       subscribe(instrumentKeys);
     } else {

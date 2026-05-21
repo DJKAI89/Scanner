@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, StatCard, EmptyState } from '../components/common.jsx';
-import { fetchQ, fetchCandles, fetchIntraday, fetchOptions, withRetry } from '../services/api';
+import { fetchQ, fetchCandles, fetchIntraday, fetchOptions, resolveAccessToken, withRetry } from '../services/api';
 import {
   calcRSI, calcEMACrossover, calcATR, calcBBSqueeze, calcSR, calcVWAP,
   detectPatterns, calcRisk, calcPotential, calcConfidence, countIndicatorsEx,
@@ -210,7 +210,7 @@ export default function LookupPane() {
         try {
           const cd = await fetch(
             `https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent(inst.key)}`,
-            { headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' } }
+            { headers: { Authorization: 'Bearer ' + resolveAccessToken(token), Accept: 'application/json' } }
           ).then(r => r.json());
           const expiries = (cd?.data?.map(e => e.expiry).sort() || []);
           const expiry   = expiries[0] || '';

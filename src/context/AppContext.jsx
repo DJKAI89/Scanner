@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { DEF, CFG_VERSION } from '../constants/config';
 import { localIsOpen, getMarketStatusLocal, getIST } from '../utils/marketTime';
-import { fetchMarketStatus, fetchUserProfile } from '../services/api';
+import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken } from '../services/api';
 import { interpretFIIDII } from '../services/technical';
 import { pullSettingsFromGH, pushSettingsToGH } from '../services/github';
 
@@ -80,7 +80,7 @@ export function AppProvider({ children }) {
   }, []);
 
   const saveToken = useCallback((newToken) => {
-    const v = newToken.trim();
+    const v = normalizeAccessToken(newToken);
     if (!v || v.length < 20) return 'Token too short';
     localStorage.setItem('friday_token', v);
     localStorage.setItem('friday_token_date', new Date().toDateString());

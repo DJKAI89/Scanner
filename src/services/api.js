@@ -7,6 +7,38 @@ const _proxyCooldown = { corsproxy: 0 };
 const PROXY_COOLDOWN_MS = 45000;
 let _lastCallTs = 0;
 
+export function normalizeAccessToken(raw) {
+  let v = String(raw || '').trim();
+  if (!v) return '';
+
+  try {
+    const parsed = JSON.parse(v);
+    v = String(parsed.access_token || parsed.token || v).trim();
+  } catch (e) { /* plain token */ }
+
+  const tokenMatch = v.match(/access_token["'\s:=]+([A-Za-z0-9._~+/=-]+)/i);
+  if (tokenMatch) v = tokenMatch[1];
+
+  return v
+    .replace(/^Authorization:\s*/i, '')
+    .replace(/^Bearer\s+/i, '')
+    .replace(/^["']|["']$/g, '')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
+export function getStoredAccessToken() {
+  try {
+    return normalizeAccessToken(localStorage.getItem('friday_token') || '');
+  } catch (e) {
+    return '';
+  }
+}
+
+export function resolveAccessToken(token) {
+  return normalizeAccessToken(token) || getStoredAccessToken();
+}
+
 function _proxyAvailable(name) {
   return !_proxyCooldown[name] || Date.now() > _proxyCooldown[name];
 }
@@ -46,7 +78,7 @@ export async function withRetry(fn, label = '', retries = 3) {
 // ── Core API GET with proxy rotation ──
 export async function apiGet(url, token, onTokenExpired) {
   const full = 'https://api.upstox.com' + url;
-  const hdrs = { Authorization: 'Bearer ' + localStorage.friday_token, Accept: 'application/json' };
+  const hdrs = { Authorization: 'Bearer ' + resolveAccessToken(token), Accept: 'application/json' };
 
   const buildProxies = () => {
     const list = [];
@@ -154,7 +186,7 @@ export async function fetchUserProfile(token, onTokenExpired) {
 export async function fetchMarketStatus(token) {
   try {
     const url = 'https://api.upstox.com/v2/market/status/NSE';
-    const hdrs = { Authorization: 'Bearer ' + localStorage.friday_token, Accept: 'application/json' };
+    const hdrs = { Authorization: 'Bearer ' + resolveAccessToken(token), Accept: 'application/json' };
     for (const fetchUrl of [url, 'https://corsproxy.io/?' + encodeURIComponent(url)]) {
       try {
         const res = await fetch(fetchUrl, { headers: hdrs });

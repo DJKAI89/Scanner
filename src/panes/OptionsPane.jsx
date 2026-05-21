@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
-import { fetchQ, fetchOptions, fetchIntraday } from '../services/api';
+import { fetchQ, fetchOptions, fetchIntraday, resolveAccessToken } from '../services/api';
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST, sleep } from '../utils/marketTime';
 import { INDEX_OPTS } from '../constants/config';
@@ -166,7 +166,7 @@ export default function OptionsPane() {
         try {
           const cd = await fetch(
             `https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent(idx.key)}`,
-            { headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' } }
+            { headers: { Authorization: 'Bearer ' + resolveAccessToken(token), Accept: 'application/json' } }
           ).then(r => r.json());
           expiry = (cd?.data?.map(e => e.expiry).sort() || [])[0] || '';
         } catch (e) { lg('Contract ' + idx.name + ': ' + e.message, 'w'); }
