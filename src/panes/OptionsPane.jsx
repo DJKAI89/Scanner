@@ -168,7 +168,7 @@ function OptionCard({ pick }) {
 export default function OptionsPane() {
   const {
     token, cfg, marketStatus, lg, onTokenExpired, updateBadge, fiiInterp, fiiData, gh,
-    activeTab, setScanning, setStatusDot, setStatusTxt, setScanSecs,
+    activeTab, setScanning, setStatusDot, setStatusTxt,
   } = useApp();
   const accessToken = resolveAccessToken(token);
   const [loading, setLoading]   = useState(false);
@@ -179,6 +179,7 @@ export default function OptionsPane() {
   const [progress, setProgress] = useState('');
   const [updTime, setUpdTime]   = useState('');
   const [marketCtxMap, setMarketCtxMap] = useState({});
+  const loadingRef = useRef(false);
   const prevAvgIVCache = useRef({}), prevPCRCache = useRef({});
   const liveKeys = useMemo(() => [...INDEX_OPTS.map((idx) => idx.key), VIX_KEY], []);
   const { lastPrices: liveIndexPrices } = useMarketFeed(
@@ -219,10 +220,11 @@ export default function OptionsPane() {
     if (Object.keys(liveIndexPrices).length > 0) setUpdTime('Live: ' + getIST());
   }, [liveIndexPrices]);
 
-  async function loadOptions(force = false) {
-    if (loading && !force) return;
+  async function loadOptions() {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     setScanning(true); setStatusDot('scan'); setStatusTxt('Scanning options...');
-    setLoading(true); setError(''); setProgress('Step 1: Fetching Nifty direction + VIX...');
+    setLoading(false); setError(''); setProgress('Step 1: Fetching Nifty direction + VIX...');
     try {
       // Step 1: index quotes + VIX
       const mktD = await fetchQ('NSE_INDEX|Nifty 50,NSE_INDEX|India VIX', accessToken, onTokenExpired);
@@ -334,14 +336,13 @@ export default function OptionsPane() {
       const total     = built.reduce((s, g) => s + g.picks.length, 0);
       updateBadge('options', withTrend > 0 ? withTrend + ' signals' : '—');
       setUpdTime('Updated: ' + getIST());
-      setScanSecs((cfg.scanOpts || 15) * 60);
       setStatusDot('live'); setStatusTxt('Live');
       const allPicks = built.flatMap(g => g.picks);
       if (allPicks.length && gh?.token) logSignals(gh, allPicks.map(p => buildOptionSignal(p, vixVal)), vixVal, lg);
       lg(`✅ Options: ${total} signals (${withTrend} with-trend)`, 'o');
     } catch (e) {
       setError(e.message); setStatusDot('err'); setStatusTxt('Error'); lg('Options error: ' + e.message, 'e');
-    } finally { setLoading(false); setScanning(false); }
+    } finally { setLoading(false); setScanning(false); loadingRef.current = false; }
   }
 
   const { txt: vixTxt } = interpVIX(vix);

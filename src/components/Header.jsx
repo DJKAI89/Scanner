@@ -4,13 +4,10 @@ import { TABS } from '../constants/config';
 
 export default function Header({ onMenuToggle }) {
   const {
-    booted, scanSecs, statusDot, statusTxt, activeTab,
-    scanning, setScanning, marketStatus, logOpen, setLogOpen,
+    booted, statusDot, statusTxt, activeTab,
+    scanning, setLogOpen,
   } = useApp();
 
-  const mins = Math.floor(scanSecs / 60);
-  const secs = String(scanSecs % 60).padStart(2, '0');
-  const cdownUrg = scanSecs < 30 && marketStatus.open;
   const currentTab = TABS.find((t) => t.id === activeTab);
 
   return (
@@ -45,17 +42,6 @@ export default function Header({ onMenuToggle }) {
       {/* Right controls (post-login) */}
       {booted && (
         <div className="hdr-r">
-          {/* Countdown */}
-          <div className="cdown">
-            <div className={'cdown-v' + (cdownUrg ? ' urg' : '')}
-              style={!marketStatus.open ? { color: '#dc2626' } : {}}>
-              {marketStatus.open ? `${mins}:${secs}` : 'OFF'}
-            </div>
-            <div className="cdown-l">
-              {marketStatus.open ? 'NEXT SCAN' : 'MARKET CLOSED'}
-            </div>
-          </div>
-
           {/* Status dot */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <div className={`dot ${statusDot}`} />

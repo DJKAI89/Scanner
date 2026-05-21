@@ -52,7 +52,6 @@ export function AppProvider({ children }) {
   // ── UI state ──
   const [activeTab, setActiveTab] = useState('stocks');
   const [scanning, setScanning]   = useState(false);
-  const [scanSecs, setScanSecs]   = useState(0);
   const [statusDot, setStatusDot] = useState('live');
   const [statusTxt, setStatusTxt] = useState('Live');
   const [badges, setBadges]       = useState({ stocks: '—', options: '—', log: '—', analysis: '—' });
@@ -286,13 +285,6 @@ export function AppProvider({ children }) {
     return () => clearInterval(id);
   }, [booted, refreshMarketStatus]);
 
-  // ── 1-second countdown ──
-  useEffect(() => {
-    if (!booted) return;
-    const id = setInterval(() => setScanSecs((s) => Math.max(0, s - 1)), 1000);
-    return () => clearInterval(id);
-  }, [booted]);
-
   const value = {
     // auth
     token, booted, tokenExpired,
@@ -308,7 +300,6 @@ export function AppProvider({ children }) {
     // ui
     activeTab, setActiveTab,
     scanning,  setScanning,
-    scanSecs,  setScanSecs,
     statusDot, setStatusDot,
     statusTxt, setStatusTxt,
     badges,    updateBadge,

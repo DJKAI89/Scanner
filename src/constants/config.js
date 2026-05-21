@@ -20,13 +20,8 @@ export const DEF = {
   oi:           15,
   optSL:        25,
   optTgt:       50,
-  scanStocks:   15,
-  tick:         15,
-  portRef:      60,
-  scanOpts:     15,
   minOptConf:   65,
   maxOptCapital: 0,
-  moodRefresh:  10,
   portSize:     500000,
   riskPct:      2,
 };

@@ -16,9 +16,6 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#0f172
 .btn-g{background:#16a34a;color:#fff;box-shadow:0 2px 6px rgba(22,163,74,.3)}
 .btn-g:hover{opacity:.9}.btn-g:disabled{background:#e2e8f0;color:#94a3b8;box-shadow:none;cursor:not-allowed}
 .btn-s{background:#f8fafc;color:#374151;border:1px solid #e2e8f0}
-.cdown{background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:4px 10px;text-align:center;min-width:50px}
-.cdown-v{font-size:13px;font-weight:800;font-variant-numeric:tabular-nums;color:#16a34a}
-.cdown-v.urg{color:#dc2626}.cdown-l{font-size:7px;color:#94a3b8}
 .refresh-info{font-size:9px;color:#94a3b8;text-align:right;line-height:1.4}
 
 /* TICKER */
@@ -196,7 +193,6 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#0f172
 @media(max-width:480px){
   .hdr{flex-wrap:wrap;gap:6px}
   .refresh-info{display:none!important}
-  .cdown{min-width:44px}
 }
 
 /* ── ANIMATIONS ── */

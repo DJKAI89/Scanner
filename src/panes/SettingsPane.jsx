@@ -185,15 +185,6 @@ export default function SettingsPane() {
           <SetRow label="Max Capital ₹"      sub="0 = no limit"><Inp value={local.maxOptCapital} onChange={(v) => set('maxOptCapital', v)} min={0} step={1000} width={90} /></SetRow>
         </div>
 
-        {/* ── Intervals ── */}
-        <div className="setting-card">
-          <h4>⏱ Scan Intervals</h4>
-          <SetRow label="Stocks scan (min)"       sub="Full cycle"><Inp value={local.scanStocks}  onChange={(v) => set('scanStocks', v)}  min={5}  max={60} /></SetRow>
-          <SetRow label="Price tick (sec)"         sub="LTP refresh"><Inp value={local.tick}       onChange={(v) => set('tick', v)}        min={10} max={60} /></SetRow>
-          <SetRow label="Portfolio refresh (sec)"  sub="P&L update"><Inp value={local.portRef}    onChange={(v) => set('portRef', v)}     min={30} max={300} /></SetRow>
-          <SetRow label="Options refresh (min)"    sub="Chain rescan"><Inp value={local.scanOpts}  onChange={(v) => set('scanOpts', v)}   min={5}  max={60} /></SetRow>
-          <SetRow label="Mood refresh (min)"       sub="Market mood"><Inp value={local.moodRefresh} onChange={(v) => set('moodRefresh', v)} min={5} max={30} /></SetRow>
-        </div>
 
         {/* ── Stock Universe ── */}
         <div className="setting-card">

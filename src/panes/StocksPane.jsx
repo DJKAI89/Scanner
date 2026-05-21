@@ -33,7 +33,7 @@ const BO_FILTERS = [
 export default function StocksPane() {
   const { token, cfg, marketStatus, lg, onTokenExpired, updateBadge, gh,
           activeTab,
-          setScanning, setStatusDot, setStatusTxt, setScanSecs,
+          setScanning, setStatusDot, setStatusTxt,
           stocks, fiiInterp } = useApp();
 
   const [mode, setMode]             = useState('picks');
@@ -51,6 +51,7 @@ export default function StocksPane() {
   const [boProgress, setBoProgress] = useState('');
   const [boFilter, setBoFilter]     = useState('all');
   const scanInProgress = useRef(false);
+  const boScanInProgress = useRef(false);
 
   // WebSocket live prices for top picks
   const topKeys = picks.slice(0, 20).map(p => p.key).filter(Boolean);
@@ -87,7 +88,7 @@ export default function StocksPane() {
     if (!stocks?.length) { setPicksError('⚠ stocks.json not loaded yet — configure GitHub in ⚙ Settings first'); return; }
     scanInProgress.current = true;
     setScanning(true); setStatusDot('scan'); setStatusTxt('Scanning...');
-    setPicksLoading(true); setPicksError(''); setPicks([]);
+    setPicksLoading(false); setPicksError('');
     setPickProgress('Fetching index data...');
     try {
       // Step 1: index + VIX
@@ -102,7 +103,7 @@ export default function StocksPane() {
       const fiiScore = (fiiInterp?.bias || 0) * 5; // scale -50..+50
 
       // Step 3: Batch quote fetch (HTML does batch of 50)
-      const scanList = stocks.filter(s => s.scan !== false); // HTML scans ALL stocks, cfg.scanStocks is interval not count
+      const scanList = stocks.filter(s => s.scan !== false); // HTML scans ALL configured stocks.
       setPickProgress(`Fetching quotes for ${scanList.length} stocks...`);
 
       const today = getISTDate();
@@ -250,7 +251,6 @@ export default function StocksPane() {
       setPicks(results);
       updateBadge('stocks', String(results.length));
       setPicksTime('Updated: ' + getIST());
-      setScanSecs(cfg.scanStocks * 60);
       setStatusDot('live'); setStatusTxt('Live');
       lg(`✅ Picks: ${results.length} from ${byVol.length} stocks (conf≥${cfg.minStockConf}% pot≥${cfg.pot}% risk<${cfg.risk}%)`, 'o');
       if (!results.length) lg(`⚠ 0 picks from ${byVol.length} stocks — lower Conf(${cfg.minStockConf}%)/Pot(${cfg.pot}%)/Risk(${cfg.risk}%) in ⚙ Settings`, 'w');
@@ -266,9 +266,11 @@ export default function StocksPane() {
 
   // ── BREAKOUT SCAN — exact port of HTML breakoutScan ──────────
   async function runBreakoutScan() {
-    if (boLoading) return;
+    if (boScanInProgress.current) return;
     if (!stocks?.length) { setBoError('⚠ stocks.json not loaded — configure GitHub in ⚙ Settings first'); return; }
-    setBoLoading(true); setBoError(''); setBoProgress('Fetching quotes...');
+    boScanInProgress.current = true;
+    setScanning(true); setStatusDot('scan'); setStatusTxt('Scanning breakout...');
+    setBoLoading(false); setBoError(''); setBoProgress('Fetching quotes...');
     try {
       const today  = getISTDate();
       const from52 = new Date(Date.now() - 375 * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
@@ -351,10 +353,11 @@ export default function StocksPane() {
       setBoCards(results);
       setBoStats({ total:results.length, bullCount:results.filter(r=>r.dir==='BULL').length, bearCount:results.filter(r=>r.dir==='BEAR').length, goldCross:results.filter(r=>r.ema?.goldenCross).length, volSurge:results.filter(r=>r.vol?.confirmed).length });
       setBoTime('Scanned: ' + getIST());
+      setStatusDot('live'); setStatusTxt('Live');
       updateBadge('stocks', results.length + ' 🚀');
       lg(`✅ Breakout: ${results.length} signals from ${byVol.length} stocks`, 'o');
-    } catch(e) { setBoError(e.message); lg('Breakout error: ' + e.message, 'e'); }
-    finally { setBoLoading(false); }
+    } catch(e) { setBoError(e.message); setStatusDot('err'); setStatusTxt('Error'); lg('Breakout error: ' + e.message, 'e'); }
+    finally { setBoLoading(false); setScanning(false); boScanInProgress.current = false; }
   }
 
   const filteredCards = boCards.filter(r => {
