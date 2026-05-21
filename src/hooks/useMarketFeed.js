@@ -4,7 +4,7 @@ import { sleep } from '../utils/marketTime';
 
 // ── Minimal Protobuf binary reader for Upstox v3 ltpc feed ───
 // Upstox v3 sends binary protobuf FeedResponse:
-//   FeedResponse { map<string, Feed> feeds = 1 }
+//   FeedResponse { Type type = 1; map<string, Feed> feeds = 2 }
 //   Feed         { LTPC ltpc = 1 }
 //   LTPC         { double ltp=1, int64 ltt=2, double ltq=3, double cp=4 }
 // Wire types: 0=varint, 1=64-bit(double), 2=length-delimited
@@ -59,9 +59,39 @@ function _decodeFeed(buf) {
     const { v: tag, p } = _readVarint(buf, pos); pos = p;
     const fn = tag >> 3, wt = tag & 7;
     if (fn === 1 && wt === 2) { const { v, p: p2 } = _readBytes(buf, pos); pos = p2; ltpc = _decodeLTPC(v); }
+    else if (fn === 2 && wt === 2) { const { v, p: p2 } = _readBytes(buf, pos); pos = p2; ltpc = _decodeFullFeed(v); }
+    else if (fn === 3 && wt === 2) { const { v, p: p2 } = _readBytes(buf, pos); pos = p2; ltpc = _decodeFirstLevelWithGreeks(v); }
     else { pos = _skip(buf, pos, wt); }
   }
   return ltpc;
+}
+
+function _decodeFullFeed(buf) {
+  let ltpc = null, pos = 0;
+  while (pos < buf.length) {
+    const { v: tag, p } = _readVarint(buf, pos); pos = p;
+    const fn = tag >> 3, wt = tag & 7;
+    if ((fn === 1 || fn === 2) && wt === 2) {
+      const { v, p: p2 } = _readBytes(buf, pos); pos = p2;
+      ltpc = _decodeNestedLTPC(v) || ltpc;
+    } else { pos = _skip(buf, pos, wt); }
+  }
+  return ltpc;
+}
+
+function _decodeNestedLTPC(buf) {
+  let ltpc = null, pos = 0;
+  while (pos < buf.length) {
+    const { v: tag, p } = _readVarint(buf, pos); pos = p;
+    const fn = tag >> 3, wt = tag & 7;
+    if (fn === 1 && wt === 2) { const { v, p: p2 } = _readBytes(buf, pos); pos = p2; ltpc = _decodeLTPC(v); }
+    else { pos = _skip(buf, pos, wt); }
+  }
+  return ltpc;
+}
+
+function _decodeFirstLevelWithGreeks(buf) {
+  return _decodeNestedLTPC(buf);
 }
 
 function _decodeMapEntry(buf) {
@@ -83,7 +113,7 @@ function decodeFeedResponse(arrayBuffer) {
   while (pos < buf.length) {
     const { v: tag, p } = _readVarint(buf, pos); pos = p;
     const fn = tag >> 3, wt = tag & 7;
-    if (fn === 1 && wt === 2) {
+    if (fn === 2 && wt === 2) {
       const { v: entryBuf, p: p2 } = _readBytes(buf, pos); pos = p2;
       const { key, value } = _decodeMapEntry(entryBuf);
       if (key && value) feeds[key] = value;
@@ -102,7 +132,8 @@ function sendFeedRequest(socket, data) {
   socket.send(new TextEncoder().encode(JSON.stringify(data)));
 }
 
-export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
+export function useMarketFeed(token, instrumentKeys = [], enabled = true, options = {}) {
+  const pollFallback = options.pollFallback !== false;
   const ws          = useRef(null);
   const retryRef    = useRef(0);
   const retryTimer  = useRef(null);
@@ -133,6 +164,7 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
 
   // ── REST polling fallback ──────────────────────────────────
   const startPolling = useCallback(() => {
+    if (!pollFallback) return;
     clearInterval(pollTimer.current);
     setWsMode('poll');
     setConnected(true);
@@ -154,7 +186,7 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
         }
       } catch (e) { /* silent */ }
     }, 15000);
-  }, [applyPrices]);
+  }, [applyPrices, pollFallback]);
 
   const stopPolling = useCallback(() => {
     clearInterval(pollTimer.current);
@@ -224,7 +256,7 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
       socket.onerror = () => {
         setConnected(false);
         setWsMode('poll');
-        startPolling(); // Fall back to polling on WS error
+        startPolling(); // Fall back to polling on WS error when enabled
       };
 
       socket.onclose = (e) => {

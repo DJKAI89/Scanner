@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, StatCard, EmptyState, LastUpdated } from '../components/common.jsx';
-import { fetchPortfolio } from '../services/api';
+import { fetchPortfolio, resolveAccessToken } from '../services/api';
 import { fmt, fmtC } from '../utils/formatters';
 import { getIST } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 
 export default function PortfolioPane() {
   const { token, onTokenExpired, lg, updateBadge, marketStatus } = useApp();
+  const accessToken = resolveAccessToken(token);
 
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState('');
@@ -39,10 +40,10 @@ export default function PortfolioPane() {
 
   // ── WebSocket live feed ──
   const { connected: wsConnected, lastPrices } = useMarketFeed(
-    token, allKeys, marketStatus.open && allKeys.length > 0
+    accessToken, allKeys, allKeys.length > 0, { pollFallback: false }
   );
 
-  useEffect(() => { if (token) load(); }, [token]); // eslint-disable-line
+  useEffect(() => { if (accessToken) load(); }, [accessToken]); // eslint-disable-line
   useEffect(() => {
     if (Object.keys(lastPrices).length > 0) setUpdTime('Live: ' + getIST());
   }, [lastPrices]);
@@ -50,7 +51,7 @@ export default function PortfolioPane() {
   async function load() {
     setLoading(true); setError('');
     try {
-      const { positions: pos, holdings: hld } = await fetchPortfolio(token, onTokenExpired);
+      const { positions: pos, holdings: hld } = await fetchPortfolio(accessToken, onTokenExpired);
       setPositions(pos);
       setHoldings(hld);
       updateBadge('portfolio', String(pos.length + hld.length));
