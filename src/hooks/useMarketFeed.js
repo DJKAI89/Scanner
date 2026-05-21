@@ -93,7 +93,10 @@ function decodeFeedResponse(arrayBuffer) {
 }
 
 // ── REST polling fallback (15-sec intervals) ──────────────────
-const AUTHORIZE_URL = 'https://api.upstox.com/v3/feed/market-data-streamer/authorize';
+const AUTHORIZE_URLS = [
+  'https://api.upstox.com/v3/feed/market-data-feed/authorize',
+  'https://api.upstox.com/v3/feed/market-data-streamer/authorize',
+];
 
 export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
   const ws          = useRef(null);
@@ -161,15 +164,22 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
 
     try {
       // Step 1: Get authorized WebSocket URL
-      const authRes = await fetch(AUTHORIZE_URL, {
-        headers: { Authorization: 'Bearer ' + accessToken, Accept: 'application/json' },
-      });
-      if (!authRes.ok) {
+      let authData = null;
+      let authError = '';
+      for (const url of AUTHORIZE_URLS) {
+        const authRes = await fetch(url, {
+          headers: { Authorization: 'Bearer ' + accessToken, Accept: 'application/json' },
+        });
+        if (authRes.ok) {
+          authData = await authRes.json();
+          break;
+        }
         let detail = '';
         try { detail = await authRes.text(); } catch (e) { /* ignore */ }
-        throw new Error('Auth failed: ' + authRes.status + (detail ? ' ' + detail.slice(0, 120) : ''));
+        authError = 'Auth failed: ' + authRes.status + (detail ? ' ' + detail.slice(0, 120) : '');
+        if (!detail.includes('UDAPI100012')) break;
       }
-      const authData = await authRes.json();
+      if (!authData) throw new Error(authError || 'Auth failed');
       const wsUrl    = authData?.data?.authorized_redirect_uri
                     || authData?.authorized_redirect_uri
                     || authData?.data?.uri
