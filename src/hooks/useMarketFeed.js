@@ -71,12 +71,31 @@ function _decodeFullFeed(buf) {
   while (pos < buf.length) {
     const { v: tag, p } = _readVarint(buf, pos); pos = p;
     const fn = tag >> 3, wt = tag & 7;
-    if ((fn === 1 || fn === 2) && wt === 2) {
+    if (fn === 1 && wt === 2) {
+      const { v, p: p2 } = _readBytes(buf, pos); pos = p2;
+      ltpc = _decodeMarketFullFeed(v) || ltpc;
+    } else if (fn === 2 && wt === 2) {
       const { v, p: p2 } = _readBytes(buf, pos); pos = p2;
       ltpc = _decodeNestedLTPC(v) || ltpc;
     } else { pos = _skip(buf, pos, wt); }
   }
   return ltpc;
+}
+
+function _decodeMarketFullFeed(buf) {
+  let out = null, pos = 0;
+  while (pos < buf.length) {
+    const { v: tag, p } = _readVarint(buf, pos); pos = p;
+    const fn = tag >> 3, wt = tag & 7;
+    if (fn === 1 && wt === 2) {
+      const { v, p: p2 } = _readBytes(buf, pos); pos = p2;
+      out = { ...(out || {}), ..._decodeLTPC(v) };
+    } else if (fn === 7 && wt === 1) {
+      const { v, p: p2 } = _readDouble(buf, pos); pos = p2;
+      out = { ...(out || {}), oi: v };
+    } else { pos = _skip(buf, pos, wt); }
+  }
+  return out;
 }
 
 function _decodeNestedLTPC(buf) {
@@ -133,6 +152,7 @@ function sendFeedRequest(socket, data) {
 }
 
 export function useMarketFeed(token, instrumentKeys = [], enabled = true, options = {}) {
+  const mode = options.mode || 'ltpc';
   const pollFallback = options.pollFallback !== false;
   const ws          = useRef(null);
   const retryRef    = useRef(0);
@@ -155,7 +175,7 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
       for (const [k, v] of Object.entries(map)) {
         if (v && v.ltp > 0) {
           const cp = v.cp || v.ltp;
-          next[k] = { ltp: v.ltp, chgPct: cp > 0 ? +((v.ltp - cp) / cp * 100).toFixed(2) : 0 };
+          next[k] = { ltp: v.ltp, cp, oi: v.oi, chgPct: cp > 0 ? +((v.ltp - cp) / cp * 100).toFixed(2) : 0 };
         }
       }
       return next;
@@ -231,11 +251,11 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
         setConnected(true);
         setWsMode('ws');
         stopPolling(); // Stop polling once WS works
-        // Subscribe in ltpc mode
+        // Subscribe in requested feed mode
         sendFeedRequest(socket, {
           guid:   crypto.randomUUID(),
           method: 'sub',
-          data:   { mode: 'ltpc', instrumentKeys: keysRef.current },
+          data:   { mode, instrumentKeys: keysRef.current },
         });
       };
 
@@ -277,7 +297,7 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
       // Retry WebSocket after 30s
       retryTimer.current = setTimeout(connect, 30000);
     }
-  }, [token, enabled, applyPrices, startPolling, stopPolling]);
+  }, [token, enabled, mode, applyPrices, startPolling, stopPolling]);
 
   const disconnect = useCallback(() => {
     clearTimeout(retryTimer.current);
@@ -297,10 +317,10 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
       sendFeedRequest(ws.current, {
         guid:   crypto.randomUUID(),
         method: 'sub',
-        data:   { mode: 'ltpc', instrumentKeys: keys },
+        data:   { mode, instrumentKeys: keys },
       });
     }
-  }, []);
+  }, [mode]);
 
   useEffect(() => {
     const accessToken = resolveAccessToken(token);

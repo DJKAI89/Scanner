@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
 import { fetchQ, fetchOptions, fetchIntraday, resolveAccessToken } from '../services/api';
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST, sleep } from '../utils/marketTime';
 import { INDEX_OPTS } from '../constants/config';
+import { useMarketFeed } from '../hooks/useMarketFeed';
 import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias } from '../services/technical';
 import { logSignals, buildOptionSignal } from '../services/github';
 
@@ -25,6 +26,75 @@ const OPT_FILTERS = [
   { id:'buy',label:'📈 BUY' },{ id:'sell',label:'📉 SELL' },
   { id:'aligned',label:'✅ With-Trend' },
 ];
+
+const VIX_KEY = 'NSE_INDEX|India VIX';
+
+function IndexLiveCard({ group, live, ctx }) {
+  const spot = live?.ltp || group.spot || 0;
+  const cp = live?.cp || (group.spotChg != null ? group.spot / (1 + group.spotChg / 100) : group.spot) || spot;
+  const pts = spot - cp;
+  const pct = cp > 0 ? (pts / cp) * 100 : group.spotChg || 0;
+  const positive = pts >= 0;
+  return (
+    <div style={{ background:'#fff', border:'1px solid #dbe3ee', borderRadius:8, padding:'11px 13px', boxShadow:'0 1px 3px rgba(15,23,42,.06)' }}>
+      <div style={{ fontSize:9, color:'#94a3b8', letterSpacing:.7, marginBottom:5 }}>{group.name} SPOT · LIVE</div>
+      <div style={{ fontSize:20, lineHeight:1, fontWeight:850, color:positive ? '#16a34a' : '#dc2626' }}>₹{fmt(spot, 0)}</div>
+      <div style={{ fontSize:10, color:positive ? '#16a34a' : '#dc2626', marginTop:5 }}>{positive ? '+' : ''}{pts.toFixed(2)} pts</div>
+      <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center', fontSize:9, marginTop:7 }}>
+        <span>PCR <b>{group.pcr?.toFixed(2) || '—'}</b></span>
+        <span style={{ color:positive ? '#16a34a' : '#dc2626' }}>{fmtC(pct)}</span>
+        {live && <span style={{ color:'#16a34a', fontWeight:700 }}>LIVE</span>}
+      </div>
+      <div style={{ fontSize:9, color:'#64748b', marginTop:4 }}>
+        🎯₹{fmt(group.maxPain || 0, 0)} · 📉₹{fmt(group.oiWalls?.callWall || 0, 0)} · 📈₹{fmt(group.oiWalls?.putWall || 0, 0)}
+      </div>
+      <div style={{ fontSize:9, color:ctx?.neutral ? '#d97706' : ctx?.bullish ? '#16a34a' : '#dc2626', marginTop:4, fontWeight:700 }}>
+        {ctx?.neutral ? 'Neutral' : ctx?.bullish ? 'With-trend' : 'Weak trend'} · cap≤₹10K · WS
+      </div>
+    </div>
+  );
+}
+
+function getOptionKey(opt) {
+  return opt?.instrument_key || opt?.instrumentKey || opt?.instrument_token || opt?.instrumentToken || '';
+}
+
+function withLiveOI(chain = [], liveOptionPrices = {}) {
+  return chain.map((row) => {
+    const callKey = getOptionKey(row.call_options);
+    const putKey = getOptionKey(row.put_options);
+    const callLive = liveOptionPrices[callKey];
+    const putLive = liveOptionPrices[putKey];
+    return {
+      ...row,
+      call_options: row.call_options ? {
+        ...row.call_options,
+        market_data: {
+          ...(row.call_options.market_data || {}),
+          oi: callLive?.oi ?? row.call_options.market_data?.oi,
+          ltp: callLive?.ltp ?? row.call_options.market_data?.ltp,
+        },
+      } : row.call_options,
+      put_options: row.put_options ? {
+        ...row.put_options,
+        market_data: {
+          ...(row.put_options.market_data || {}),
+          oi: putLive?.oi ?? row.put_options.market_data?.oi,
+          ltp: putLive?.ltp ?? row.put_options.market_data?.ltp,
+        },
+      } : row.put_options,
+    };
+  });
+}
+
+function calcStructure(chain) {
+  const maxPain = calcMaxPain(chain);
+  const oiWalls = calcOIWalls(chain);
+  const ceOI = chain.reduce((s, x) => s + (x.call_options?.market_data?.oi || 0), 0);
+  const peOI = chain.reduce((s, x) => s + (x.put_options?.market_data?.oi  || 0), 0);
+  const pcr = ceOI > 0 ? +(peOI / ceOI).toFixed(2) : 1.0;
+  return { maxPain, oiWalls, pcr };
+}
 
 function OptionCard({ pick }) {
   const isBuy = pick.action === 'BUY';
@@ -97,6 +167,7 @@ function OptionCard({ pick }) {
 
 export default function OptionsPane() {
   const { token, cfg, marketStatus, lg, onTokenExpired, updateBadge, fiiInterp, fiiData, gh } = useApp();
+  const accessToken = resolveAccessToken(token);
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState('');
   const [groups, setGroups]     = useState([]);
@@ -106,15 +177,44 @@ export default function OptionsPane() {
   const [updTime, setUpdTime]   = useState('');
   const [marketCtxMap, setMarketCtxMap] = useState({});
   const prevAvgIVCache = useRef({}), prevPCRCache = useRef({});
+  const liveKeys = useMemo(() => [...INDEX_OPTS.map((idx) => idx.key), VIX_KEY], []);
+  const { lastPrices: liveIndexPrices } = useMarketFeed(
+    accessToken, liveKeys, liveKeys.length > 0, { pollFallback: false }
+  );
+  const optionLiveKeys = useMemo(() => {
+    const keys = [];
+    for (const g of groups) {
+      for (const row of g.chain || []) {
+        const callKey = getOptionKey(row.call_options);
+        const putKey = getOptionKey(row.put_options);
+        if (callKey) keys.push(callKey);
+        if (putKey) keys.push(putKey);
+      }
+    }
+    return [...new Set(keys)].slice(0, 1200);
+  }, [groups]);
+  const { lastPrices: liveOptionPrices } = useMarketFeed(
+    accessToken, optionLiveKeys, optionLiveKeys.length > 0, { pollFallback: false, mode: 'full' }
+  );
+  const liveGroups = useMemo(() => groups.map((g) => {
+    if (!g.chain?.length || Object.keys(liveOptionPrices).length === 0) return g;
+    const chain = withLiveOI(g.chain, liveOptionPrices);
+    return { ...g, chain, ...calcStructure(chain) };
+  }), [groups, liveOptionPrices]);
 
-  useEffect(() => { if (token && marketStatus.open) loadOptions(); }, [token]); // eslint-disable-line
+  useEffect(() => { if (accessToken && marketStatus.open) loadOptions(); }, [accessToken]); // eslint-disable-line
+  useEffect(() => {
+    const liveVix = liveIndexPrices[VIX_KEY]?.ltp;
+    if (liveVix > 0) setVix(liveVix);
+    if (Object.keys(liveIndexPrices).length > 0) setUpdTime('Live: ' + getIST());
+  }, [liveIndexPrices]);
 
   async function loadOptions(force = false) {
     if (loading && !force) return;
     setLoading(true); setError(''); setProgress('Step 1: Fetching Nifty direction + VIX...');
     try {
       // Step 1: index quotes + VIX
-      const mktD = await fetchQ('NSE_INDEX|Nifty 50,NSE_INDEX|India VIX', token, onTokenExpired);
+      const mktD = await fetchQ('NSE_INDEX|Nifty 50,NSE_INDEX|India VIX', accessToken, onTokenExpired);
       const nQ   = mktD['NSE_INDEX|Nifty 50'];
       const vQ   = mktD['NSE_INDEX|India VIX'];
       if (!nQ?.last_price) throw new Error('Nifty quote missing');
@@ -135,7 +235,7 @@ export default function OptionsPane() {
       ];
       const idxCandles = {};
       for (const key of INDEX_CANDLE_KEYS) {
-        try { idxCandles[key] = await fetchIntraday(key, '5minute', token, onTokenExpired); }
+        try { idxCandles[key] = await fetchIntraday(key, '5minute', accessToken, onTokenExpired); }
         catch (e) { idxCandles[key] = []; }
         await sleep(400);
       }
@@ -144,7 +244,7 @@ export default function OptionsPane() {
       const ctxMap = {};
       for (const idx of INDEX_OPTS) {
         const candles = idxCandles[idx.key] || [];
-        const q2      = await fetchQ(idx.key, token, onTokenExpired).then(d => d[idx.key]).catch(() => null);
+        const q2      = await fetchQ(idx.key, accessToken, onTokenExpired).then(d => d[idx.key]).catch(() => null);
         if (!q2?.last_price) continue;
         const spotChg = getChgPct(q2);
         ctxMap[idx.name] = computeCtxFromCandles(candles, q2.last_price, spotChg, vixVal, null);
@@ -154,7 +254,7 @@ export default function OptionsPane() {
       // Step 2: Scan each index
       const built = [];
       for (const [ui, idx] of INDEX_OPTS.entries()) {
-        const q = await fetchQ(idx.key, token, onTokenExpired).then(d => d[idx.key]).catch(() => null);
+        const q = await fetchQ(idx.key, accessToken, onTokenExpired).then(d => d[idx.key]).catch(() => null);
         if (!q?.last_price) continue;
         setProgress(`Step 2: Scanning ${idx.name} chain (${ui+1}/${INDEX_OPTS.length})...`);
         const spot    = q.last_price;
@@ -166,14 +266,14 @@ export default function OptionsPane() {
         try {
           const cd = await fetch(
             `https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent(idx.key)}`,
-            { headers: { Authorization: 'Bearer ' + resolveAccessToken(token), Accept: 'application/json' } }
+            { headers: { Authorization: 'Bearer ' + accessToken, Accept: 'application/json' } }
           ).then(r => r.json());
           expiry = (cd?.data?.map(e => e.expiry).sort() || [])[0] || '';
         } catch (e) { lg('Contract ' + idx.name + ': ' + e.message, 'w'); }
         if (!expiry) continue;
 
         // Full chain
-        const chain = await fetchOptions(idx.key, expiry, token, onTokenExpired);
+        const chain = await fetchOptions(idx.key, expiry, accessToken, onTokenExpired);
         if (!chain.length) { lg(idx.name + ': empty chain', 'w'); continue; }
 
         // Max Pain + OI Walls
@@ -215,7 +315,7 @@ export default function OptionsPane() {
         })).filter(p => p.confidence >= cfg.minOptConf);
 
         lg(`${idx.name}: ${chain.length} strikes → ${picks.length} raw → ${picksWithFII.length} ≥${cfg.minOptConf}% | composite=${richCtx.compositeScore} pcr=${pcr}`, 'o');
-        built.push({ name: idx.name, spot, spotChg, picks: picksWithFII, expiry, maxPain, oiWalls, pcr, pcrTrend, ivTrend });
+        built.push({ name: idx.name, spot, spotChg, picks: picksWithFII, expiry, chain, maxPain, oiWalls, pcr, pcrTrend, ivTrend });
       }
 
       setGroups(built);
@@ -232,7 +332,7 @@ export default function OptionsPane() {
   }
 
   const { txt: vixTxt } = interpVIX(vix);
-  const filtered = groups.map(g => ({
+  const filtered = liveGroups.map(g => ({
     ...g,
     picks: g.picks.filter(p => {
       if (filter === 'all')       return true;
@@ -282,7 +382,29 @@ export default function OptionsPane() {
           )}
 
           {/* Index stats */}
-          <div className="stats-g">
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(205px,1fr))', gap:12, marginBottom:12 }}>
+            {liveGroups.map(g => {
+              const idx = INDEX_OPTS.find((item) => item.name === g.name);
+              return (
+                <IndexLiveCard
+                  key={g.name}
+                  group={g}
+                  live={idx ? liveIndexPrices[idx.key] : null}
+                  ctx={marketCtxMap[g.name]}
+                />
+              );
+            })}
+            {vix > 0 && (
+              <div style={{ background:'#fff', border:'1px solid #dbe3ee', borderRadius:8, padding:'11px 13px', boxShadow:'0 1px 3px rgba(15,23,42,.06)' }}>
+                <div style={{ fontSize:9, color:'#94a3b8', letterSpacing:.7, marginBottom:5 }}>INDIA VIX · LIVE</div>
+                <div style={{ fontSize:20, lineHeight:1, fontWeight:850, color:vix < 16 ? '#16a34a' : vix > 22 ? '#dc2626' : '#d97706' }}>{vix.toFixed(2)}</div>
+                <div style={{ fontSize:10, color:'#64748b', marginTop:6 }}>{vixTxt}</div>
+                {liveIndexPrices[VIX_KEY] && <div style={{ fontSize:9, color:'#16a34a', fontWeight:700, marginTop:7 }}>LIVE</div>}
+              </div>
+            )}
+          </div>
+
+          <div className="stats-g" style={{ display:'none' }}>
             {groups.map(g => (
               <StatCard key={g.name} label={g.name} value={`₹${fmt(g.spot)}`} sub={fmtC(g.spotChg)} valClass={g.spotChg >= 0 ? 'up' : 'dn'} />
             ))}
@@ -290,7 +412,7 @@ export default function OptionsPane() {
           </div>
 
           {/* Max Pain + OI Walls */}
-          {groups.filter(g => g.maxPain > 0).map(g => (
+          {false && groups.filter(g => g.maxPain > 0).map(g => (
             <div key={g.name+'-mp'} style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, padding:'8px 12px', marginBottom:8, display:'flex', gap:16, flexWrap:'wrap', fontSize:10, alignItems:'center' }}>
               <span style={{ fontWeight:700 }}>{g.name}</span>
               <span>🎯 Max Pain: <b style={{ color:'#7c3aed' }}>₹{fmt(g.maxPain)}</b></span>
