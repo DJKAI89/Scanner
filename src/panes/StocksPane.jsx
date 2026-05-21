@@ -61,9 +61,11 @@ export default function StocksPane() {
     return () => document.removeEventListener('friday:scan', onScan);
   }, [mode]); // eslint-disable-line
 
+  // Auto-load stats always; auto-scan if market open (same as HTML boot())
   useEffect(() => {
-    if (token && marketStatus.open) runPicksScan();
-    else if (token) loadClosedStats();
+    if (!token) return;
+    loadClosedStats();
+    if (marketStatus.open) setTimeout(() => runPicksScan(), 1500);
   }, [token]); // eslint-disable-line
 
   async function loadClosedStats() {
@@ -96,7 +98,7 @@ export default function StocksPane() {
       const fiiScore = (fiiInterp?.bias || 0) * 5; // scale -50..+50
 
       // Step 3: Batch quote fetch (HTML does batch of 50)
-      const scanList = stocks.filter(s => s.scan !== false).slice(0, cfg.scanStocks || 50);
+      const scanList = stocks.filter(s => s.scan !== false); // HTML scans ALL stocks, cfg.scanStocks is interval not count
       setPickProgress(`Fetching quotes for ${scanList.length} stocks...`);
 
       const today = getISTDate();
@@ -246,8 +248,10 @@ export default function StocksPane() {
       setPicksTime('Updated: ' + getIST());
       setScanSecs(cfg.scanStocks * 60);
       setStatusDot('live'); setStatusTxt('Live');
-      lg(`✅ Picks: ${results.length} from ${byVol.length} stocks`, 'o');
-      if (!results.length) lg('⚠ 0 picks — try lowering Conf/Pot/Risk thresholds in ⚙ Settings', 'w');
+      lg(`✅ Picks: ${results.length} from ${byVol.length} stocks (conf≥${cfg.minStockConf}% pot≥${cfg.pot}% risk<${cfg.risk}%)`, 'o');
+      if (!results.length) lg(`⚠ 0 picks from ${byVol.length} stocks — lower Conf(${cfg.minStockConf}%)/Pot(${cfg.pot}%)/Risk(${cfg.risk}%) in ⚙ Settings`, 'w');
+      // Log signals to GitHub
+      if (results.length && gh?.token) logSignals(gh, results.map(p => buildStockSignal(p, vix)), vix, lg);
     } catch(e) {
       setPicksError(e.message); setStatusDot('err'); setStatusTxt('Error');
       lg('Scan error: ' + e.message, 'e');

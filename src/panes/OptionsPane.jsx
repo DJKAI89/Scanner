@@ -224,7 +224,7 @@ export default function OptionsPane() {
       updateBadge('options', withTrend > 0 ? withTrend + ' signals' : '—');
       setUpdTime('Updated: ' + getIST());
       const allPicks = built.flatMap(g => g.picks);
-      if (allPicks.length) logSignals(gh, allPicks.map(p => buildOptionSignal(p, vixVal)), vixVal, lg);
+      if (allPicks.length && gh?.token) logSignals(gh, allPicks.map(p => buildOptionSignal(p, vixVal)), vixVal, lg);
       lg(`✅ Options: ${total} signals (${withTrend} with-trend)`, 'o');
     } catch (e) {
       setError(e.message); lg('Options error: ' + e.message, 'e');
