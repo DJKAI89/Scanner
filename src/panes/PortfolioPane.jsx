@@ -16,11 +16,23 @@ export default function PortfolioPane() {
   const [updTime, setUpdTime]     = useState('');
   const [tab, setTab]             = useState('holdings');
 
+  function getInstrumentKey(item) {
+    return item.instrument_key || item.instrumentKey || item.instrument_token || item.instrumentToken || item.token || '';
+  }
+
+  function num(...values) {
+    for (const v of values) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n !== 0) return n;
+    }
+    return 0;
+  }
+
   // ── Collect all instrument keys for WebSocket ──
   const allKeys = useMemo(() => {
     const keys = [
-      ...positions.map((p) => p.instrument_token),
-      ...holdings.map((h) => h.instrument_token),
+      ...positions.map(getInstrumentKey),
+      ...holdings.map(getInstrumentKey),
     ].filter(Boolean);
     return [...new Set(keys)];
   }, [positions, holdings]);
@@ -31,6 +43,9 @@ export default function PortfolioPane() {
   );
 
   useEffect(() => { if (token) load(); }, [token]); // eslint-disable-line
+  useEffect(() => {
+    if (Object.keys(lastPrices).length > 0) setUpdTime('Live: ' + getIST());
+  }, [lastPrices]);
 
   async function load() {
     setLoading(true); setError('');
@@ -50,13 +65,18 @@ export default function PortfolioPane() {
   // ── Enrich with live WebSocket prices ──
   function enrich(arr) {
     return arr.map((item) => {
-      const live = lastPrices[item.instrument_token];
-      const ltp  = live?.ltp || item.last_price || item.close_price || 0;
-      const qty  = item.quantity || item.t1_quantity || 0;
-      const avg  = item.average_price || item.average_cost || 0;
-      const pnl  = (ltp - avg) * qty;
+      const key = getInstrumentKey(item);
+      const live = lastPrices[key];
+      const ltp  = num(live?.ltp, item.last_price, item.ltp, item.close_price);
+      const qty  = num(item.quantity, item.used_quantity, item.available_quantity, item.t1_quantity, item.qty);
+      const avg  = num(item.average_price, item.average_cost, item.avg_price, item.buy_price);
+      const prevClose = num(live?.cp, item.close_price, item.previous_close, item.prev_close, item.ohlc?.close);
+      const pnl  = avg > 0 ? (ltp - avg) * qty : num(item.pnl, item.profit_and_loss);
       const pnlPct = avg > 0 ? ((ltp - avg) / avg) * 100 : 0;
-      return { ...item, ltp, qty, avg, pnl, pnlPct, isLive: !!live };
+      const todayPnl = prevClose > 0 ? (ltp - prevClose) * qty : num(item.day_pnl, item.dayPnl);
+      const todayPnlPct = prevClose > 0 ? ((ltp - prevClose) / prevClose) * 100 : 0;
+      const value = ltp * qty;
+      return { ...item, key, ltp, qty, avg, prevClose, pnl, pnlPct, todayPnl, todayPnlPct, value, isLive: !!live };
     });
   }
 
@@ -66,9 +86,11 @@ export default function PortfolioPane() {
       (a.tradingsymbol || a.symbol || '').localeCompare(b.tradingsymbol || b.symbol || '')
     ), [holdings, lastPrices]); // eslint-disable-line
 
-  const totalPnl  = [...enrichedPos, ...enrichedHld].reduce((s, i) => s + (i.pnl || 0), 0);
-  const invested  = enrichedHld.reduce((s, i) => s + (i.avg * i.qty), 0);
-  const todayPnl  = enrichedPos.reduce((s, i) => s + (i.pnl || 0), 0);
+  const portfolioRows = [...enrichedPos, ...enrichedHld];
+  const totalPnl  = portfolioRows.reduce((s, i) => s + (i.pnl || 0), 0);
+  const invested  = portfolioRows.reduce((s, i) => s + (i.avg * i.qty), 0);
+  const todayPnl  = portfolioRows.reduce((s, i) => s + (i.todayPnl || 0), 0);
+  const totalValue = portfolioRows.reduce((s, i) => s + (i.value || 0), 0);
 
   const current = tab === 'positions' ? enrichedPos : enrichedHld;
 
@@ -92,7 +114,7 @@ export default function PortfolioPane() {
           {pos ? '+' : ''}₹{fmt(Math.abs(item.pnl))}
         </div>
         <div style={{ fontWeight: 600, color: pos ? '#16a34a' : '#dc2626' }}>{fmtC(item.pnlPct)}</div>
-        <div>₹{fmt(item.ltp * item.qty)}</div>
+        <div>₹{fmt(item.value)}</div>
       </div>
     );
   }
@@ -119,6 +141,7 @@ export default function PortfolioPane() {
           {/* Summary */}
           <div className="stats-g">
             <StatCard label="INVESTED"    value={`₹${fmt(invested)}`}    valClass="bl" />
+            <StatCard label="VALUE"       value={`₹${fmt(totalValue)}`}  valClass="pu" />
             <StatCard label="TODAY P&L"   value={(todayPnl >= 0 ? '+₹' : '-₹') + fmt(Math.abs(todayPnl))} valClass={todayPnl >= 0 ? 'up' : 'dn'} />
             <StatCard label="TOTAL P&L"   value={(totalPnl >= 0 ? '+₹' : '-₹') + fmt(Math.abs(totalPnl))} valClass={totalPnl >= 0 ? 'up' : 'dn'} />
             <StatCard label="POSITIONS"   value={positions.length} valClass="am" />

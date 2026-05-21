@@ -98,13 +98,17 @@ const AUTHORIZE_URLS = [
   'https://api.upstox.com/v3/feed/market-data-streamer/authorize',
 ];
 
+function sendFeedRequest(socket, data) {
+  socket.send(new TextEncoder().encode(JSON.stringify(data)));
+}
+
 export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
   const ws          = useRef(null);
   const retryRef    = useRef(0);
   const retryTimer  = useRef(null);
   const pollTimer   = useRef(null);
   const keysRef     = useRef([]);
-  const tokenRef    = useRef(token);
+  //const tokenRef    = useRef(token);
   const onPriceRef  = useRef(null);
 
   const [connected,   setConnected]   = useState(false);
@@ -196,11 +200,11 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
         setWsMode('ws');
         stopPolling(); // Stop polling once WS works
         // Subscribe in ltpc mode
-        socket.send(JSON.stringify({
+        sendFeedRequest(socket, {
           guid:   crypto.randomUUID(),
           method: 'sub',
           data:   { mode: 'ltpc', instrumentKeys: keysRef.current },
-        }));
+        });
       };
 
       socket.onmessage = (evt) => {
@@ -258,11 +262,11 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
   const subscribe = useCallback((keys) => {
     if (!keys?.length) return;
     if (ws.current?.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({
+      sendFeedRequest(ws.current, {
         guid:   crypto.randomUUID(),
         method: 'sub',
         data:   { mode: 'ltpc', instrumentKeys: keys },
-      }));
+      });
     }
   }, []);
 
