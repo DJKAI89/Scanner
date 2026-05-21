@@ -101,14 +101,14 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
   const retryTimer  = useRef(null);
   const pollTimer   = useRef(null);
   const keysRef     = useRef([]);
-  const tokenRef    = useRef(token);
+  //const tokenRef    = useRef(token);
   const onPriceRef  = useRef(null);
 
   const [connected,   setConnected]   = useState(false);
   const [lastPrices,  setLastPrices]  = useState({});
   const [wsMode,      setWsMode]      = useState('connecting'); // 'ws'|'poll'|'connecting'
 
-  tokenRef.current = token;
+  //tokenRef.current = token;
 
   // ── Price update helper ──
   const applyPrices = useCallback((map) => {
@@ -131,12 +131,12 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
     setConnected(true);
     pollTimer.current = setInterval(async () => {
       const keys = keysRef.current;
-      if (!keys.length || !tokenRef.current) return;
+      if (!keys.length || !localStorage.friday_token) return;
       try {
         const batches = [];
         for (let i = 0; i < keys.length; i += 50) batches.push(keys.slice(i, i + 50));
         for (const batch of batches) {
-          const map = await fetchQ(batch.join(','), tokenRef.current, () => {});
+          const map = await fetchQ(batch.join(','), localStorage.friday_token, () => {});
           const priceMap = {};
           for (const [k, q] of Object.entries(map)) {
             const ltp = q.last_price || 0;
@@ -155,13 +155,13 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
 
   // ── WebSocket connect ────────────────────────────────────────
   const connect = useCallback(async () => {
-    if (!tokenRef.current || !keysRef.current.length || !enabled) return;
+    if (!localStorage.friday_token || !keysRef.current.length || !enabled) return;
     if (ws.current?.readyState === WebSocket.OPEN) return;
 
     try {
       // Step 1: Get authorized WebSocket URL
       const authRes = await fetch(AUTHORIZE_URL, {
-        headers: { Authorization: 'Bearer ' + tokenRef.current, Accept: 'application/json' },
+        headers: { Authorization: 'Bearer ' + localStorage.friday_token, Accept: 'application/json' },
       });
       if (!authRes.ok) throw new Error('Auth failed: ' + authRes.status);
       const authData = await authRes.json();
