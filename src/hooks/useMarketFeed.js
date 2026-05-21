@@ -155,13 +155,13 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true) {
 
   // ── WebSocket connect ────────────────────────────────────────
   const connect = useCallback(async () => {
-    if (!token || !keysRef.current.length || !enabled) return;
+    if (!tokenRef.current || !keysRef.current.length || !enabled) return;
     if (ws.current?.readyState === WebSocket.OPEN) return;
 
     try {
       // Step 1: Get authorized WebSocket URL
       const authRes = await fetch(AUTHORIZE_URL, {
-        headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' },
+        headers: { Authorization: 'Bearer ' + tokenRef.current, Accept: 'application/json' },
       });
       if (!authRes.ok) throw new Error('Auth failed: ' + authRes.status);
       const authData = await authRes.json();

@@ -46,7 +46,7 @@ export async function withRetry(fn, label = '', retries = 3) {
 // ── Core API GET with proxy rotation ──
 export async function apiGet(url, token, onTokenExpired) {
   const full = 'https://api.upstox.com' + url;
-  const hdrs = { Authorization: 'Bearer ' + token, Accept: 'application/json' };
+  const hdrs = { Authorization: 'Bearer ' + tokenRef.current, Accept: 'application/json' };
 
   const buildProxies = () => {
     const list = [];
@@ -154,7 +154,7 @@ export async function fetchUserProfile(token, onTokenExpired) {
 export async function fetchMarketStatus(token) {
   try {
     const url = 'https://api.upstox.com/v2/market/status/NSE';
-    const hdrs = { Authorization: 'Bearer ' + token, Accept: 'application/json' };
+    const hdrs = { Authorization: 'Bearer ' + tokenRef.current, Accept: 'application/json' };
     for (const fetchUrl of [url, 'https://corsproxy.io/?' + encodeURIComponent(url)]) {
       try {
         const res = await fetch(fetchUrl, { headers: hdrs });
