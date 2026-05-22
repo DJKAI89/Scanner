@@ -51,6 +51,33 @@ export function getMarketStatusLocal() {
   return { open, msg };
 }
 
+// ── Market phase detector (for signal quality adjustment) ──
+// Returns: 'pre' | 'opening' | 'early' | 'midday' | 'pre_close' | 'closing' | 'closed' | 'holiday'
+export function getMarketPhase() {
+  const now = new Date();
+  const h = +now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false }) % 24;
+  const m = +now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', minute: 'numeric' });
+  const day = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', weekday: 'short' });
+
+  // Weekend = holiday
+  if (day === 'Sat' || day === 'Sun') return 'holiday';
+
+  const t = h * 60 + m;
+  
+  // Pre-market: before 9:15 AM
+  if (t < 9 * 60 + 15) return 'pre';
+  
+  // After market: after 3:30 PM (15:30)
+  if (t > 15 * 60 + 30) return 'closed';
+  
+  // Within market hours (9:15 AM - 3:30 PM)
+  if (t <= 9 * 60 + 45) return 'opening';      // 9:15-9:45: opening volatility
+  if (t <= 10 * 60 + 30) return 'early';       // 9:45-10:30: early session
+  if (t <= 14 * 60) return 'midday';           // 10:30-2:00 PM: most reliable for signals
+  if (t <= 15 * 60) return 'pre_close';        // 2:00-3:00 PM: pre-close
+  return 'closing';                             // 3:00-3:30 PM: closing noise
+}
+
 export function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }

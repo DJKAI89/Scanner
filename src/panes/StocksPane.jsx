@@ -11,10 +11,10 @@ import {
   calcWeeklyMTF, boScore, boDirection, boSLTarget, getIntradayPhase,
   detectPatterns, calcRisk, calcPotential, calcConfidence, calcSR,
   countIndicatorsEx, getRec, autoSLTarget, calcEntryTrigger, detectReversal,
-  calcMACD, isNearSupport, calcRSIDivergence, getTimeOfDayPenalty, getSector,getMarketPhase
+  calcMACD, isNearSupport, calcRSIDivergence, getTimeOfDayPenalty, getSector
 } from '../services/technical';
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
-import { getIST, getISTDate, sleep, localIsOpen } from '../utils/marketTime';
+import { getIST, getISTDate, sleep, localIsOpen, } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed.js';
 
 function getChgPct(q) {
