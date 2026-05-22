@@ -101,10 +101,12 @@ export default function StocksPane() {
           ...prev,
           nifty: niftyPrice ? {
             ltp: niftyPrice.ltp,
+            changeAmt: niftyPrice.changeAmt,
             chgPct: niftyPrice.chgPct,
           } : prev.nifty,
           banknifty: bankniftyPrice ? {
             ltp: bankniftyPrice.ltp,
+            changeAmt: bankniftyPrice.changeAmt,
             chgPct: bankniftyPrice.chgPct,
           } : prev.banknifty,
           vix: vixPrice?.ltp || prev.vix,
@@ -131,8 +133,8 @@ export default function StocksPane() {
         
         if (!wsConnected) { // only update if WS not connected
           setPickStats({
-            nifty: { ltp: nQ?.last_price || 0, chgPct: getChgPct(nQ) },
-            banknifty: { ltp: bQ?.last_price || 0, chgPct: getChgPct(bQ) },
+            nifty: { ltp: nQ?.last_price || 0, Change: nQ?.Change || 0, chgPct: getChgPct(nQ) },
+            banknifty: { ltp: bQ?.last_price || 0, Change: bQ?.Change || 0,  chgPct: getChgPct(bQ) },
             vix, vixTxt: interpVIX(vix).txt
           });
         }
@@ -189,8 +191,8 @@ export default function StocksPane() {
       const niftyBull   = niftyChgPct > 0;
       
       setPickStats({
-        nifty: { ltp: nQ?.last_price || 0, chgPct: niftyChgPct },
-        banknifty: { ltp: bQ?.last_price || 0, chgPct: getChgPct(bQ) },
+        nifty: { ltp: nQ?.last_price || 0, Change: nQ?.Change || 0, chgPct: niftyChgPct },
+        banknifty: { ltp: bQ?.last_price || 0, Change: bQ?.Change || 0,  chgPct: getChgPct(bQ) },
         vix, vixTxt: interpVIX(vix).txt
       });
 
@@ -514,8 +516,8 @@ export default function StocksPane() {
             <div>
               {pickStats && (
                 <div className="stats-g">
-                  <StatCard label="NIFTY 50"   value={`₹${fmt(pickStats.nifty.ltp)}`}     sub={fmtC(pickStats.nifty.chgPct)}     valClass={pickStats.nifty.chgPct>=0?'up':'dn'} />
-                  <StatCard label="BANK NIFTY" value={`₹${fmt(pickStats.banknifty.ltp)}`} sub={fmtC(pickStats.banknifty.chgPct)} valClass={pickStats.banknifty.chgPct>=0?'up':'dn'} />
+                  <StatCard label="NIFTY 50"   value={`₹${fmt(pickStats.nifty.ltp)}`}   sub={fmt(pickStats.nifty.changeAmt)}     valClass={pickStats.nifty.chgPct>=0?'up':'dn'} />
+                  <StatCard label="BANK NIFTY" value={`₹${fmt(pickStats.banknifty.ltp)}`} sub={fmt(pickStats.banknifty.changeAmt)} valClass={pickStats.banknifty.chgPct>=0?'up':'dn'} />
                   <StatCard label="INDIA VIX"  value={(pickStats.vix||0).toFixed(2)}       sub={pickStats.vixTxt}                 valClass={pickStats.vix<16?'up':pickStats.vix>22?'dn':'am'} />
                   {wsConnected && <StatCard label="LIVE FEED" value="⚡ WS" sub="WebSocket" valClass="up" />}
                 </div>

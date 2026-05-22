@@ -175,7 +175,13 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
       for (const [k, v] of Object.entries(map)) {
         if (v && v.ltp > 0) {
           const cp = v.cp || v.ltp;
-          next[k] = { ltp: v.ltp, cp, oi: v.oi, chgPct: cp > 0 ? +((v.ltp - cp) / cp * 100).toFixed(2) : 0 };
+          next[k] = { 
+                      ltp: v.ltp, 
+                      cp, 
+                      oi: v.oi, 
+                      chgPct: cp > 0 ? +((v.ltp - cp) / cp * 100).toFixed(2) : 0,
+                      changeAmt: (v.ltp - cp).toFixed(2)
+                    };
         }
       }
       return next;
