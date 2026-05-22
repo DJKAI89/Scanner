@@ -40,8 +40,8 @@ export function StatCard({ label, value, sub, note, valClass = '' }) {
     <div className="sc">
       <div className="sc-lbl">{label}</div>
       <div className={`sc-val ${valClass}`}>{value}</div>
-      {sub  && <div className="sc-sub">{sub}</div>}
-      {note && <div className="sc-note">{note}</div>}
+      {sub  && <div className={`sc-sub ${valClass}`}>{sub}</div>}
+      {note && <div className={`sc-note ${valClass}`}>{note}</div>}
     </div>
   );
 }

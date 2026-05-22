@@ -516,8 +516,9 @@ export default function StocksPane() {
             <div>
               {pickStats && (
                 <div className="stats-g">
-                  <StatCard label="NIFTY 50"   value={`₹${fmt(pickStats.nifty.ltp)}`}   sub={fmt(pickStats.nifty.changeAmt)}     valClass={pickStats.nifty.chgPct>=0?'up':'dn'} />
-                  <StatCard label="BANK NIFTY" value={`₹${fmt(pickStats.banknifty.ltp)}`} sub={fmt(pickStats.banknifty.changeAmt)} valClass={pickStats.banknifty.chgPct>=0?'up':'dn'} />
+                  {/* {(todayPnl >= 0 ? '+₹' : '-₹') + fmt(Math.abs(todayPnl))} */}
+                  <StatCard label="NIFTY 50"   value={`₹${fmt(pickStats.nifty.ltp)}`}   sub={pickStats.nifty.changeAmt > 0 ? `+${fmt(pickStats.nifty.changeAmt)} pts` : `-${fmt(pickStats.nifty.changeAmt)} pts`} note={fmtC(pickStats.nifty.chgPct)}  valClass={pickStats.nifty.changeAmt>=0?'up':'dn'} />
+                  <StatCard label="BANK NIFTY" value={`₹${fmt(pickStats.banknifty.ltp)}`} sub={pickStats.banknifty.changeAmt > 0 ? `+${fmt(pickStats.banknifty.changeAmt)} pts` : `-${fmt(pickStats.banknifty.changeAmt)} pts`} note={fmtC(pickStats.banknifty.chgPct)} valClass={pickStats.banknifty.changeAmt>=0?'up':'dn'} />
                   <StatCard label="INDIA VIX"  value={(pickStats.vix||0).toFixed(2)}       sub={pickStats.vixTxt}                 valClass={pickStats.vix<16?'up':pickStats.vix>22?'dn':'am'} />
                   {wsConnected && <StatCard label="LIVE FEED" value="⚡ WS" sub="WebSocket" valClass="up" />}
                 </div>
