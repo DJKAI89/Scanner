@@ -14,8 +14,8 @@ import {
   calcMACD, isNearSupport, calcRSIDivergence, getTimeOfDayPenalty, getSector,
 } from '../services/technical';
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
-import { getIST, getISTDate, sleep, localIsOpen } from '../utils/marketTime';
-import { useMarketFeed } from '../hooks/useMarketFeed';
+import { getIST, getISTDate, sleep, localIsOpen, getMarketPhase } from '../utils/marketTime';
+import { useMarketFeed } from '../hooks/useMarketFeed.js';
 
 function getChgPct(q) {
   if (!q) return 0;
@@ -30,10 +30,23 @@ const BO_FILTERS = [
   { id:'squeeze',label:'🗜 Squeeze' },{ id:'rs',label:'🚀 RS' },
 ];
 
+// NSE Market holidays 2024-2025 (simplified — add full calendar as needed)
+const NSE_HOLIDAYS = [
+  '2024-01-26', '2024-03-25', '2024-04-11', '2024-04-21', '2024-05-23',
+  '2024-08-15', '2024-09-16', '2024-10-02', '2024-10-12', '2024-11-01',
+  '2024-11-15', '2024-12-25',
+  '2025-01-26', '2025-03-14', '2025-04-18', '2025-05-23', '2025-08-15',
+  '2025-09-16', '2025-10-02', '2025-11-05', '2025-12-25',
+];
+
+function isMarketHoliday() {
+  const today = getISTDate();
+  return NSE_HOLIDAYS.includes(today);
+}
+
 export default function StocksPane() {
   const { token, cfg, marketStatus, lg, onTokenExpired, updateBadge, gh,
-          activeTab,
-          setScanning, setStatusDot, setStatusTxt,
+          activeTab, setScanning, setStatusDot, setStatusTxt,
           stocks, fiiInterp } = useApp();
 
   const [mode, setMode]             = useState('picks');
@@ -43,6 +56,7 @@ export default function StocksPane() {
   const [pickStats, setPickStats]       = useState(null);
   const [picksTime, setPicksTime]       = useState('');
   const [pickProgress, setPickProgress] = useState('');
+  
   const [boLoading, setBoLoading]   = useState(false);
   const [boError, setBoError]       = useState('');
   const [boCards, setBoCards]       = useState([]);
@@ -50,12 +64,85 @@ export default function StocksPane() {
   const [boTime, setBoTime]         = useState('');
   const [boProgress, setBoProgress] = useState('');
   const [boFilter, setBoFilter]     = useState('all');
+  
   const scanInProgress = useRef(false);
   const boScanInProgress = useRef(false);
+  const statsTimerRef = useRef(null);
+  const cachedIndices = useRef(null);
+  const lastStatsFetch = useRef(0);
 
-  // WebSocket live prices for top picks
+  // WebSocket live prices for indices (Nifty50, BankNifty, VIX) + top picks
+  const indexKeys = [
+    'NSE_INDEX|Nifty 50',
+    'NSE_INDEX|Nifty Bank',
+    'NSE_INDEX|India VIX',
+  ];
   const topKeys = picks.slice(0, 20).map(p => p.key).filter(Boolean);
-  const { connected: wsConnected, lastPrices } = useMarketFeed(token, topKeys, marketStatus.open && picks.length > 0);
+  const allWsKeys = [...new Set([...indexKeys, ...topKeys])];
+  
+  const { connected: wsConnected, lastPrices } = useMarketFeed(
+    token,
+    allWsKeys,
+    activeTab === 'stocks' && marketStatus.open,
+    { mode: 'ltpc' }
+  );
+
+  // ── Real-time index card update (from WebSocket) ──
+  useEffect(() => {
+    if (!wsConnected || !lastPrices) return;
+    const niftyPrice = lastPrices['NSE_INDEX|Nifty 50'];
+    const bankniftyPrice = lastPrices['NSE_INDEX|Nifty Bank'];
+    const vixPrice = lastPrices['NSE_INDEX|India VIX'];
+    
+    if (niftyPrice || bankniftyPrice || vixPrice) {
+      setPickStats(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          nifty: niftyPrice ? {
+            ltp: niftyPrice.ltp,
+            chgPct: niftyPrice.chgPct,
+          } : prev.nifty,
+          banknifty: bankniftyPrice ? {
+            ltp: bankniftyPrice.ltp,
+            chgPct: bankniftyPrice.chgPct,
+          } : prev.banknifty,
+          vix: vixPrice?.ltp || prev.vix,
+          vixTxt: vixPrice?.ltp ? interpVIX(vixPrice.ltp).txt : prev.vixTxt,
+        };
+      });
+    }
+  }, [lastPrices, wsConnected]);
+
+  // ── Periodic index stat refresh (fallback when WS unavailable) ──
+  useEffect(() => {
+    if (!token || !activeTab || activeTab !== 'stocks') return;
+    
+    const refreshStats = async () => {
+      const now = Date.now();
+      if (now - lastStatsFetch.current < 30000) return; // 30s throttle
+      lastStatsFetch.current = now;
+      
+      try {
+        const d = await fetchQ('NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank,NSE_INDEX|India VIX', token, onTokenExpired);
+        const nQ = d['NSE_INDEX|Nifty 50'], bQ = d['NSE_INDEX|Nifty Bank'], vQ = d['NSE_INDEX|India VIX'];
+        const vix = vQ?.last_price || 0;
+        cachedIndices.current = { nQ, bQ, vQ, vix };
+        
+        if (!wsConnected) { // only update if WS not connected
+          setPickStats({
+            nifty: { ltp: nQ?.last_price || 0, chgPct: getChgPct(nQ) },
+            banknifty: { ltp: bQ?.last_price || 0, chgPct: getChgPct(bQ) },
+            vix, vixTxt: interpVIX(vix).txt
+          });
+        }
+      } catch(e) {}
+    };
+
+    refreshStats();
+    statsTimerRef.current = setInterval(refreshStats, 30000);
+    return () => clearInterval(statsTimerRef.current);
+  }, [token, activeTab, wsConnected, onTokenExpired]);
 
   useEffect(() => {
     const onScan = () => {
@@ -66,44 +153,55 @@ export default function StocksPane() {
     return () => document.removeEventListener('friday:scan', onScan);
   }, [activeTab, mode]); // eslint-disable-line
 
-  // Auto-load stats always; auto-scan if market open (same as HTML boot())
+  // Auto-load stats on mount & auto-scan if market open
   useEffect(() => {
     if (!token) return;
-    loadClosedStats();
-    if (marketStatus.open) setTimeout(() => runPicksScan(), 1500);
+    const phase = getMarketPhase();
+    const shouldScan = phase === 'open' || phase === 'intraday'; // Live intraday market
+    if (shouldScan && marketStatus.open) {
+      setTimeout(() => runPicksScan(), 1500);
+    }
   }, [token]); // eslint-disable-line
 
-  async function loadClosedStats() {
-    try {
-      const d = await fetchQ('NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank,NSE_INDEX|India VIX', token, onTokenExpired);
-      const nQ = d['NSE_INDEX|Nifty 50'], bQ = d['NSE_INDEX|Nifty Bank'], vQ = d['NSE_INDEX|India VIX'];
-      const vix = vQ?.last_price || 0;
-      setPickStats({ nifty:{ ltp:nQ?.last_price||0, chgPct:getChgPct(nQ) }, banknifty:{ ltp:bQ?.last_price||0, chgPct:getChgPct(bQ) }, vix, vixTxt:interpVIX(vix).txt });
-    } catch(e) {}
-  }
-
-  // ── PICKS SCAN — exact port of HTML scanStocksRound ──────────
+  // ── PICKS SCAN — exact port from HTML + context awareness ────────────
   async function runPicksScan() {
     if (scanInProgress.current) return;
-    if (!stocks?.length) { setPicksError('⚠ stocks.json not loaded yet — configure GitHub in ⚙ Settings first'); return; }
+    if (!stocks?.length) {
+      setPicksError('⚠ stocks.json not loaded yet — configure GitHub in ⚙ Settings first');
+      return;
+    }
     scanInProgress.current = true;
     setScanning(true); setStatusDot('scan'); setStatusTxt('Scanning...');
     setPicksLoading(false); setPicksError('');
     setPickProgress('Fetching index data...');
+    
     try {
-      // Step 1: index + VIX
-      const idxData = await fetchQ('NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank,NSE_INDEX|India VIX', token, onTokenExpired);
+      // Step 1: Fetch indices + VIX (reuse cache if fresh)
+      let idxData = cachedIndices.current;
+      if (!idxData || Date.now() - lastStatsFetch.current > 60000) {
+        idxData = await fetchQ('NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank,NSE_INDEX|India VIX', token, onTokenExpired);
+        cachedIndices.current = idxData;
+      }
+      
       const nQ = idxData['NSE_INDEX|Nifty 50'], bQ = idxData['NSE_INDEX|Nifty Bank'], vQ = idxData['NSE_INDEX|India VIX'];
       const vix = vQ?.last_price || 0;
       const niftyChgPct = getChgPct(nQ);
       const niftyBull   = niftyChgPct > 0;
-      setPickStats({ nifty:{ ltp:nQ?.last_price||0, chgPct:niftyChgPct }, banknifty:{ ltp:bQ?.last_price||0, chgPct:getChgPct(bQ) }, vix, vixTxt:interpVIX(vix).txt });
+      
+      setPickStats({
+        nifty: { ltp: nQ?.last_price || 0, chgPct: niftyChgPct },
+        banknifty: { ltp: bQ?.last_price || 0, chgPct: getChgPct(bQ) },
+        vix, vixTxt: interpVIX(vix).txt
+      });
 
-      // Step 2: FII/DII sector score (simplified from fiiInterp.bias)
+      // Step 2: Market sentiment (FII/DII + sector context)
       const fiiScore = (fiiInterp?.bias || 0) * 5; // scale -50..+50
+      const vixBias = vix > 20 ? -0.3 : vix < 14 ? 0.3 : 0; // vix impact on sentiment
+      const marketSentiment = niftyBull ? 1.0 : -1.0;
+      const sentimentBonus = (fiiScore + vixBias * 10) * 0.1; // -5..+5 pts to conf
 
-      // Step 3: Batch quote fetch (HTML does batch of 50)
-      const scanList = stocks.filter(s => s.scan !== false); // HTML scans ALL configured stocks.
+      // Step 3: Stock scan list
+      const scanList = stocks.filter(s => s.scan !== false);
       setPickProgress(`Fetching quotes for ${scanList.length} stocks...`);
 
       const today = getISTDate();
@@ -118,7 +216,7 @@ export default function StocksPane() {
         if (b + 50 < scanList.length) await sleep(200);
       }
 
-      // Sort by volume desc (same as HTML) then pick top scanList
+      // Sort by volume desc
       const byVol = scanList
         .map(s => ({ ...s, _q: allQuotes[s.key] }))
         .filter(s => s._q?.last_price)
@@ -150,7 +248,7 @@ export default function StocksPane() {
           const highs   = candles.map(c => +c[2]);
           const lows    = candles.map(c => +c[3]);
 
-          // Technical indicators — EXACT same as HTML
+          // Technical indicators
           const rsi     = calcRSI(closes);
           const ema     = calcEMACrossover(closes);
           const macd    = calcMACD(closes);
@@ -169,22 +267,23 @@ export default function StocksPane() {
           const volOk     = vol > avgVol20 * (cfg.vol || 1.2);
           const nearSupp  = isNearSupport(ltp, sr, lows[lows.length - 1]);
 
-          // Sector score
+          // Sector score + FII context
           const sector    = getSector(inst.s);
           const secScore  = sector !== 'OTHER' ? fiiScore * 0.5 : 0;
 
-          // countIndicatorsEx — EXACT port
+          // Count indicators
           const numInds = countIndicatorsEx(rsi, macdBull, a50, a200, volOk, nearSupp, patterns, 'BUY', macd, bb, adx, rsiDiv);
 
-          // Initial rec based on indicators (for passing to calcConfidence)
+          // Initial recommendation
           const initRec = numInds >= 4 ? 'BUY' : numInds >= 3 ? 'MODERATE' : numInds >= 2 ? 'WATCH' : 'AVOID';
 
-          // calcConfidence — EXACT port
-          const conf = calcConfidence(null, 0, 0, niftyBull, secScore, vol, avgVol20, patterns, initRec, numInds);
+          // Confidence with market context
+          const baseConf = calcConfidence(null, 0, 0, niftyBull, secScore, vol, avgVol20, patterns, initRec, numInds);
+          const conf = Math.max(0, Math.min(100, baseConf + sentimentBonus)); // Apply market mood
 
           if (conf < cfg.minStockConf) return;
 
-          // autoSLTarget — EXACT port
+          // Entry & targets
           const { sl, target: tgtMod, targets } = autoSLTarget(ltp, high, low, atr, sr, vix, rsi);
           const pot = calcPotential(ltp, tgtMod, sl, numInds, initRec);
           const risk = calcRisk(ltp, sl, tgtMod, atr, vix);
@@ -193,18 +292,17 @@ export default function StocksPane() {
           if (pot.rr   < cfg.rr)   return;
           if (risk     > cfg.risk)  return;
 
-          // Final rec — EXACT port using getRec
+          // Final recommendation
           const rec = getRec(conf, pot.base, risk, pot.rr);
           if (rec === 'AVOID') return;
 
           // Entry trigger
-          const vwap = 0; // intraday VWAP requires intraday candles; skip for daily scan
-          const entryTrigger = calcEntryTrigger(ltp, high, sr, atr, rec, vwap, chgPct);
+          const entryTrigger = calcEntryTrigger(ltp, high, sr, atr, rec, 0, chgPct);
 
           // Reversal
           const reversal = detectReversal(ltp, rsi, patterns, sr, vix, 1.0, niftyBull, chgPct, atr, high, low);
 
-          // Build indicator pills object
+          // Indicator pills
           const inds = {
             RSI:  rsi < 45 ? 1 : rsi > 65 ? -1 : 0,
             MA50: a50 !== null ? (a50 ? 1 : -1) : 0,
@@ -253,9 +351,13 @@ export default function StocksPane() {
       setPicksTime('Updated: ' + getIST());
       setStatusDot('live'); setStatusTxt('Live');
       lg(`✅ Picks: ${results.length} from ${byVol.length} stocks (conf≥${cfg.minStockConf}% pot≥${cfg.pot}% risk<${cfg.risk}%)`, 'o');
-      if (!results.length) lg(`⚠ 0 picks from ${byVol.length} stocks — lower Conf(${cfg.minStockConf}%)/Pot(${cfg.pot}%)/Risk(${cfg.risk}%) in ⚙ Settings`, 'w');
+      if (!results.length) lg(`⚠ 0 picks — lower Conf/Pot/Risk in ⚙ Settings`, 'w');
+
       // Log signals to GitHub
-      if (results.length && gh?.token) logSignals(gh, results.map(p => buildStockSignal(p, vix)), vix, lg);
+      if (gh?.token) {
+        const signals = results.map(p => buildStockSignal(p, vix));
+        logSignals(gh, signals, vix, lg);
+      }
     } catch(e) {
       setPicksError(e.message); setStatusDot('err'); setStatusTxt('Error');
       lg('Scan error: ' + e.message, 'e');
@@ -264,18 +366,22 @@ export default function StocksPane() {
     }
   }
 
-  // ── BREAKOUT SCAN — exact port of HTML breakoutScan ──────────
+  // ── BREAKOUT SCAN ────────────────────────────────────────────────────
   async function runBreakoutScan() {
     if (boScanInProgress.current) return;
-    if (!stocks?.length) { setBoError('⚠ stocks.json not loaded — configure GitHub in ⚙ Settings first'); return; }
+    if (!stocks?.length) {
+      setBoError('⚠ stocks.json not loaded — configure GitHub in ⚙ Settings first');
+      return;
+    }
     boScanInProgress.current = true;
     setScanning(true); setStatusDot('scan'); setStatusTxt('Scanning breakout...');
     setBoLoading(false); setBoError(''); setBoProgress('Fetching quotes...');
+    
     try {
       const today  = getISTDate();
       const from52 = new Date(Date.now() - 375 * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
-      // Nifty closes for RS calculation
+      // Nifty closes for RS
       let niftyCloses = [];
       try { niftyCloses = (await fetchCandles('NSE_INDEX|Nifty 50', from52, today, 'day', token, onTokenExpired)).map(c => +c[4]).reverse(); } catch(e) {}
 
@@ -292,7 +398,7 @@ export default function StocksPane() {
       const byVol = scanList.map(s => ({ ...s, _q: allQ[s.key] })).filter(s => s._q?.last_price)
         .sort((a, b) => (b._q.volume || 0) - (a._q.volume || 0)).slice(0, 60);
 
-      // Candles in batches
+      // Candles
       const techB = {};
       for (let b = 0; b < byVol.length; b += 3) {
         setBoProgress(`Candles ${b+1}–${Math.min(b+3, byVol.length)} / ${byVol.length}`);
@@ -351,13 +457,23 @@ export default function StocksPane() {
       });
 
       setBoCards(results);
-      setBoStats({ total:results.length, bullCount:results.filter(r=>r.dir==='BULL').length, bearCount:results.filter(r=>r.dir==='BEAR').length, goldCross:results.filter(r=>r.ema?.goldenCross).length, volSurge:results.filter(r=>r.vol?.confirmed).length });
+      setBoStats({
+        total:results.length,
+        bullCount:results.filter(r=>r.dir==='BULL').length,
+        bearCount:results.filter(r=>r.dir==='BEAR').length,
+        goldCross:results.filter(r=>r.ema?.goldenCross).length,
+        volSurge:results.filter(r=>r.vol?.confirmed||r.vol?.strong).length,
+      });
       setBoTime('Scanned: ' + getIST());
       setStatusDot('live'); setStatusTxt('Live');
       updateBadge('stocks', results.length + ' 🚀');
       lg(`✅ Breakout: ${results.length} signals from ${byVol.length} stocks`, 'o');
-    } catch(e) { setBoError(e.message); setStatusDot('err'); setStatusTxt('Error'); lg('Breakout error: ' + e.message, 'e'); }
-    finally { setBoLoading(false); setScanning(false); boScanInProgress.current = false; }
+    } catch(e) {
+      setBoError(e.message); setStatusDot('err'); setStatusTxt('Error');
+      lg('Breakout error: ' + e.message, 'e');
+    } finally {
+      setBoLoading(false); setScanning(false); boScanInProgress.current = false;
+    }
   }
 
   const filteredCards = boCards.filter(r => {
@@ -368,6 +484,9 @@ export default function StocksPane() {
     if (boFilter==='squeeze') return (r.nr7?.isNR7||r.nr7?.isNR4)||r.bb?.squeeze; if (boFilter==='rs') return r.rs?.outperforming||r.rs?.underperforming;
     return true;
   });
+
+  const isHoliday = isMarketHoliday();
+  const phase = getMarketPhase();
 
   return (
     <div>
@@ -386,6 +505,7 @@ export default function StocksPane() {
       {mode==='picks' && (
         <div>
           {!marketStatus.open && <MarketClosedBanner msg={marketStatus.msg||'🔔 NSE Market Closed'} />}
+          {isHoliday && <MarketClosedBanner msg="📅 NSE Market Holiday — showing signals based on last close prices" />}
           {picksError && <ErrorBanner title="⚠ Scan Error" message={picksError} onRetry={runPicksScan} />}
           {picksLoading ? (
             <Spinner label="Professional analysis..." progress={pickProgress}
@@ -426,7 +546,9 @@ export default function StocksPane() {
                     const live = lastPrices[p.key];
                     return (
                       <div key={p.s} style={{position:'relative'}}>
-                        {live && <div style={{position:'absolute',top:35,right:11,background:live.chgPct>=0?'#dcfce7':'#fee2e2',color:live.chgPct>=0?'#16a34a':'#dc2626',fontSize:9,fontWeight:800,padding:'2px 6px',borderRadius:8,border:`1px solid ${live.chgPct>=0?'#86efac':'#fca5a5'}`,zIndex:10}}>₹{fmt(live.ltp)} ⚡</div>}
+                        {live && <div style={{position:'absolute',top:35,right:11,background:live.chgPct>=0?'#dcfce7':'#fee2e2',color:live.chgPct>=0?'#16a34a':'#dc2626',fontSize:9,fontWeight:800,padding:'2px 6px',borderRadius:4}}>
+                          📍 ₹{fmt(live.ltp)} {fmtC(live.chgPct)}
+                        </div>}
                         <StockCard pick={live?{...p,ltp:live.ltp,chgPct:live.chgPct}:p} rank={i+1} />
                       </div>
                     );
@@ -443,6 +565,7 @@ export default function StocksPane() {
       {mode==='breakout' && (
         <div>
           {boError && <ErrorBanner title="⚠ Breakout Error" message={boError} onRetry={runBreakoutScan} />}
+          {isHoliday && <MarketClosedBanner msg="📅 NSE Market Closed — showing signals based on last close prices" />}
           {boLoading ? (
             <Spinner label="Breakout Scanner..." progress={boProgress}
               sub="EMA 50/200 · PDH/PDL · Supertrend · Vol · 52Wk · Gap · NR7 · BB · RS · Wick · Weekly MTF" />
