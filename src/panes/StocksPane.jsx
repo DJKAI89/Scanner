@@ -361,10 +361,13 @@ export default function StocksPane() {
 
   const filteredCards=boCards.filter(r=>{
     if(boFilter==='all')return true;if(boFilter==='bull')return r.dir==='BULL';if(boFilter==='bear')return r.dir==='BEAR';
-    if(boFilter==='ema')return r.ema?.goldenCross||r.ema?.deathCross;if(boFilter==='pdhl')return r.pdhl?.bullBreakout||r.pdhl?.bearBreakout;
+    if(boFilter==='ema')return r.ema?.goldenCross||r.ema?.deathCross||r.ema?.nearCross;
+    if(boFilter==='pdhl')return r.pdhl?.bullBreakout||r.pdhl?.bearBreakout||r.pdhl?.nearPDH||r.pdhl?.nearPDL;
     if(boFilter==='st')return r.st?.crossed;if(boFilter==='vol')return r.vol?.confirmed||r.vol?.strong;
-    if(boFilter==='52wk')return r.wk52?.breakHigh||r.wk52?.atHigh;if(boFilter==='gap')return r.gap?.gapUp||r.gap?.gapDown;
-    if(boFilter==='squeeze')return(r.nr7?.isNR7||r.nr7?.isNR4)||r.bb?.squeeze;if(boFilter==='rs')return r.rs?.outperforming||r.rs?.underperforming;
+    if(boFilter==='52wk')return r.wk52?.breakHigh||r.wk52?.atHigh||r.wk52?.breakLow||r.wk52?.atLow;
+    if(boFilter==='gap')return r.gap?.gapUp||r.gap?.gapDown;
+    if(boFilter==='squeeze')return(r.nr7?.isNR7||r.nr7?.isNR4)||(r.bb?.squeeze||r.bb?.extremeSqueeze);
+    if(boFilter==='rs')return (r.rs?.outperforming||r.rs?.underperforming)&&r.rs?.strongly;
     return true;
   });
 
@@ -472,13 +475,13 @@ export default function StocksPane() {
                 <div className="sc">
                   <div className="sc-lbl">NIFTY · LIVE</div>
                   <div className={`sc-val ${nChgPct>=0?'up':'dn'}`}>₹{fmt(nifty?.ltp,0)}</div>
-                  <div className={`sc-sub ${nChgPct>=0?'up':'dn'}`}>{nifty?.pts>=0?'+':''}{(nifty?.pts||0).toFixed(2)} pts</div>
+                  <div className={`sc-sub ${nChgPct>=0?'up':'dn'}`}>{nifty?.pts>=0?'+':'-'}{(nifty?.pts||0).toFixed(2)} pts</div>
                   {/* <div className="sc-note">↻ {cfg.tick||15}s</div> */}
                 </div>
                 <div className="sc">
                   <div className="sc-lbl">BANKNIFTY · LIVE</div>
                   <div className={`sc-val ${(banknifty?.chgPct||0)>=0?'up':'dn'}`}>₹{fmt(banknifty?.ltp,0)}</div>
-                  <div className={`sc-sub ${banknifty?.chgPct>=0?'up':'dn'}`}>{banknifty?.pts>=0?'+':''}{(banknifty?.pts||0).toFixed(2)} pts</div>
+                  <div className={`sc-sub ${banknifty?.chgPct>=0?'up':'dn'}`}>{banknifty?.pts>=0?'+':'-'}{(banknifty?.pts||0).toFixed(2)} pts</div>
                   {/* <div className="sc-note">↻ {cfg.tick||15}s</div> */}
                 </div>
                 <div className="sc">

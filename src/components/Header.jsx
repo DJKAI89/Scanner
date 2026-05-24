@@ -1,22 +1,18 @@
-import React, { useEffect, useRef } from 'react';
+import React from 'react';
 import { useApp } from '../context/AppContext';
 import { TABS } from '../constants/config';
 
 export default function Header({ onMenuToggle }) {
   const {
-    booted, statusDot, statusTxt, activeTab,
-    scanning, setLogOpen, scanSecs, setScanSecs, cfg,
+    booted, statusDot, statusTxt, activeTab, marketStatus,
+    scanning, setLogOpen,
   } = useApp();
 
   const currentTab = TABS.find((t) => t.id === activeTab);
-
-  // Format countdown mm:ss
-  const fmtSecs = (s) => {
-    const m = Math.floor(s / 60), sec = s % 60;
-    return `${m}:${String(sec).padStart(2, '0')}`;
-  };
-
-  const timerColor = scanSecs <= 30 ? '#dc2626' : scanSecs <= 90 ? '#d97706' : '#374151';
+  const displayDot = marketStatus?.open ? statusDot : 'err';
+  const displayTxt = marketStatus?.open
+    ? statusTxt
+    : (marketStatus?.msg?.includes('Pre-market') ? 'Pre-market' : 'Closed');
 
   return (
     <div className="hdr">
@@ -44,18 +40,10 @@ export default function Header({ onMenuToggle }) {
       {/* Right controls */}
       {booted && (
         <div className="hdr-r">
-          {/* Countdown + status */}
-          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', minWidth:52 }}>
-            <div style={{ fontSize:15, fontWeight:800, color:timerColor, lineHeight:1 }}>
-              {fmtSecs(scanSecs)}
-            </div>
-            <div style={{ fontSize:7, color:'#94a3b8', fontWeight:600, letterSpacing:'.3px' }}>NEXT SCAN</div>
-          </div>
-
           {/* Live dot */}
           <div style={{ display:'flex', alignItems:'center', gap:4 }}>
-            <div className={`dot ${statusDot}`} />
-            <span style={{ fontSize:10, color:'#64748b' }}>{statusTxt}</span>
+            <div className={`dot ${displayDot}`} />
+            <span style={{ fontSize:10, color:'#64748b' }}>{displayTxt}</span>
           </div>
 
           {/* Scan button */}

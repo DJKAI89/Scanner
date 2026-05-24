@@ -242,25 +242,56 @@ export function detectPatterns(candles) {
 // ── Pivot/PDH/PDL Breakout ────────────────────────────────────
 export function detectPDHLBreakout(ltp, candles) {
   if (!candles || candles.length < 2) return null;
-  const pdh = +candles[1][2], pdl = +candles[1][3];
+  const pdh = +candles[1][2], pdl = +candles[1][3], pdc = +candles[1][4];
+  if (!pdh || !pdl || pdh <= 0 || pdl <= 0) return null;
   const pdHDist = pdh > 0 ? +((ltp - pdh) / pdh * 100).toFixed(2) : 0;
   const pdLDist = pdl > 0 ? +((ltp - pdl) / pdl * 100).toFixed(2) : 0;
-  return { pdh, pdl, bullBreakout: pdHDist >= 0.3, bearBreakout: pdLDist <= -0.3, nearPDH: pdHDist >= 0 && pdHDist < 0.3, nearPDL: pdLDist <= 0 && pdLDist > -0.3, pdHDist, pdLDist };
+  return {
+    pdh, pdl, pdc,
+    bullBreakout: pdHDist > 0.3,
+    bearBreakout: pdLDist < -0.3,
+    nearPDH: pdHDist > -0.7 && pdHDist <= 0.3,
+    nearPDL: pdLDist < 0.7 && pdLDist >= -0.3,
+    pdHDist, pdLDist,
+  };
 }
 
 export function calc52WkBreakout(ltp, candles) {
-  if (!candles || candles.length < 10) return null;
-  const hi52 = Math.max(...candles.map(c => +c[2])), lo52 = Math.min(...candles.map(c => +c[3]));
+  if (!candles || candles.length < 20) return null;
+  const yr = candles.slice(0, Math.min(252, candles.length));
+  const hi52 = Math.max(...yr.map(c => +c[2]));
+  const lo52 = Math.min(...yr.map(c => +c[3]));
+  if (!hi52 || !lo52) return null;
   const rangePos = hi52 > lo52 ? +(((ltp - lo52) / (hi52 - lo52)) * 100).toFixed(1) : 50;
-  return { hi52: +hi52.toFixed(2), lo52: +lo52.toFixed(2), rangePos, breakHigh: ltp > hi52 * 0.997, atHigh: ltp >= hi52 * 0.97 && ltp <= hi52 * 0.997, breakLow: ltp < lo52 * 1.003, atLow: ltp <= lo52 * 1.03 && ltp >= lo52 * 1.003 };
+  return {
+    hi52: +hi52.toFixed(2),
+    lo52: +lo52.toFixed(2),
+    rangePos,
+    breakHigh: ltp > hi52 * 1.005,
+    atHigh: ltp >= hi52 * 0.995,
+    breakLow: ltp < lo52 * 0.995,
+    atLow: ltp <= lo52 * 1.005,
+  };
 }
 
 export function calcVolumeSurge(candles, lookback = 20) {
-  if (!candles || candles.length < 5) return null;
-  const avgVol = candles.slice(0, lookback).reduce((s, c) => s + +c[5], 0) / Math.min(lookback, candles.length);
+  if (!candles || candles.length < 6) return null;
   const todayVol = +candles[0][5];
+  if (!todayVol || todayVol <= 0) return null;
+  const past = candles.slice(1, Math.min(lookback + 1, candles.length));
+  if (past.length < 5) return null;
+  const avgVol = past.reduce((s, c) => s + +c[5], 0) / past.length;
+  if (!avgVol || avgVol <= 0) return null;
   const ratio = avgVol > 0 ? +(todayVol / avgVol).toFixed(2) : 1;
-  return { todayVol, avgVol: +avgVol.toFixed(0), ratio, strong: ratio >= 2, confirmed: ratio >= 1.2, weak: ratio >= 0.8 && ratio < 1.2, dry: ratio < 0.5 };
+  return {
+    todayVol,
+    avgVol: +avgVol.toFixed(0),
+    ratio,
+    confirmed: ratio >= 1.5,
+    strong: ratio >= 2.5,
+    weak: ratio >= 1.0 && ratio < 1.5,
+    dry: ratio < 0.8,
+  };
 }
 
 export function detectGap(candles) {
@@ -299,7 +330,23 @@ export function calcRelativeStrength(closes, niftyCloses) {
 export function calcMomentumConfluence(closes, isBull) {
   if (!closes || closes.length < 35) return null;
   const rsi = calcRSI(closes), macd = calcMACD(closes);
-  return { rsi, macdBull: macd.bull === true, macdBear: macd.bull === false, rsiBull: rsi < 55 && rsi > 40, rsiBear: rsi > 45 && rsi < 60, bullConf: macd.bull && rsi < 55, bearConf: !macd.bull && rsi > 45, contra: isBull ? (!macd.bull && rsi > 60) : (macd.bull && rsi < 40) };
+  const rsiBull = rsi > 55;
+  const rsiBear = rsi < 45;
+  const macdBull = macd?.bullish === true;
+  const macdBear = macd?.bullish === false;
+  const bullConf = rsiBull && macdBull;
+  const bearConf = rsiBear && macdBear;
+  return {
+    rsi: +rsi.toFixed(1),
+    macdBull,
+    macdBear,
+    rsiBull,
+    rsiBear,
+    bullConf,
+    bearConf,
+    aligned: isBull ? bullConf : bearConf,
+    contra: isBull ? bearConf : bullConf,
+  };
 }
 
 export function calcWeeklyMTF(weeklyCandles, ltp, isBull) {
@@ -612,28 +659,59 @@ export function boScore(ema, pdhl, st, vol, wk52, mom, nr7, bb, weeklyMTF, gap, 
     if (wick.bullStrong)   { bull += 1; bear += 1; }
   }
   if (sectorScore > 0) bull += 1; else if (sectorScore < 0) bear += 1;
-  const phaseMulti = phase === 'midday' ? 1.0 : phase === 'early' ? 0.95 : phase === 'pre_close' ? 0.9 : 0.8;
-  return { bullScore: Math.min(10, Math.round(bull * phaseMulti)), bearScore: Math.min(10, Math.round(bear * phaseMulti)), score: Math.min(10, Math.round(Math.max(bull, bear) * phaseMulti)) };
+  const dominant = Math.max(bull, bear);
+  const conflict = Math.min(bull, bear);
+  let raw = (dominant - conflict * 0.5) / 2.8;
+  if (phase === 'opening') raw -= 1.5;
+  else if (phase === 'closing') raw -= 0.5;
+  const score = Math.min(10, Math.max(1, Math.round(raw)));
+  return { bullScore: bull, bearScore: bear, score };
 }
 
 export function boDirection(ema, pdhl, st) {
   let bull = 0, bear = 0;
-  if (ema?.goldenCross)    bull += 3; if (ema?.deathCross)    bear += 3;
-  if (ema?.uptrend)        bull += 1; if (ema && !ema.uptrend) bear += 1;
-  if (pdhl?.bullBreakout)  bull += 3; if (pdhl?.bearBreakout) bear += 3;
-  if (pdhl?.nearPDH)       bull += 1; if (pdhl?.nearPDL)      bear += 1;
-  if (st?.trend === 'UP')  bull += 2; if (st?.trend === 'DOWN') bear += 2;
-  return bull >= bear ? 'BULL' : 'BEAR';
+  if (ema) {
+    if (ema.goldenCross) bull += 3;
+    else if (ema.deathCross) bear += 3;
+    else if (ema.uptrend) bull += 1;
+    else bear += 1;
+  }
+  if (pdhl) {
+    if (pdhl.bullBreakout) bull += 3;
+    else if (pdhl.bearBreakout) bear += 3;
+    else if (pdhl.nearPDH) bull += 1;
+    else if (pdhl.nearPDL) bear += 1;
+  }
+  if (st) {
+    if (st.crossed) {
+      if (st.trend === 'UP') bull += 2;
+      else bear += 2;
+    } else {
+      if (st.trend === 'UP') bull += 1;
+      else bear += 1;
+    }
+  }
+  return bull > bear ? 'BULL' : 'BEAR';
 }
 
 export function boSLTarget(ltp, atr, isBull, pdh, pdl, ema200) {
-  const atrMult = 1.5;
+  const a = atr || ltp * 0.018;
   let sl, target;
-  if (isBull) { sl = pdl > 0 ? Math.min(ltp - atr * atrMult, pdl * 0.99) : ltp - atr * atrMult; target = pdh > ltp ? pdh * 1.005 : ltp + atr * 3; }
-  else        { sl = pdh > 0 ? Math.max(ltp + atr * atrMult, pdh * 1.01) : ltp + atr * atrMult; target = pdl < ltp ? pdl * 0.995 : ltp - atr * 3; }
-  sl = Math.max(0, +sl.toFixed(2)); target = Math.max(0, +target.toFixed(2));
-  const rr = sl > 0 && ltp !== sl ? +((Math.abs(target - ltp) / Math.abs(ltp - sl))).toFixed(2) : 1;
-  return { sl, target, rr };
+  if (isBull) {
+    sl = +(ltp - a * 1.5).toFixed(2);
+    if (pdl > 0 && pdl < ltp && pdl > sl) sl = +(pdl * 0.995).toFixed(2);
+    if (ema200 > 0 && ema200 < ltp && ema200 > sl) sl = +(ema200 * 0.995).toFixed(2);
+    const risk = ltp - sl;
+    target = +(ltp + risk * 2).toFixed(2);
+  } else {
+    sl = +(ltp + a * 1.5).toFixed(2);
+    if (pdh > 0 && pdh > ltp && pdh < sl) sl = +(pdh * 1.005).toFixed(2);
+    if (ema200 > 0 && ema200 > ltp && ema200 < sl) sl = +(ema200 * 1.005).toFixed(2);
+    const risk = sl - ltp;
+    target = +(ltp - risk * 2).toFixed(2);
+  }
+  const rr = sl > 0 && Math.abs(ltp - sl) > 0 ? +((Math.abs(target - ltp) / Math.abs(ltp - sl))).toFixed(2) : 2;
+  return { sl, target, rr, method: 'ATR SL · 2:1 R:R' };
 }
 
 // ── Fibonacci Levels ──────────────────────────────────────────

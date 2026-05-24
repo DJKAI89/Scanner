@@ -25,7 +25,7 @@ const OPT_FILTERS = [
   { id:'all',label:'All' },{ id:'nifty',label:'Nifty' },{ id:'banknifty',label:'BankNifty' },
   { id:'sensex',label:'Sensex' },{ id:'finnifty',label:'FinNifty' },
   { id:'buy',label:'📈 BUY' },{ id:'sell',label:'📉 SELL' },
-  { id:'aligned',label:'✅ With-Trend' },
+  { id:'aligned',label:'✅ With-Trend' },{ id:'counter',label:'⚠ Counter-Trend' },
 ];
 
 const VIX_KEY = 'NSE_INDEX|India VIX';
@@ -358,6 +358,7 @@ export default function OptionsPane() {
       if (filter === 'buy')       return p.action === 'BUY';
       if (filter === 'sell')      return p.action === 'SELL';
       if (filter === 'aligned')   return p.trendAligned;
+      if (filter === 'counter')   return !p.trendAligned;
       return true;
     }),
   })).filter(g => g.picks.length > 0);

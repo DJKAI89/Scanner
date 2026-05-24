@@ -165,6 +165,14 @@ export async function fetchOptions(instrKey, expiry, token, onTokenExpired) {
   return d?.data || [];
 }
 
+export async function fetchOptionContracts(instrKey, token, onTokenExpired) {
+  const d = await withRetry(
+    () => apiGet('/v2/option/contract?instrument_key=' + encodeURIComponent(instrKey), token, onTokenExpired),
+    'option-contracts'
+  );
+  return d?.data || [];
+}
+
 // ── Portfolio: positions & holdings ──
 export async function fetchPortfolio(token, onTokenExpired) {
   const [posRes, holdRes] = await Promise.allSettled([

@@ -170,7 +170,7 @@ export default function LogPane() {
   const [stats, setStats]             = useState(null);
   const [filter, setFilter]           = useState('all');
   const [typeFilter, setTypeFilter]   = useState('all');
-  const [days, setDays]               = useState(7);
+  const [days, setDays]               = useState(1);
   const [wsResolved, setWsResolved]   = useState(0);
   const resolvedRef = useRef(new Set());
 
@@ -249,7 +249,7 @@ export default function LogPane() {
       const winRate = closed.length ? Math.round(hits/closed.length*100) : null;
       setStats({ total:all.length, open:all.filter(s=>s.status==='OPEN').length, hits, sls:closed.length-hits, winRate, avgConf:all.length?Math.round(all.reduce((s,x)=>s+(x.confidence||0),0)/all.length):0 });
       updateBadge('log', String(all.length));
-      lg(`Signal log: ${all.length} signals (${days}d)`, 'o');
+      lg(`Signal log: ${all.length} signals (${days === 1 ? 'Today' : `${days}d`})`, 'o');
     } catch(e) { setError(e.message); lg('Log error: '+e.message,'e'); }
     finally { setLoading(false); }
   }, [gh, days, updateBadge, lg]);
@@ -294,6 +294,7 @@ export default function LogPane() {
       {/* Controls */}
       <div style={{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap', alignItems:'center' }}>
         <select value={days} onChange={e=>setDays(+e.target.value)} className="log-filter-select">
+          <option value={1}>Today</option>
           {[7,14,30,60].map(d=><option key={d} value={d}>Last {d} days</option>)}
         </select>
         <select value={filter} onChange={e=>setFilter(e.target.value)} className="log-filter-select">
