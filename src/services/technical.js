@@ -1085,6 +1085,7 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
     for (const [side, optType] of [['call_options', 'CE'], ['put_options', 'PE']]) {
       const opt = row[side]; if (!opt) continue;
       const md = opt.market_data, gr = opt.option_greeks;
+      const instrKey = opt.instrument_key || null;
       if (!md?.ltp || md.ltp < 0.5) continue;
       const ltp = md.ltp, delta = gr?.delta || 0, iv = gr?.iv || 0, theta = gr?.theta || 0;
       const absD0 = Math.abs(delta);
@@ -1179,6 +1180,7 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       const maxProfit = +(action === 'SELL' ? (entry - tgt) * lot : (tgt - entry) * lot).toFixed(0);
 
       picks.push({
+        instrKey,
         strike: sp, type: optType, entry, sl, tgt, rr,
         iv, delta, theta, oi, oiChg, action, signals,
         score: signals.reduce((a, s) => a + s.s, 0),

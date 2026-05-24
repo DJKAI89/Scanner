@@ -246,8 +246,12 @@ export function buildOptionSignal(p, vixVal) {
     oiBuildType:    p.oiBuildType || '',
     trendAligned:   p.trendAligned || false,
     status:         'OPEN',
-    holdDays: 1,
-    exitPrice: null, exitTime: null, exitDate: null, pnlPct: null, note: '',
+    holdDays:       1,
+    exitPrice:      null, 
+    exitTime:       null, 
+    exitDate:       null, 
+    pnlPct:         null, 
+    note:           '',
   };
 }
 
