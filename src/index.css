@@ -203,3 +203,13 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#0f172
 @keyframes flash-up{0%{background:#dcfce7}100%{background:transparent}}
 @keyframes flash-dn{0%{background:#fee2e2}100%{background:transparent}}
 .flash-up{animation:flash-up .7s ease}.flash-dn{animation:flash-dn .7s ease}
+.ind-pill{display:inline-block;font-size:8px;font-weight:700;padding:2px 6px;border-radius:8px}
+.ind-pill.green-strong{background:#dcfce7;color:#15803d}
+.ind-pill.green{background:#f0fdf4;color:#16a34a}
+.ind-pill.blue{background:#eff6ff;color:#1d4ed8}
+.ind-pill.yellow{background:#fefce8;color:#854d0e}
+.ind-pill.purple{background:#fdf4ff;color:#7e22ce}
+.ind-pill.gray{background:#f8fafc;color:#94a3b8}
+.ind-pill.orange{background:#fff7ed;color:#c2410c}
+.ind-pill.red{background:#fef2f2;color:#dc2626}
+.ltp-live{font-size:16px!important}

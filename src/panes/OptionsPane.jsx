@@ -7,6 +7,7 @@ import { getIST, sleep } from '../utils/marketTime';
 import { INDEX_OPTS } from '../constants/config';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias } from '../services/technical';
+import { useIndexFeed } from '../hooks/useIndexFeed.js';
 import { logSignals, buildOptionSignal } from '../services/github';
 
 function getChgPct(q) {

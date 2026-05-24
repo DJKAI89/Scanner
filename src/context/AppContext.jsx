@@ -54,6 +54,14 @@ export function AppProvider({ children }) {
   const [scanning, setScanning]   = useState(false);
   const [statusDot, setStatusDot] = useState('live');
   const [statusTxt, setStatusTxt] = useState('Live');
+  const [scanSecs, setScanSecs]   = useState(0);
+
+  // Countdown timer — ticks every second when booted
+  useEffect(() => {
+    if (!booted) return;
+    const id = setInterval(() => setScanSecs(s => Math.max(0, s - 1)), 1000);
+    return () => clearInterval(id);
+  }, [booted]);
   const [badges, setBadges]       = useState({ stocks: '—', options: '—', log: '—', analysis: '—' });
   const [logOpen, setLogOpen]     = useState(false);
   const [logLines, setLogLines]   = useState([]);
@@ -302,6 +310,7 @@ export function AppProvider({ children }) {
     scanning,  setScanning,
     statusDot, setStatusDot,
     statusTxt, setStatusTxt,
+    scanSecs, setScanSecs,
     badges,    updateBadge,
     logOpen,   setLogOpen,
     logLines,  setLogLines,
