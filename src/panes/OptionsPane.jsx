@@ -326,7 +326,7 @@ export default function OptionsPane() {
           confidence: applyFIIBias(p.confidence, p.action === 'BUY', fiiData),
           _dte: p._dte ?? null,
           nearMaxPain: maxPain > 0 && Math.abs(p.strike - maxPain) / spot < 0.01,
-        })).filter(p => p.confidence >= cfg.minOptConf);
+        })).filter(p => p.confidence >= cfg.minOptConf && p.amtRequired <= cfg.maxAmtRequired);
 
         lg(`${idx.name}: ${chain.length} strikes → ${picks.length} raw → ${picksWithFII.length} ≥${cfg.minOptConf}% | composite=${richCtx.compositeScore} pcr=${pcr}`, 'o');
         built.push({ name: idx.name, spot, spotChg, picks: picksWithFII, expiry, chain, maxPain, oiWalls, pcr, pcrTrend, ivTrend });
