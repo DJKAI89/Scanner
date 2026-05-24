@@ -469,9 +469,22 @@ export default function StocksPane() {
             <div>
               {/* Always-live index stats for Breakout tab too */}
               <div className="stats-g" style={{marginBottom:10}}>
-                <div className="sc"><div className="sc-lbl">NIFTY · LIVE</div><div className={`sc-val ${nChgPct>=0?'up':'dn'}`}>₹{fmt(nifty?.ltp,0)}</div><div className="sc-note">↻ {cfg.tick||15}s</div></div>
-                <div className="sc"><div className="sc-lbl">BANKNIFTY · LIVE</div><div className={`sc-val ${(banknifty?.chgPct||0)>=0?'up':'dn'}`}>₹{fmt(banknifty?.ltp,0)}</div><div className="sc-note">↻ {cfg.tick||15}s</div></div>
-                <div className="sc"><div className="sc-lbl">INDIA VIX</div><div className={`sc-val ${vixVal>20?'dn':vixVal>15?'am':'up'}`}>{vixVal?.toFixed(2)||'—'}</div></div>
+                <div className="sc">
+                  <div className="sc-lbl">NIFTY · LIVE</div>
+                  <div className={`sc-val ${nChgPct>=0?'up':'dn'}`}>₹{fmt(nifty?.ltp,0)}</div>
+                  <div className={`sc-sub ${nChgPct>=0?'up':'dn'}`}>{nifty?.pts>=0?'+':''}{(nifty?.pts||0).toFixed(2)} pts</div>
+                  {/* <div className="sc-note">↻ {cfg.tick||15}s</div> */}
+                </div>
+                <div className="sc">
+                  <div className="sc-lbl">BANKNIFTY · LIVE</div>
+                  <div className={`sc-val ${(banknifty?.chgPct||0)>=0?'up':'dn'}`}>₹{fmt(banknifty?.ltp,0)}</div>
+                  <div className={`sc-sub ${banknifty?.chgPct>=0?'up':'dn'}`}>{banknifty?.pts>=0?'+':''}{(banknifty?.pts||0).toFixed(2)} pts</div>
+                  {/* <div className="sc-note">↻ {cfg.tick||15}s</div> */}
+                </div>
+                <div className="sc">
+                  <div className="sc-lbl">INDIA VIX</div>
+                  <div className={`sc-val ${vixVal>20?'dn':vixVal>15?'am':'up'}`}>{vixVal?.toFixed(2)||'—'}</div>
+                </div>
               </div>
               <div className="last-upd">
                 <div className="upd-dot" style={{background:'#7c3aed'}}/>
