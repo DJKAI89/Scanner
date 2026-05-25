@@ -119,7 +119,7 @@ export default function StocksPane() {
 
   // ── Continuous index price feed (always live, independent of scan) ──
   const { nifty, banknifty, vix: vixFeed } = useIndexFeed(
-    token, onTokenExpired, cfg.tick || 15, !!token
+    token, onTokenExpired, cfg.tick || 15, !!token  // cfg.tick controls refresh rate
   );
 
   // ── WebSocket live prices for top picks ──
@@ -405,13 +405,13 @@ export default function StocksPane() {
                   <div className="sc-lbl">NIFTY 50 · LIVE</div>
                   <div className={`sc-val ${nChgPct>=0?'up':'dn'}`}>₹{fmt(nifty?.ltp,0)}</div>
                   <div className={`sc-sub ${nChgPct>=0?'up':'dn'}`}>{nifty?.pts>=0?'+':''}{(nifty?.pts||0).toFixed(2)} pts</div>
-                  {/* <div className="sc-note">↻ {cfg.tick||15}s tick</div> */}
+                  
                 </div>
                 <div className="sc">
                   <div className="sc-lbl">BANK NIFTY · LIVE</div>
                   <div className={`sc-val ${(banknifty?.chgPct||0)>=0?'up':'dn'}`}>₹{fmt(banknifty?.ltp,0)}</div>
                   <div className={`sc-sub ${(banknifty?.chgPct||0)>=0?'up':'dn'}`}>{(banknifty?.pts||0)>=0?'+':''}{(banknifty?.pts||0).toFixed(2)} pts</div>
-                  {/* <div className="sc-note">↻ {cfg.tick||15}s tick</div> */}
+                  
                 </div>
                 <div className="sc">
                   <div className="sc-lbl">INDIA VIX</div>
@@ -476,13 +476,13 @@ export default function StocksPane() {
                   <div className="sc-lbl">NIFTY · LIVE</div>
                   <div className={`sc-val ${nChgPct>=0?'up':'dn'}`}>₹{fmt(nifty?.ltp,0)}</div>
                   <div className={`sc-sub ${nChgPct>=0?'up':'dn'}`}>{nifty?.pts>=0?'+':'-'}{(nifty?.pts||0).toFixed(2)} pts</div>
-                  {/* <div className="sc-note">↻ {cfg.tick||15}s</div> */}
+                  
                 </div>
                 <div className="sc">
                   <div className="sc-lbl">BANKNIFTY · LIVE</div>
                   <div className={`sc-val ${(banknifty?.chgPct||0)>=0?'up':'dn'}`}>₹{fmt(banknifty?.ltp,0)}</div>
                   <div className={`sc-sub ${banknifty?.chgPct>=0?'up':'dn'}`}>{banknifty?.pts>=0?'+':'-'}{(banknifty?.pts||0).toFixed(2)} pts</div>
-                  {/* <div className="sc-note">↻ {cfg.tick||15}s</div> */}
+                  
                 </div>
                 <div className="sc">
                   <div className="sc-lbl">INDIA VIX</div>
