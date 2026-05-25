@@ -1208,11 +1208,19 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       if (ivEnv === 'EXPANDING')   signals.push({ l: 'IV Expanding ↑',   s: 2 });
       if (ivEnv === 'CONTRACTING') signals.push({ l: 'IV Contracting ↓', s: 1 });
 
-      // SL/Target
+      // SL/Target — use smart IV+DTE+Delta model, clamped to cfg.optSL/optTgt %
       const entry    = ltp;
+      const _optSlPct  = (cfg?.optSL  || 25) / 100;  // fallback SL %
+      const _optTgtPct = (cfg?.optTgt || 50) / 100;  // fallback Target %
       const _opt     = calcSmartOptionSLTarget(entry, spot, sp, iv, delta, theta, expiry, vix);
       const _optAdj  = applyExpiryDayAdjustment(_opt, delta, iv, entry, spot, sp);
       let { sl, tgt, rr, method: slTgtMethod } = _optAdj;
+      // Apply cfg.optSL/optTgt as minimum bounds (don't go tighter than user setting)
+      const _minSL  = +(entry * (1 - _optSlPct)).toFixed(2);
+      const _minTgt = +(entry * (1 + _optTgtPct)).toFixed(2);
+      if (sl > _minSL)  sl  = _minSL;   // SL can't be tighter than optSL%
+      if (tgt < _minTgt) tgt = _minTgt; // Target can't be smaller than optTgt%
+      rr = (entry - sl) > 0 ? +((tgt - entry) / (entry - sl)).toFixed(2) : rr;
 
       // Confidence — full formula with marketCtx
       let confidence = calcOptConfidenceFull(delta, iv, oiChg, theta, signals, spot, sp, optType, niftyBullish, vix, maxPain, stockPCR, marketCtx);
