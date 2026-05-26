@@ -16,7 +16,6 @@ import {
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed.js';
-import { useIndexFeed } from '../hooks/useIndexFeed.js';
 
 function getChgPct(q) {
   if (!q) return 0;
@@ -117,6 +116,22 @@ export default function StocksPane() {
   const [boFilter, setBoFilter]     = useState('all');
   const scanInProgress = useRef(false);
 
+  // ── Index WebSocket — same as OptionsPane ──
+  const INDEX_FEED_KEYS = [
+    'NSE_INDEX|Nifty 50',
+    'NSE_INDEX|Nifty Bank',
+    'NSE_INDEX|India VIX',
+    'BSE_INDEX|SENSEX',
+  ];
+  const { lastPrices: liveIndexPrices } = useMarketFeed(
+    token, INDEX_FEED_KEYS, !!token, { pollFallback: false }
+  );
+
+  // Live index values derived from WebSocket (update on every tick)
+  const niftyLive     = liveIndexPrices['NSE_INDEX|Nifty 50'];
+  const bankniftyLive = liveIndexPrices['NSE_INDEX|Nifty Bank'];
+  const vixLive       = liveIndexPrices['NSE_INDEX|India VIX'];
+
   // ── Continuous index price feed (always live, independent of scan) ──
   const { nifty, banknifty, vix: vixFeed } = useIndexFeed(
     token, onTokenExpired, cfg.tick || 15, !!token  // cfg.tick controls refresh rate
@@ -163,14 +178,20 @@ export default function StocksPane() {
     setPickProgress('Step 1: Fetching index data...');
     try {
       // Live index values
-      const nLtp    = nifty?.ltp    || 0;
-      const nChgPct = nifty?.chgPct || 0;
-      const vixVal  = vixFeed?.ltp  || 0;
-      const nBull   = nChgPct > -0.3;
+      const nLtp    = liveIndexPrices['NSE_INDEX|Nifty 50']?.ltp || scanStats?.niftyLtp || 0    || 0;
+      const nChgPct = liveIndexPrices['NSE_INDEX|Nifty 50']?.chgPct || 0 || 0;
+      const vixVal  = liveIndexPrices['NSE_INDEX|India VIX']?.ltp || scanStats?.vixLtp || 0  || 0;
+      const _nLtp2  = liveIndexPrices['NSE_INDEX|Nifty 50']?.ltp || nLtp || 0;
+      const _nChg2  = liveIndexPrices['NSE_INDEX|Nifty 50']?.chgPct || nChgPct || 0;
+      const _vix2   = liveIndexPrices['NSE_INDEX|India VIX']?.ltp   || vixVal || 0;
+      const nBull   = (_nChg2 || nChgPct) > -0.3;
+      // Compute vixSc and pcrSc exactly as HTML does
+      const _vixInterp = interpVIX(_vix2 || vixVal);
+      const vixSc = _vixInterp.sc || 50;
 
       // PCR from Nifty options chain
       setPickProgress('Step 2: Fetching PCR...');
-      let pcr = 1, pcrTxt = 'Neutral';
+      let pcr = 1, pcrTxt = 'Neutral', pcrSc = 50;
       try {
         const expRes = await fetch(
           `https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent('NSE_INDEX|Nifty 50')}`,
@@ -186,8 +207,9 @@ export default function StocksPane() {
         }
       } catch(e) { lg('PCR skipped: '+e.message,'w'); }
 
-      const sent   = nChgPct > 0.5 ? 'BULLISH' : nChgPct < -0.5 ? 'BEARISH' : 'NEUTRAL';
-      const sentSc = Math.round(Math.min(Math.max((nChgPct+3)/6*10, 1), 10));
+      const _nc    = _nChg2 || nChgPct;
+      const sent   = _nc > 0.5 ? 'BULLISH' : _nc < -0.5 ? 'BEARISH' : 'NEUTRAL';
+      const sentSc = Math.round(Math.min(Math.max((_nc+3)/6*10, 1), 10));
 
       // Stock quotes — batches of 50
       setPickProgress('Step 3: Loading stock quotes...');
@@ -229,20 +251,27 @@ export default function StocksPane() {
           const macdBull=macd.bull, volOk=vol>avgVol20*(cfg.vol||1.2);
           const nearSupp=isNearSupport(ltp,sr,Math.min(...candles.slice(0,5).map(c=>+c[3])));
           const aboveVWAP=vwap>0?ltp>=vwap:null;
-          const sector=getSector(inst.s);
           const numInds=countIndicatorsEx(rsi,macdBull,a50,a200,volOk,nearSupp,patterns,'BUY',macd,bb,adx,rsiDiv);
           const initRec=numInds>=4?'BUY':numInds>=3?'MODERATE':numInds>=2?'WATCH':'AVOID';
-          const conf=calcConfidence(null,0,0,nBull,0,vol,avgVol20,patterns,initRec,numInds);
+          const sec   = getSector(inst.s);
+          const secSc = secMap[sec] ? Math.round(secMap[sec].g/secMap[sec].c*100) : 50;
+          let conf    = calcConfidence(null,vixSc,pcrSc,nBull,secSc,vol,avgVol20,patterns,initRec,numInds);
+          // MACD enhancements — exact HTML port
+          if(macd){ if(macd.bullCross) conf=Math.min(99,conf+6); if(macd.histRising&&macd.bullish) conf=Math.min(99,conf+3); if(macd.bearCross) conf=Math.max(1,conf-8); }
+          // BB enhancements
+          if(bb){ if(bb.squeeze) conf=Math.min(99,conf+5); if(bb.nearLowerBand) conf=Math.min(99,conf+4); if(bb.percentB>1.0) conf=Math.max(1,conf-5); }
+          // ADX enhancements
+          if(adx){ if(adx.bullTrend) conf=Math.min(99,conf+5); if(adx.bearTrend) conf=Math.max(1,conf-6); if(!adx.trending&&!adx.weakTrend) conf=Math.max(1,conf-3); }
           if (conf<(cfg.minStockConf||50)) return;
-          const {sl,target:tgtMod,targets}=autoSLTarget(ltp,high,low,atr,sr,vixVal,rsi);
+          const {sl,target:tgtMod,targets}=autoSLTarget(ltp,high,low,atr,sr,_vix2||vixVal,rsi);
           const pot=calcPotential(ltp,tgtMod,sl,numInds,initRec);
-          const risk=calcRisk(ltp,sl,tgtMod,atr,vixVal);
+          const risk=calcRisk(ltp,sl,tgtMod,atr,_vix2||vixVal);
           if (pot.base<(cfg.pot||3)||pot.rr<(cfg.rr||1.2)||risk>(cfg.risk||55)) return;
           const rec=getRec(conf,pot.base,risk,pot.rr); if(rec==='AVOID') return;
           const entryTrigger=calcEntryTrigger(ltp,high,sr,atr,rec,vwap,chgPct);
           const reversal=detectReversal(ltp,rsi,patterns,sr,vixVal,pcr,nBull,chgPct,atr,high,low);
-          if (!secMap[sector]) secMap[sector]={g:0,c:0};
-          secMap[sector].g+=rec==='BUY'||rec==='STRONG BUY'?1:0; secMap[sector].c++;
+          if (!secMap[sec]) secMap[sec]={g:0,c:0};
+          secMap[sec].g+=rec==='BUY'||rec==='STRONG BUY'?1:0; secMap[sec].c++;
           results.push({
             s:inst.s, n:inst.n, key:inst.key, sec:inst.sec||sector,
             ltp, chgPct, rsi, conf, rec,
@@ -262,7 +291,7 @@ export default function StocksPane() {
       results.sort((a,b)=>b.conf-a.conf);
       const topSec=Object.entries(secMap).sort((a,b)=>(b[1].g/b[1].c)-(a[1].g/a[1].c))[0]?.[0]||'Mixed';
       setPicks(results);
-      setScanStats({pcr,pcrTxt,sent,sentSc,topSec,cnt:results.length});
+      setScanStats({pcr,pcrTxt,sent,sentSc,topSec,cnt:results.length,niftyLtp:_nLtp2,vixLtp:_vix2});
       updateBadge('stocks',String(results.length));
       setPicksTime('Updated: '+getIST());
       setStatusDot('live'); setStatusTxt('Live');
@@ -371,8 +400,8 @@ export default function StocksPane() {
     return true;
   });
 
-  const vixVal    = vixFeed?.ltp || 0;
-  const nChgPct   = nifty?.chgPct || 0;
+  const vixVal    = liveIndexPrices['NSE_INDEX|India VIX']?.ltp || scanStats?.vixLtp || 0 || 0;
+  const nChgPct   = liveIndexPrices['NSE_INDEX|Nifty 50']?.chgPct || 0 || 0;
   const sentColor = {'BULLISH':'#16a34a','BEARISH':'#dc2626','NEUTRAL':'#d97706'}[scanStats?.sent||'NEUTRAL'];
 
   return (
@@ -403,14 +432,14 @@ export default function StocksPane() {
               <div className="stats-g">
                 <div className="sc">
                   <div className="sc-lbl">NIFTY 50 · LIVE</div>
-                  <div className={`sc-val ${nChgPct>=0?'up':'dn'}`}>₹{fmt(nifty?.ltp,0)}</div>
-                  <div className={`sc-sub ${nChgPct>=0?'up':'dn'}`}>{nifty?.pts>=0?'+':''}{(nifty?.pts||0).toFixed(2)} pts</div>
+                  <div className={`sc-val ${nChgPct>=0?'up':'dn'}`}>₹{fmt(liveIndexPrices['NSE_INDEX|Nifty 50']?.ltp || scanStats?.niftyLtp || 0,0)}</div>
+                  <div className={`sc-sub ${nChgPct>=0?'up':'dn'}`}>{(liveIndexPrices['NSE_INDEX|Nifty 50']?.changeAmt || 0)>=0?'+':''}{((liveIndexPrices['NSE_INDEX|Nifty 50']?.changeAmt || 0)||0).toFixed(2)} pts</div>
                   
                 </div>
                 <div className="sc">
                   <div className="sc-lbl">BANK NIFTY · LIVE</div>
-                  <div className={`sc-val ${(banknifty?.chgPct||0)>=0?'up':'dn'}`}>₹{fmt(banknifty?.ltp,0)}</div>
-                  <div className={`sc-sub ${(banknifty?.chgPct||0)>=0?'up':'dn'}`}>{(banknifty?.pts||0)>=0?'+':''}{(banknifty?.pts||0).toFixed(2)} pts</div>
+                  <div className={`sc-val ${(bankliveIndexPrices['NSE_INDEX|Nifty 50']?.chgPct || 0||0)>=0?'up':'dn'}`}>₹{fmt(bankliveIndexPrices['NSE_INDEX|Nifty 50']?.ltp || scanStats?.niftyLtp || 0,0)}</div>
+                  <div className={`sc-sub ${(bankliveIndexPrices['NSE_INDEX|Nifty 50']?.chgPct || 0||0)>=0?'up':'dn'}`}>{(bank(liveIndexPrices['NSE_INDEX|Nifty 50']?.changeAmt || 0)||0)>=0?'+':''}{(bank(liveIndexPrices['NSE_INDEX|Nifty 50']?.changeAmt || 0)||0).toFixed(2)} pts</div>
                   
                 </div>
                 <div className="sc">
@@ -474,14 +503,14 @@ export default function StocksPane() {
               <div className="stats-g" style={{marginBottom:10}}>
                 <div className="sc">
                   <div className="sc-lbl">NIFTY · LIVE</div>
-                  <div className={`sc-val ${nChgPct>=0?'up':'dn'}`}>₹{fmt(nifty?.ltp,0)}</div>
-                  <div className={`sc-sub ${nChgPct>=0?'up':'dn'}`}>{nifty?.pts>=0?'+':'-'}{(nifty?.pts||0).toFixed(2)} pts</div>
+                  <div className={`sc-val ${nChgPct>=0?'up':'dn'}`}>₹{fmt(liveIndexPrices['NSE_INDEX|Nifty 50']?.ltp || scanStats?.niftyLtp || 0,0)}</div>
+                  <div className={`sc-sub ${nChgPct>=0?'up':'dn'}`}>{(liveIndexPrices['NSE_INDEX|Nifty 50']?.changeAmt || 0)>=0?'+':'-'}{((liveIndexPrices['NSE_INDEX|Nifty 50']?.changeAmt || 0)||0).toFixed(2)} pts</div>
                   
                 </div>
                 <div className="sc">
                   <div className="sc-lbl">BANKNIFTY · LIVE</div>
-                  <div className={`sc-val ${(banknifty?.chgPct||0)>=0?'up':'dn'}`}>₹{fmt(banknifty?.ltp,0)}</div>
-                  <div className={`sc-sub ${banknifty?.chgPct>=0?'up':'dn'}`}>{banknifty?.pts>=0?'+':'-'}{(banknifty?.pts||0).toFixed(2)} pts</div>
+                  <div className={`sc-val ${(bankliveIndexPrices['NSE_INDEX|Nifty 50']?.chgPct || 0||0)>=0?'up':'dn'}`}>₹{fmt(bankliveIndexPrices['NSE_INDEX|Nifty 50']?.ltp || scanStats?.niftyLtp || 0,0)}</div>
+                  <div className={`sc-sub ${bankliveIndexPrices['NSE_INDEX|Nifty 50']?.chgPct || 0>=0?'up':'dn'}`}>{bank(liveIndexPrices['NSE_INDEX|Nifty 50']?.changeAmt || 0)>=0?'+':'-'}{(bank(liveIndexPrices['NSE_INDEX|Nifty 50']?.changeAmt || 0)||0).toFixed(2)} pts</div>
                   
                 </div>
                 <div className="sc">
