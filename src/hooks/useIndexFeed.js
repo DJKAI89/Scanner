@@ -1,63 +1,65 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { fetchQ } from '../services/api';
 
-// Index instrument keys
+// Index keys — Upstox REST API (NSE_INDEX not reliably supported on WS)
 const INDEX_KEYS = [
   'NSE_INDEX|Nifty 50',
   'NSE_INDEX|Nifty Bank',
   'NSE_INDEX|India VIX',
   'BSE_INDEX|SENSEX',
+  'NSE_INDEX|Nifty Fin Service',
 ];
 
-function getChgPct(q) {
-  if (!q) return 0;
-  const ltp = q.last_price || 0;
-  if (q.net_change != null && ltp > 0) return (q.net_change / ltp) * 100;
+function parseQ(q) {
+  if (!q?.last_price) return null;
+  const ltp  = q.last_price;
   const prev = q.ohlc?.close || ltp;
-  return prev > 0 ? (ltp - prev) / prev * 100 : 0;
+  return {
+    ltp,
+    chgPct:  prev > 0 ? +((ltp - prev) / prev * 100).toFixed(2) : 0,
+    pts:     prev > 0 ? +(ltp - prev).toFixed(2) : 0,
+    volume:  q.volume || 0,
+  };
 }
 
-// ── useIndexFeed — continuously refreshes index prices ────────
-// Uses WebSocket via useMarketFeed if available, otherwise REST polling
-// tickSecs: refresh interval in seconds (default from cfg.tick = 15)
-export function useIndexFeed(token, onTokenExpired, tickSecs = 15, enabled = true) {
+// Poll every 5 seconds — matches HTML behaviour
+const INTERVAL_MS = 5000;
+
+export function useIndexFeed(token, onTokenExpired, _tickSecs, enabled = true) {
   const [prices, setPrices]   = useState({});
   const [loading, setLoading] = useState(false);
   const timerRef              = useRef(null);
+  const tokenRef              = useRef(token);
+  tokenRef.current = token;
 
   const refresh = useCallback(async () => {
-    if (!token || !enabled) return;
+    if (!tokenRef.current || !enabled) return;
     try {
-      const d = await fetchQ(INDEX_KEYS.join(','), token, onTokenExpired);
-      const next = {};
-      for (const [key, q] of Object.entries(d)) {
-        if (!q?.last_price) continue;
-        const chgPct = getChgPct(q);
-        next[key] = {
-          ltp:    q.last_price,
-          chgPct,
-          pts:    q.net_change ?? (chgPct / 100 * q.last_price),
-          volume: q.volume || 0,
-        };
-      }
-      setPrices(next);
-    } catch (e) { /* silent — show stale data */ }
-  }, [token, onTokenExpired, enabled]);
+      const d = await fetchQ(INDEX_KEYS.join(','), tokenRef.current, onTokenExpired);
+      setPrices(prev => {
+        const next = { ...prev };
+        for (const [key, q] of Object.entries(d)) {
+          const p = parseQ(q);
+          if (p) next[key] = p;
+        }
+        return next;
+      });
+    } catch (e) { /* silent — keep stale prices */ }
+  }, [enabled, onTokenExpired]);
 
   useEffect(() => {
     if (!enabled || !token) return;
     setLoading(true);
     refresh().finally(() => setLoading(false));
-
-    // Set up polling interval
-    timerRef.current = setInterval(refresh, tickSecs * 1000);
+    timerRef.current = setInterval(refresh, INTERVAL_MS);
     return () => clearInterval(timerRef.current);
-  }, [token, enabled, tickSecs, refresh]);
+  }, [token, enabled, refresh]);
 
-  const nifty     = prices['NSE_INDEX|Nifty 50']   || null;
-  const banknifty = prices['NSE_INDEX|Nifty Bank']  || null;
-  const vix       = prices['NSE_INDEX|India VIX']   || null;
-  const sensex    = prices['BSE_INDEX|SENSEX']       || null;
+  const nifty     = prices['NSE_INDEX|Nifty 50']          || null;
+  const banknifty = prices['NSE_INDEX|Nifty Bank']         || null;
+  const vix       = prices['NSE_INDEX|India VIX']          || null;
+  const sensex    = prices['BSE_INDEX|SENSEX']             || null;
+  const finnifty  = prices['NSE_INDEX|Nifty Fin Service']  || null;
 
-  return { prices, nifty, banknifty, vix, sensex, loading, refresh };
+  return { prices, nifty, banknifty, vix, sensex, finnifty, loading };
 }
