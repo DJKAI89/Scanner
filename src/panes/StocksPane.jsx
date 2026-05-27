@@ -125,8 +125,10 @@ export default function StocksPane() {
   // ── Derive live index values (update on every WS tick) ──
   const niftyLTP      = liveIndexPrices['NSE_INDEX|Nifty 50']?.ltp     || 0;
   const niftyChgPct   = liveIndexPrices['NSE_INDEX|Nifty 50']?.chgPct  || 0;
+  const niftyPts      = niftyLTP > 0 ? +(niftyChgPct / 100 * niftyLTP).toFixed(2) : 0;
   const bnkLTP        = liveIndexPrices['NSE_INDEX|Nifty Bank']?.ltp    || 0;
   const bnkChgPct     = liveIndexPrices['NSE_INDEX|Nifty Bank']?.chgPct || 0;
+  const bnkPts        = bnkLTP > 0 ? +(bnkChgPct / 100 * bnkLTP).toFixed(2) : 0;
   const vixLTP        = liveIndexPrices['NSE_INDEX|India VIX']?.ltp     || 0;
 
   // ── Stock picks WebSocket ──
@@ -165,8 +167,8 @@ export default function StocksPane() {
     if (!stocks?.length) { setPicksError('⚠ stocks.json not loaded — configure GitHub in ⚙ Settings first'); return; }
     scanInProgress.current = true;
     setScanning(true); setStatusDot('scan'); setStatusTxt('Scanning...');
-    setPicksLoading(true); setPicksError(''); setPicks([]);
-    setPickProgress('Step 1: Fetching index data...');
+    setPicksLoading(true); setPicksError('');
+    setPickProgress('');
     try {
       // Use live WS prices; if not yet populated, fetch via REST
       let nLtp    = niftyLTP;
@@ -410,7 +412,8 @@ export default function StocksPane() {
         <div>
           {!marketStatus.open&&<MarketClosedBanner msg={marketStatus.msg||'🔔 NSE Market Closed'}/>}
           {picksError&&<ErrorBanner title="⚠ Scan Error" message={picksError} onRetry={runPicksScan}/>}
-          {picksLoading?<Spinner label="Professional analysis..." progress={pickProgress} sub="RSI · EMA · MACD · ATR · BB · ADX · RSI Div · Entry Trigger · Reversal"/>:(
+          {picksLoading&&<div style={{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:8,padding:'10px 14px',marginBottom:10}}><div style={{fontSize:11,fontWeight:700,color:'#1d4ed8',marginBottom:4}}>⏳ Scanning... {pickProgress}</div><div style={{height:3,background:'#e2e8f0',borderRadius:3}}><div style={{height:'100%',background:'#3b82f6',borderRadius:3,width:'60%',animation:'pulse 1.5s ease-in-out infinite'}}/></div></div>}
+          {!picksLoading||picks.length>0?(
             <div>
               {marketStatus.open&&<TimeOfDayBanner niftyChgPct={niftyChgPct} vix={vixLTP}/>}
 
@@ -419,12 +422,12 @@ export default function StocksPane() {
                 <div className="sc">
                   <div className="sc-lbl">NIFTY 50 {idxConnected?'⚡':''}</div>
                   <div className={`sc-val ${niftyChgPct>=0?'up':'dn'}`}>{niftyLTP?`₹${fmt(niftyLTP,0)}`:'—'}</div>
-                  <div className={`sc-sub ${niftyChgPct>=0?'up':'dn'}`}>{fmtC(niftyChgPct)}</div>
+                  <div className={`sc-sub ${niftyChgPct>=0?'up':'dn'}`}>{niftyPts>=0?'+':''}{niftyPts.toFixed(2)} pts</div>
                 </div>
                 <div className="sc">
                   <div className="sc-lbl">BANK NIFTY {idxConnected?'⚡':''}</div>
                   <div className={`sc-val ${bnkChgPct>=0?'up':'dn'}`}>{bnkLTP?`₹${fmt(bnkLTP,0)}`:'—'}</div>
-                  <div className={`sc-sub ${bnkChgPct>=0?'up':'dn'}`}>{fmtC(bnkChgPct)}</div>
+                  <div className={`sc-sub ${bnkChgPct>=0?'up':'dn'}`}>{bnkPts>=0?'+':''}{bnkPts.toFixed(2)} pts</div>
                 </div>
                 <div className="sc">
                   <div className="sc-lbl">INDIA VIX</div>
@@ -470,7 +473,7 @@ export default function StocksPane() {
               }
               <div className="disc">⚠ Not SEBI advice. Always DYODD.</div>
             </div>
-          )}
+          ):null}
         </div>
       )}
 
@@ -482,8 +485,8 @@ export default function StocksPane() {
             <div>
               {/* Live index cards — same WebSocket */}
               <div className="stats-g" style={{marginBottom:10}}>
-                <div className="sc"><div className="sc-lbl">NIFTY {idxConnected?'⚡':''}</div><div className={`sc-val ${niftyChgPct>=0?'up':'dn'}`}>{niftyLTP?`₹${fmt(niftyLTP,0)}`:'—'}</div></div>
-                <div className="sc"><div className="sc-lbl">BANKNIFTY {idxConnected?'⚡':''}</div><div className={`sc-val ${bnkChgPct>=0?'up':'dn'}`}>{bnkLTP?`₹${fmt(bnkLTP,0)}`:'—'}</div></div>
+                <div className="sc"><div className="sc-lbl">NIFTY {idxConnected?'⚡':''}</div><div className={`sc-val ${niftyChgPct>=0?'up':'dn'}`}>{niftyLTP?`₹${fmt(niftyLTP,0)}`:'—'}</div><div className={`sc-sub ${niftyPts>=0?'up':'dn'}`}>{niftyPts>=0?'+':''}{niftyPts.toFixed(2)} pts</div></div>
+                <div className="sc"><div className="sc-lbl">BANKNIFTY {idxConnected?'⚡':''}</div><div className={`sc-val ${bnkChgPct>=0?'up':'dn'}`}>{bnkLTP?`₹${fmt(bnkLTP,0)}`:'—'}</div><div className={`sc-sub ${bnkPts>=0?'up':'dn'}`}>{bnkPts>=0?'+':''}{bnkPts.toFixed(2)} pts</div></div>
                 <div className="sc"><div className="sc-lbl">INDIA VIX</div><div className={`sc-val ${vixLTP>20?'dn':vixLTP>15?'am':'up'}`}>{vixLTP?vixLTP.toFixed(2):'—'}</div></div>
               </div>
               <div className="last-upd">
