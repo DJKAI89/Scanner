@@ -32,10 +32,10 @@ export function getChgPct(q) {
 }
 
 export function interpVIX(vix) {
-  if (!vix) return { txt: 'N/A', cls: 'bl' };
-  if (vix < 12)  return { txt: 'Very Low 😴',  cls: 'bl' };
-  if (vix < 16)  return { txt: 'Low 🟢',        cls: 'up' };
-  if (vix < 20)  return { txt: 'Moderate 🟡',   cls: 'am' };
-  if (vix < 24)  return { txt: 'High 🔴',        cls: 'dn' };
-  return           { txt: 'Extreme 💀',           cls: 'dn' };
+  if (!vix) return { txt: 'N/A', cls: 'bl', sc: 50 };
+  if (vix < 12)  return { txt: 'Very Low 😴',  cls: 'bl', sc: 85 };
+  if (vix < 16)  return { txt: 'Low 🟢',        cls: 'up', sc: 80 };
+  if (vix < 20)  return { txt: 'Moderate 🟡',   cls: 'am', sc: 60 };
+  if (vix < 24)  return { txt: 'High 🔴',        cls: 'dn', sc: 35 };
+  return           { txt: 'Extreme 💀',           cls: 'dn', sc: 15 };
 }
