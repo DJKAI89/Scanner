@@ -443,14 +443,17 @@ export function calcConfidence(inds, vixSc, pcrSc, niftyBull, secSc, vol, avgVol
     ? numIndsOverride
     : (inds ? inds.filter(Boolean).length : 0);
 
-  // Component 1: Signal Strength (35%)
+  // Component 1: Signal Strength (35%) — exact HTML port
   let sigScore = numInds >= 5 ? 90 : numInds === 4 ? 75 : numInds === 3 ? 60 : numInds === 2 ? 45 : 30;
   if      (rec === 'STRONG BUY') sigScore = Math.min(100, sigScore + 10);
   else if (rec === 'BUY')        sigScore = Math.min(100, sigScore + 5);
   else if (rec === 'AVOID')      sigScore = Math.max(0,   sigScore - 10);
 
-  // Component 2: Market Context (25%)
-  const mktScore = Math.min(100, (niftyBull ? 60 : 25) + (secSc || 50) * 0.4);
+  // Component 2: Market Context (25%) — exact HTML port with vixSc + pcrSc + secSc
+  const vixAdj = (vixSc||50) > 80 ? 20 : (vixSc||50) > 60 ? 10 : (vixSc||50) > 40 ? 0 : -10;
+  const pcrAdj = (pcrSc||50) > 70 ? 15 : (pcrSc||50) > 50 ?  5 : 0;
+  const secAdj = (secSc||50) > 70 ? 10 : (secSc||50) > 50 ?  5 : (secSc||50) > 30 ? 0 : -5;
+  const mktScore = Math.min(100, (niftyBull ? 60 : 25) + vixAdj + pcrAdj + secAdj);
 
   // Component 3: Volume Profile (20%)
   const volRatio = avgVol > 0 ? vol / avgVol : 1;
