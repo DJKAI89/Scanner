@@ -200,7 +200,7 @@ function BoCard({ r, rank }) {
   }
   if (r.st) {
     const sc=r.st.trend==='UP'?'#1e40af':'#6b21a8', sb=r.st.trend==='UP'?'#eff6ff':'#faf5ff', sbr=r.st.trend==='UP'?'#bfdbfe':'#ddd6fe';
-    pill(r.st.crossed?(r.st.trend==='UP'?'📈 ST CROSSED UP':'📉 ST CROSSED DOWN'):(r.st.trend==='UP'?'📈 ST UP':'📉 ST DOWN'),sb,sc,sbr);
+    pill(r.st.crossed?(r.st.trend==='UP'?'📈 ST CROSSED UP':'📉 ST CROSSED DOWN'):(r.st.trend==='UP'?`📈 ST UP ₹${fmtV(r.st.value)}`:`📉 ST DOWN ₹${fmtV(r.st.value)}`),sb,sc,sbr);
   }
   if (r.vol) {
     if (r.vol.strong)         pill(`🔥 VOL ${r.vol.ratio}× AVG`,'#fdf4ff','#7e22ce','#e9d5ff');
@@ -209,9 +209,9 @@ function BoCard({ r, rank }) {
   }
   if (r.wk52) {
     if (r.wk52.breakHigh)       pill('🏆 52WK HIGH BREAK','#fef9c3','#854d0e','#fde68a');
-    else if (r.wk52.atHigh)     pill('📍 AT 52WK HIGH','#fef9c3','#854d0e','#fde68a');
+    else if (r.wk52.atHigh)     pill(`📍 AT 52WK HIGH ₹${fmtV(r.wk52.hi52)}`,'#fef9c3','#854d0e','#fde68a');
     if (r.wk52.breakLow)        pill('⚠ 52WK LOW BREAK','#fef2f2','#991b1b','#fecaca');
-    else if (r.wk52.atLow)      pill('📍 AT 52WK LOW','#fff7ed','#9a3412','#fed7aa');
+    else if (r.wk52.atLow)      pill(`📍 AT 52WK LOW ₹${fmtV(r.wk52.lo52)}`,'#fff7ed','#9a3412','#fed7aa');
   }
   if (r.gap) {
     if (r.gap.bigGapUp)        pill(`⬆ GAP UP +${r.gap.gapPct}%`,'#dcfce7','#15803d','#86efac');
@@ -227,41 +227,43 @@ function BoCard({ r, rank }) {
   else if (r.mom?.contra)    pill('⚡ MOMENTUM CONTRA','#fff7ed','#9a3412','#fed7aa');
   if (r.wick?.bearRejected)  pill('🕯 WICK REJECTION ↑','#fef2f2','#991b1b','#fecaca');
   else if (r.wick?.bullStrong) pill(`🕯 STRONG CLOSE ${Math.round((r.wick.closePos||0)*100)}%`,'#f0fdf4','#15803d','#bbf7d0');
-  if (r.adx?.strong)    pill(`💪 ADX ${r.adx.adx} STRONG`,'#ecfdf5','#065f46','#a7f3d0');
-  else if (r.adx?.choppy) pill(`〰 ADX ${r.adx.adx} CHOPPY`,'#f8fafc','#94a3b8','#e2e8f0');
+  if (r.adx?.strong)                           pill(`💪 ADX ${r.adx.adx} STRONG`,'#ecfdf5','#065f46','#a7f3d0');
+  else if (r.adx&&!r.adx.trending&&!r.adx.weakTrend) pill(`〰 ADX ${r.adx.adx} CHOPPY`,'#f8fafc','#94a3b8','#e2e8f0');
   if (r.rs?.outperforming&&r.rs.strongly) pill(`🚀 RS +${r.rs.rs}% vs NIFTY`,'#ecfdf5','#065f46','#a7f3d0');
   else if (r.rs?.underperforming&&r.rs.strongly) pill(`🐢 RS ${r.rs.rs}% vs NIFTY`,'#fef2f2','#991b1b','#fecaca');
   if (r.wMTF?.confirms) pill('📅 WEEKLY CONFIRMS','#f5f3ff','#5b21b6','#ddd6fe');
   if (r.phase==='opening') pill('⏰ OPENING HOUR','#fffbeb','#92400e','#fde68a');
 
+  const emaGapPct = r.ema ? ((r.ema.ema50 - (r.ema.ema200||0)) / (r.ema.ema200||1) * 100).toFixed(1) : 0;
   const why = [];
   if (r.ema) {
     if (r.ema.goldenCross)       why.push(`EMA50(₹${fmtV(r.ema.ema50)}) crossed above EMA200(₹${fmtV(r.ema.ema200)}) — institutional uptrend`);
     else if (r.ema.deathCross)   why.push(`EMA50(₹${fmtV(r.ema.ema50)}) crossed below EMA200(₹${fmtV(r.ema.ema200)}) — major downtrend`);
-    else if (r.ema.nearCross)    why.push(`EMA50 vs EMA200 gap only ${Math.abs(r.ema.gap||0)}% — cross imminent`);
-    else                          why.push(`EMA50(₹${fmtV(r.ema.ema50)}) ${r.ema.uptrend?'above':'below'} EMA200(₹${fmtV(r.ema.ema200)}) — ${(r.ema.gap||0)>0?'uptrend':'downtrend'}`);
+    else if (r.ema.nearCross)    why.push(`EMA50 vs EMA200 gap only ${Math.abs(emaGapPct)}% — cross imminent`);
+    else                          why.push(`EMA50(₹${fmtV(r.ema.ema50)}) ${r.ema.uptrend?'above':'below'} EMA200(₹${fmtV(r.ema.ema200)}) — ${(emaGapPct)>0?'uptrend':'downtrend'} (gap ${Math.abs(emaGapPct)}%)`);
   }
   if (r.pdhl?.bullBreakout)      why.push(`Price broke above PDH ₹${fmtV(r.pdhl.pdh)} (+${r.pdhl.pdHDist}%)`);
   else if (r.pdhl?.bearBreakout) why.push(`Price broke below PDL ₹${fmtV(r.pdhl.pdl)} (${r.pdhl.pdLDist}%)`);
   else if (r.pdhl?.nearPDH)      why.push(`Approaching PDH ₹${fmtV(r.pdhl.pdh)} — watching for breakout`);
   else if (r.pdhl?.nearPDL)      why.push(`Near PDL ₹${fmtV(r.pdhl.pdl)} — watch for breakdown`);
-  if (r.st?.crossed) why.push(`Supertrend(7,3) flipped ${r.st.trend==='UP'?'bullish':'bearish'} at ₹${fmtV(r.st.supertrend)} — momentum shift`);
-  else if (r.st)     why.push(`Supertrend(7,3) ${r.st.trend==='UP'?'bullish':'bearish'} at ₹${fmtV(r.st.supertrend)}`);
-  if (r.vol?.strong)         why.push(`🔥 Volume surge ${r.vol.ratio}× avg — institutional activity`);
+  if (r.st?.crossed) why.push(`Supertrend(7,3) flipped ${r.st.trend==='UP'?'bullish':'bearish'} at ₹${fmtV(r.st.value)} — momentum shift`);
+  else if (r.st)     why.push(`Supertrend(7,3) ${r.st.trend==='UP'?'bullish':'bearish'} at ₹${fmtV(r.st.value)} (${r.st.dist>0?'+':''}${r.st.dist||0}% from line)`);
+  if (r.vol?.strong)         why.push(`🔥 Volume surge ${r.vol.ratio}× avg (${((r.vol.todayVol||0)/1e5).toFixed(1)}L today vs ${((r.vol.avgVol||0)/1e5).toFixed(1)}L avg) — institutional activity`);
   else if (r.vol?.confirmed) why.push(`Volume ${r.vol.ratio}× 20-day avg — breakout has conviction`);
   else if (r.vol?.dry)       why.push(`⚠ Low volume (${r.vol.ratio}× avg) — treat with caution`);
-  if (r.wk52?.breakHigh)    why.push(`🏆 Breaking 52-week high ₹${fmtV(r.wk52.high52)} — strong institutional signal`);
-  else if (r.wk52?.atHigh)  why.push(`Price at 52-week high ₹${fmtV(r.wk52.high52)} — resistance test`);
-  if (r.wk52?.breakLow)     why.push(`Breaking 52-week low ₹${fmtV(r.wk52.low52)} — severe weakness`);
+  if (r.wk52?.breakHigh)    why.push(`🏆 Breaking 52-week high ₹${fmtV(r.wk52.hi52)} — strong institutional signal`);
+  else if (r.wk52?.atHigh)  why.push(`Price at 52-week high ₹${fmtV(r.wk52.hi52)} — resistance test`);
+  if (r.wk52?.breakLow)     why.push(`Breaking 52-week low ₹${fmtV(r.wk52.lo52)} — severe weakness`);
+  else if (r.wk52&&!r.wk52.breakHigh&&!r.wk52.atHigh&&r.wk52.hi52) why.push(`In ${r.wk52.rangePos||0}% of 52wk range (H:₹${fmtV(r.wk52.hi52)} L:₹${fmtV(r.wk52.lo52)})`);
   if (r.gap?.gapUp||r.gap?.gapDown) why.push(`${r.gap.gapUp?'Gap up':'Gap down'} ${Math.abs(r.gap.gapPct||0)}% — prev close ₹${fmtV(r.gap.prevClose)}`);
-  if (r.nr7?.isNR7) why.push('NR7: narrowest range in 7 days — coiled spring');
+  if (r.nr7?.isNR7) why.push(`NR7: narrowest range in 7 days (${(r.nr7.range||0).toFixed(1)} vs ${(r.nr7.avgRange||0).toFixed(1)} avg) — coiled spring`);
   if (r.bb?.squeeze) why.push(`Bollinger ${r.bb.extremeSqueeze?'extreme ':''}squeeze — volatile move imminent`);
   if (r.mom?.bullConf||r.mom?.bearConf) why.push(`RSI+MACD ${r.mom?.macdBull?'bullish':'bearish'} — momentum confirms direction`);
   else if (r.mom?.contra) why.push('⚠ Momentum diverges from price — not confirmed');
   if (r.wick?.bearRejected) why.push('⚠ Upper wick rejection — buying pressure failed');
   else if (r.wick?.bullStrong) why.push('Candle closed in top of range — strong conviction close');
-  if (r.adx?.strong)   why.push(`ADX ${r.adx.adx} — strong trending market, breakout has legs`);
-  else if (r.adx?.choppy) why.push(`⚠ ADX ${r.adx.adx} — choppy, breakout may fail`);
+  if (r.adx?.strong)                             why.push(`ADX ${r.adx.adx} — strong trending market, breakout has legs`);
+  else if (r.adx&&!r.adx.trending&&!r.adx.weakTrend) why.push(`⚠ ADX ${r.adx.adx} — choppy, breakout may fail`);
   if (r.rs?.outperforming) why.push(`Outperforming Nifty by ${r.rs.rs}% — institutional accumulation`);
   else if (r.rs?.underperforming) why.push(`Underperforming Nifty by ${Math.abs(r.rs.rs||0)}% — relative weakness`);
   if (r.wMTF?.confirms) why.push(`Weekly candle ${r.wMTF.wBullish?'bullish':'bearish'} — higher timeframe aligned`);
@@ -644,13 +646,13 @@ export default function StocksPane() {
         const trade=boSLTarget(ltp,t.atr,isBull,pdhl?.pdh||0,pdhl?.pdl||0,ema?.ema200||0);
         const boVol=q.volume||0;
         results.push({
-          ...item, ltp, chgPct:getChgPct(q), ema, pdhl, st, score, dir, wk52, mom, nr7, bb, gap, adx, rs, wMTF, wick,
+          ...item, ltp, chgPct:getChgPct(q), ema, pdhl, st, vol, score, dir, wk52, mom, nr7, bb, gap, adx, rs, wMTF, wick,
           trade, atr:t.atr, isBull, phase,
           rec:isBull?(score>=7?'STRONG BUY':'BUY'):(score>=7?'SELL':'WATCH'),
           conf:Math.min(95,score*10), sl:trade.sl, target:trade.target,
           pot:{cons:trade.sl,mod:trade.target,agg:trade.target,rr:trade.rr,wr:0,base:0,adj:0,ev:0},
           numInds:score, risk:50, rsi:null, high:q.ohlc?.high||ltp, low:q.ohlc?.low||ltp,
-          vol:boVol, avgVol20:0, macd:{}, rsiDiv:null, patterns:{},
+          rawVol:boVol, avgVol20:0, macd:{}, rsiDiv:null, patterns:{},
           a50:ema?.uptrend||false, a200:ltp>(ema?.ema200||0),
           nearSupp:false, vwap:0, aboveVWAP:null, vwapType:'daily',
           entryTrigger:{trigger:trade.sl,method:isBull?'Break above PDH':'Break below PDL',alreadyTriggered:false},
