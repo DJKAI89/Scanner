@@ -11,8 +11,16 @@ import {
   boSLTarget, getIntradayPhase, detectPatterns, calcRisk, calcPotential, calcSR,
   countIndicatorsEx, getRec, autoSLTarget, calcEntryTrigger, detectReversal,
   calcMACD, isNearSupport, calcRSIDivergence, getSector, calcConfidence, calcVWAP,
-  calcVWAPBands, applyFIIBias, applyCalibration, calcEMA,
+  calcVWAPBands, applyFIIBias, applyCalibration, calcEMA, calcIVPercentile,
 } from '../services/technical';
+
+// Delivery % from Upstox quote (same as HTML getDeliveryPct)
+function getDeliveryPct(q) {
+  if (!q) return null;
+  if (q.delivery_volume != null && q.volume > 0) return +(q.delivery_volume / q.volume * 100).toFixed(1);
+  if (q.delivery_quantity != null && q.volume > 0) return +(q.delivery_quantity / q.volume * 100).toFixed(1);
+  return null;
+}
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed.js';
@@ -231,6 +239,11 @@ function BoCard({ r, rank }) {
   else if (r.adx&&!r.adx.trending&&!r.adx.weakTrend) pill(`〰 ADX ${r.adx.adx} CHOPPY`,'#f8fafc','#94a3b8','#e2e8f0');
   if (r.rs?.outperforming&&r.rs.strongly) pill(`🚀 RS +${r.rs.rs}% vs NIFTY`,'#ecfdf5','#065f46','#a7f3d0');
   else if (r.rs?.underperforming&&r.rs.strongly) pill(`🐢 RS ${r.rs.rs}% vs NIFTY`,'#fef2f2','#991b1b','#fecaca');
+  if (r.ivPct?.cheap) pill(`📉 IV CHEAP ${r.ivPct.iv}% vs HV ${r.ivPct.hv20}%`,'#f0fdf4','#15803d','#bbf7d0');
+  else if (r.ivPct?.rich) pill(`📈 IV RICH ${r.ivPct.iv}% vs HV ${r.ivPct.hv20}%`,'#fef2f2','#991b1b','#fecaca');
+  if (r.stockVWAP?.aboveVWAP && r.stockVWAP?.strong) pill(`📊 ABOVE VWAP ₹${fmtV(r.stockVWAP.vwap)} (+${r.stockVWAP.distPct}%)`,'#ecfdf5','#065f46','#a7f3d0');
+  else if (!r.stockVWAP?.aboveVWAP && r.stockVWAP?.strong) pill(`📊 BELOW VWAP ₹${fmtV(r.stockVWAP.vwap)} (${r.stockVWAP.distPct}%)`,'#fef2f2','#991b1b','#fecaca');
+  else if (r.stockVWAP?.nearVWAP) pill(`📊 AT VWAP ₹${fmtV(r.stockVWAP.vwap)}`,'#f8fafc','#64748b','#e2e8f0');
   if (r.wMTF?.confirms) pill('📅 WEEKLY CONFIRMS','#f5f3ff','#5b21b6','#ddd6fe');
   if (r.sectorScore>0)  pill(`🏭 ${r.sec||'NSE'} STRONG`,'#f0fdf4','#15803d','#bbf7d0');
   else if (r.sectorScore<0) pill(`🏭 ${r.sec||'NSE'} WEAK`,'#fef2f2','#991b1b','#fecaca');
@@ -268,6 +281,9 @@ function BoCard({ r, rank }) {
   else if (r.adx&&!r.adx.trending&&!r.adx.weakTrend) why.push(`⚠ ADX ${r.adx.adx} — choppy, breakout may fail`);
   if (r.rs?.outperforming) why.push(`Outperforming Nifty by ${r.rs.rs}% — institutional accumulation`);
   else if (r.rs?.underperforming) why.push(`Underperforming Nifty by ${Math.abs(r.rs.rs||0)}% — relative weakness`);
+  if (r.stockVWAP?.strong) why.push(`${r.stockVWAP.aboveVWAP?'Above':'Below'} intraday VWAP ₹${fmtV(r.stockVWAP.vwap)} by ${Math.abs(r.stockVWAP.distPct)}% — ${r.stockVWAP.aboveVWAP?'institutional support':'institutional resistance'}`);
+  if (r.ivPct?.cheap) why.push(`IV ${r.ivPct.iv}% below HV ${r.ivPct.hv20}% (ratio ${r.ivPct.ivHvRatio}) — options underpriced, good for buying premium`);
+  else if (r.ivPct?.rich) why.push(`⚠ IV ${r.ivPct.iv}% above HV ${r.ivPct.hv20}% (ratio ${r.ivPct.ivHvRatio}) — options expensive, prefer stock over options`);
   if (r.wMTF?.confirms) why.push(`Weekly candle ${r.wMTF.wBullish?'bullish':'bearish'} — higher timeframe aligned`);
   if (r.sectorScore>0)  why.push(`${r.sec||'NSE'} sector outperforming market — tailwind for this signal`);
   else if (r.sectorScore<0) why.push(`${r.sec||'NSE'} sector underperforming market — headwind for this signal`);
@@ -329,6 +345,16 @@ function BoCard({ r, rank }) {
       {t.method&&<div style={{marginTop:4,fontSize:8,color:'#94a3b8'}}>{t.method}</div>}
     </div>
   );
+}
+
+// Exact port of HTML calcStockVWAPSignal
+function calcStockVWAPSignal(ltp, intradayVWAP) {
+  if (!intradayVWAP || !ltp) return null;
+  const distPct = +((ltp - intradayVWAP) / intradayVWAP * 100).toFixed(2);
+  const aboveVWAP = ltp >= intradayVWAP;
+  const strong   = Math.abs(distPct) > 0.5;
+  const nearVWAP = Math.abs(distPct) <= 0.2;
+  return { vwap: intradayVWAP, distPct, aboveVWAP, strong, nearVWAP };
 }
 
 export default function StocksPane() {
@@ -503,6 +529,10 @@ export default function StocksPane() {
           const vwapBands=calcVWAPBands(candles);
           if(vwapBands?.nearLowerBand)             conf=Math.min(99,conf+3);
           if(vwapBands?.position==='FAR_ABOVE')    conf=Math.max(1, conf-4);
+          // Delivery % boost (same as HTML: high delivery=institutional conviction)
+          const delivPct=getDeliveryPct(q);
+          const delivBoost=delivPct!=null?(delivPct>=60?1:delivPct<=25?-1:0):0;
+          conf=Math.min(100,Math.max(0,conf+delivBoost*5));
           // FII bias + calibration
           conf=applyFIIBias(conf, initRec==='BUY'||initRec==='STRONG BUY', null);
           conf=applyCalibration(conf,'STOCK');
@@ -527,7 +557,7 @@ export default function StocksPane() {
             macd, macdBull, bb, adx, rsiDiv,
             a50, a200, nearSupp, patterns,
             vwap, aboveVWAP, vwapType:'daily', vwapBands,
-            vol, avgVol20, high, low,
+            vol, avgVol20, high, low, delivPct,
             entryTrigger, reversal,
             recentCandles:candles.slice(0,20), closes,
           });
@@ -581,7 +611,7 @@ export default function StocksPane() {
 
       const topSec=Object.entries(secMap).filter(([,v])=>v.c>0).sort((a,b)=>(b[1].g/b[1].c)-(a[1].g/a[1].c))[0]?.[0]||'Mixed';
       setPicks(finalPicks);
-      setScanStats({pcr,pcrTxt,sent,sentSc,topSec,cnt:finalPicks.length});
+      setScanStats({pcr,pcrTxt,sent,sentSc,topSec,cnt:finalPicks.length,totalScanned:byVol.length});
       updateBadge('stocks',String(finalPicks.length));
       setPicksTime('Updated: '+getIST());
       setStatusDot('live'); setStatusTxt('Live');
@@ -654,9 +684,18 @@ export default function StocksPane() {
         if (score<minScore) continue;
         const trade=boSLTarget(ltp,t.atr,isBull,pdhl?.pdh||0,pdhl?.pdl||0,ema?.ema200||0);
         const boVol=q.volume||0;
+        // IV Percentile — ATR-based IV proxy, same as HTML
+        const ivProxy=t.atr>0?(t.atr/ltp*100*Math.sqrt(252)):null;
+        const ivPct=calcIVPercentile(ivProxy,t.closes);
+        // Primary signal type for display/logging
+        const primaryType=ema?.goldenCross?'GOLDEN_CROSS':ema?.deathCross?'DEATH_CROSS'
+          :wk52?.breakHigh?'52WK_HIGH':wk52?.breakLow?'52WK_LOW'
+          :pdhl?.bullBreakout?'PDH_BREAK':pdhl?.bearBreakout?'PDL_BREAK'
+          :st?.crossed?(st.trend==='UP'?'ST_CROSS_UP':'ST_CROSS_DOWN'):'GENERIC';
         results.push({
           ...item, ltp, chgPct:getChgPct(q), ema, pdhl, st, vol, score, dir, wk52, mom, nr7, bb, gap, adx, rs, wMTF, wick,
           trade, atr:t.atr, isBull, phase, sectorScore, sec:item.sec||item.s||'NSE',
+          ivPct, primaryType,
           rec:isBull?(score>=7?'STRONG BUY':'BUY'):(score>=7?'SELL':'WATCH'),
           conf:Math.min(95,score*10), sl:trade.sl, target:trade.target,
           pot:{cons:trade.sl,mod:trade.target,agg:trade.target,rr:trade.rr,wr:0,base:0,adj:0,ev:0},
@@ -688,6 +727,23 @@ export default function StocksPane() {
         goldCross, deathCross, pdhBreak, pdlBreak, stCrossed, wk52Hi,
         volSurge,
       });
+
+      // ── Background: fetch intraday VWAP for top 20 breakout stocks ──
+      // Mirrors HTML's fetchStockIntradayVWAP background step
+      const todayI = getISTDate();
+      const top20bo = results.slice(0, 20);
+      Promise.allSettled(top20bo.map(async (r, idx) => {
+        await sleep(idx * 200);
+        try {
+          const c1 = await fetchCandles(r.key, todayI, todayI, '1minute', token, onTokenExpired);
+          if (!c1 || c1.length < 5) return;
+          const vwap1 = calcVWAP(c1);
+          if (!vwap1) return;
+          r.stockVWAP = calcStockVWAPSignal(r.ltp, vwap1);
+          // Trigger re-render by replacing the array shallowly
+          setBoCards(prev => prev.map(x => x.s === r.s ? { ...x, stockVWAP: r.stockVWAP } : x));
+        } catch (_) { /* intraday VWAP is optional — silently skip on error */ }
+      }));
       setBoTime('Scanned: '+getIST()); updateBadge('stocks',results.length+' 🚀');
       lg(`✅ Breakout: ${results.length} signals`,'o');
     } catch(e) { setBoError(e.message); lg('Breakout error: '+e.message,'e'); }
@@ -780,7 +836,10 @@ export default function StocksPane() {
               </div>
               {wsConnected&&<div style={{fontSize:9,marginBottom:8,color:'#16a34a',fontWeight:600}}>⚡ Picks live via {wsMode==='ws'?'WebSocket':'REST polling'} — {topKeys.length} instruments</div>}
               {picks.length===0
-                ?<EmptyState>{!stocks?.length?'⚙ Configure stocks.json in GitHub Settings':marketStatus.open?'🔄 Click ▶ Scan to fetch picks':'📅 Market Closed'}</EmptyState>
+                ?<EmptyState>
+                  {!stocks?.length?'⚙ Configure stocks.json in GitHub Settings':marketStatus.open?'🔄 Click ▶ Scan to fetch picks':'📅 Market Closed'}
+                  {scanStats&&<><br/><span style={{fontSize:11,color:'#64748b'}}>Conf≥{cfg.minStockConf||50}% · Pot≥{cfg.pot||3}% · Risk&lt;{cfg.risk||55}% · R:R≥{cfg.rr||1.2}</span><br/><span style={{fontSize:10}}>Scanned {scanStats.totalScanned||0} stocks · Lower thresholds in ⚙ Settings</span></>}
+                </EmptyState>
                 :<div className="cards-g">{picks.map((p,i)=>{const live=stockPrices[p.key];return(<StockCard key={p.s} pick={live?{...p,ltp:live.ltp,chgPct:live.chgPct}:p} rank={i+1} cfg={cfg}/>);})}</div>
               }
               <div className="disc">⚠ Not SEBI advice. Always DYODD.</div>
