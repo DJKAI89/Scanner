@@ -174,6 +174,8 @@ export default function StockCard({ pick: p, rank, cfg = {} }) {
       <div style={{display:'flex',flexWrap:'wrap',gap:4,margin:'5px 0 2px'}}>
         {p.macd?.bullCross        &&<span className="ind-pill green-strong">MACD✕↑</span>}
         {p.macd?.bullish&&!p.macd?.bullCross&&<span className="ind-pill green">MACD↑</span>}
+        {p.macd?.bearCross        &&<span className="ind-pill red">MACD✕↓</span>}
+        {p.macd?.bearish&&!p.macd?.bearCross&&<span className="ind-pill red">MACD↓</span>}
         {p.bb?.squeeze            &&<span className="ind-pill blue">BB Squeeze</span>}
         {p.bb?.nearLowerBand      &&<span className="ind-pill yellow">BB Lower</span>}
         {p.adx?.bullTrend         &&<span className="ind-pill purple">ADX {p.adx?.adx?.toFixed(0)}↑</span>}
@@ -200,6 +202,16 @@ export default function StockCard({ pick: p, rank, cfg = {} }) {
         </div>
       )}
 
+      {/* Mini candlestick chart — before trade setup, same as HTML */}
+      {chart&&(
+        <div style={{marginBottom:8}}>
+          <div style={{fontSize:8,fontWeight:700,color:'#94a3b8',marginBottom:2,letterSpacing:'.5px'}}>
+            20-DAY CHART{chart.ema50Val?` · EMA50 ₹${fmt(chart.ema50Val,0)}`:''}{chart.ema200Val?` · EMA200 ₹${fmt(chart.ema200Val,0)}`:''}
+          </div>
+          <div dangerouslySetInnerHTML={{__html:chart.svgStr}}/>
+        </div>
+      )}
+
       {/* Trade setup */}
       <div className="trade-setup">
         <div className="ts-box"><div className="ts-l">ENTRY TRIGGER</div><div className="ts-v bl">₹{fmt(et?.trigger||ltp)}</div><div className="ts-s" style={{color:'#94a3b8'}}>{et?.method||'Market'}</div></div>
@@ -213,16 +225,6 @@ export default function StockCard({ pick: p, rank, cfg = {} }) {
           <div className="tgt cons"><div className="tgt-l">Conservative</div><div className="tgt-v up">₹{fmt(p.pot.cons,0)}</div></div>
           <div className="tgt mod"><div className="tgt-l">Moderate</div><div className="tgt-v bl">₹{fmt(p.pot.mod,0)}</div></div>
           <div className="tgt agg"><div className="tgt-l">Aggressive</div><div className="tgt-v pu">₹{fmt(p.pot.agg,0)}</div></div>
-        </div>
-      )}
-
-      {/* Mini candlestick chart */}
-      {chart&&(
-        <div style={{marginBottom:8}}>
-          <div style={{fontSize:8,fontWeight:700,color:'#94a3b8',marginBottom:2,letterSpacing:'.5px'}}>
-            20-DAY CHART{chart.ema50Val?` · EMA50 ₹${fmt(chart.ema50Val,0)}`:''}{chart.ema200Val?` · EMA200 ₹${fmt(chart.ema200Val,0)}`:''}
-          </div>
-          <div dangerouslySetInnerHTML={{__html:chart.svgStr}}/>
         </div>
       )}
 
@@ -265,6 +267,13 @@ export default function StockCard({ pick: p, rank, cfg = {} }) {
           <div className="cb-l">DAY HIGH/LOW</div>
           <div className="cb-v" style={{color:'#374151',fontSize:11}}>₹{fmt(p.high,0)} / {fmt(p.low,0)}</div>
         </div>
+        {p.delivPct!=null&&(
+          <div className="cbox neutral">
+            <div className="cb-l">DELIVERY %</div>
+            <div className={`cb-v ${p.delivPct>=60?'up':p.delivPct<=25?'dn':'am'}`}>{p.delivPct}%</div>
+            <div className="cb-s" style={{color:'#64748b'}}>{p.delivPct>=60?'High conv':p.delivPct<=25?'Low conv':'Normal'}</div>
+          </div>
+        )}
       </div>
 
       {/* 10 indicator dots */}
