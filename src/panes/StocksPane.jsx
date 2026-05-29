@@ -232,6 +232,8 @@ function BoCard({ r, rank }) {
   if (r.rs?.outperforming&&r.rs.strongly) pill(`🚀 RS +${r.rs.rs}% vs NIFTY`,'#ecfdf5','#065f46','#a7f3d0');
   else if (r.rs?.underperforming&&r.rs.strongly) pill(`🐢 RS ${r.rs.rs}% vs NIFTY`,'#fef2f2','#991b1b','#fecaca');
   if (r.wMTF?.confirms) pill('📅 WEEKLY CONFIRMS','#f5f3ff','#5b21b6','#ddd6fe');
+  if (r.sectorScore>0)  pill(`🏭 ${r.sec||'NSE'} STRONG`,'#f0fdf4','#15803d','#bbf7d0');
+  else if (r.sectorScore<0) pill(`🏭 ${r.sec||'NSE'} WEAK`,'#fef2f2','#991b1b','#fecaca');
   if (r.phase==='opening') pill('⏰ OPENING HOUR','#fffbeb','#92400e','#fde68a');
 
   const emaGapPct = r.ema ? ((r.ema.ema50 - (r.ema.ema200||0)) / (r.ema.ema200||1) * 100).toFixed(1) : 0;
@@ -267,6 +269,8 @@ function BoCard({ r, rank }) {
   if (r.rs?.outperforming) why.push(`Outperforming Nifty by ${r.rs.rs}% — institutional accumulation`);
   else if (r.rs?.underperforming) why.push(`Underperforming Nifty by ${Math.abs(r.rs.rs||0)}% — relative weakness`);
   if (r.wMTF?.confirms) why.push(`Weekly candle ${r.wMTF.wBullish?'bullish':'bearish'} — higher timeframe aligned`);
+  if (r.sectorScore>0)  why.push(`${r.sec||'NSE'} sector outperforming market — tailwind for this signal`);
+  else if (r.sectorScore<0) why.push(`${r.sec||'NSE'} sector underperforming market — headwind for this signal`);
 
   const chart = r.recentCandles?.length >= 3
     ? drawMiniChart(r.recentCandles, r.closes||[], {entry:r.ltp, target:t.target, sl:t.sl})
@@ -640,14 +644,19 @@ export default function StocksPane() {
         const rs=calcRelativeStrength(t.closes,niftyCloses), wick=calcWickRejection(t.candles);
         const dir=boDirection(ema,pdhl,st), isBull=dir==='BULL';
         const mom=calcMomentumConfluence(t.closes,isBull), wMTF=calcWeeklyMTF(t.weekly,ltp,isBull);
-        const {score}=boScore(ema,pdhl,st,vol,wk52,mom,nr7,bb,wMTF,gap,adx,rs,wick,0,phase);
+        // sector score: +1 strong sector, -1 weak, 0 neutral (from secMap built during picks scan)
+        const sec=item.sec||item.s;
+        const secEntry=Object.entries({}).find(()=>false); // placeholder
+        const secChgPct=item._q?((item._q.last_price-(item._q.ohlc?.close||item._q.last_price))/(item._q.ohlc?.close||item._q.last_price)*100):0;
+        const sectorScore=secChgPct>1?1:secChgPct<-1?-1:0;
+        const {score}=boScore(ema,pdhl,st,vol,wk52,mom,nr7,bb,wMTF,gap,adx,rs,wick,sectorScore,phase);
         const minScore=(phase==='holiday'||phase==='closed'||phase==='pre')?1:2;
         if (score<minScore) continue;
         const trade=boSLTarget(ltp,t.atr,isBull,pdhl?.pdh||0,pdhl?.pdl||0,ema?.ema200||0);
         const boVol=q.volume||0;
         results.push({
           ...item, ltp, chgPct:getChgPct(q), ema, pdhl, st, vol, score, dir, wk52, mom, nr7, bb, gap, adx, rs, wMTF, wick,
-          trade, atr:t.atr, isBull, phase,
+          trade, atr:t.atr, isBull, phase, sectorScore, sec:item.sec||item.s||'NSE',
           rec:isBull?(score>=7?'STRONG BUY':'BUY'):(score>=7?'SELL':'WATCH'),
           conf:Math.min(95,score*10), sl:trade.sl, target:trade.target,
           pot:{cons:trade.sl,mod:trade.target,agg:trade.target,rr:trade.rr,wr:0,base:0,adj:0,ev:0},
@@ -664,8 +673,21 @@ export default function StocksPane() {
         const bp=(b.wk52?.breakHigh||b.wk52?.breakLow?2:0)+(b.ema?.goldenCross||b.ema?.deathCross?2:0);
         return bp-ap||b.score-a.score;
       });
+      const goldCross =results.filter(r=>r.ema?.goldenCross).length;
+      const deathCross=results.filter(r=>r.ema?.deathCross).length;
+      const pdhBreak  =results.filter(r=>r.pdhl?.bullBreakout).length;
+      const pdlBreak  =results.filter(r=>r.pdhl?.bearBreakout).length;
+      const stCrossed =results.filter(r=>r.st?.crossed).length;
+      const wk52Hi    =results.filter(r=>r.wk52?.breakHigh||r.wk52?.atHigh).length;
+      const volSurge  =results.filter(r=>r.vol?.confirmed||r.vol?.strong).length;
       setBoCards(results);
-      setBoStats({total:results.length,bullCount:results.filter(r=>r.dir==='BULL').length,bearCount:results.filter(r=>r.dir==='BEAR').length,goldCross:results.filter(r=>r.ema?.goldenCross).length,volSurge:results.filter(r=>r.vol?.confirmed).length});
+      setBoStats({
+        total:results.length,
+        bullCount:results.filter(r=>r.dir==='BULL').length,
+        bearCount:results.filter(r=>r.dir==='BEAR').length,
+        goldCross, deathCross, pdhBreak, pdlBreak, stCrossed, wk52Hi,
+        volSurge,
+      });
       setBoTime('Scanned: '+getIST()); updateBadge('stocks',results.length+' 🚀');
       lg(`✅ Breakout: ${results.length} signals`,'o');
     } catch(e) { setBoError(e.message); lg('Breakout error: '+e.message,'e'); }
@@ -674,10 +696,10 @@ export default function StocksPane() {
 
   const filteredCards=boCards.filter(r=>{
     if(boFilter==='all')return true;if(boFilter==='bull')return r.dir==='BULL';if(boFilter==='bear')return r.dir==='BEAR';
-    if(boFilter==='ema')return r.ema?.goldenCross||r.ema?.deathCross;if(boFilter==='pdhl')return r.pdhl?.bullBreakout||r.pdhl?.bearBreakout;
+    if(boFilter==='ema')return r.ema?.goldenCross||r.ema?.deathCross||r.ema?.nearCross;if(boFilter==='pdhl')return r.pdhl?.bullBreakout||r.pdhl?.bearBreakout||r.pdhl?.nearPDH||r.pdhl?.nearPDL;
     if(boFilter==='st')return r.st?.crossed;if(boFilter==='vol')return r.vol?.confirmed||r.vol?.strong;
-    if(boFilter==='52wk')return r.wk52?.breakHigh||r.wk52?.atHigh;if(boFilter==='gap')return r.gap?.gapUp||r.gap?.gapDown;
-    if(boFilter==='squeeze')return(r.nr7?.isNR7||r.nr7?.isNR4)||r.bb?.squeeze;if(boFilter==='rs')return r.rs?.outperforming||r.rs?.underperforming;
+    if(boFilter==='52wk')return r.wk52?.breakHigh||r.wk52?.atHigh||r.wk52?.breakLow||r.wk52?.atLow;if(boFilter==='gap')return r.gap?.gapUp||r.gap?.gapDown;
+    if(boFilter==='squeeze')return(r.nr7?.isNR7||r.nr7?.isNR4)||r.bb?.squeeze||r.bb?.extremeSqueeze;if(boFilter==='rs')return (r.rs?.outperforming||r.rs?.underperforming)&&r.rs?.strongly;
     return true;
   });
 
@@ -785,10 +807,10 @@ export default function StocksPane() {
                 <button onClick={runBreakoutScan} className="btn btn-s" style={{marginLeft:'auto',fontSize:10,padding:'4px 10px'}}>🔄 Re-scan</button>
               </div>
               {boStats&&<div className="stats-g">
-                <StatCard label="TOTAL" value={boStats.total} sub="signals" valClass="bl"/>
-                <StatCard label="BULLISH 📈" value={boStats.bullCount} sub={`${boStats.goldCross} Golden Cross`} valClass="up"/>
-                <StatCard label="BEARISH 📉" value={boStats.bearCount} valClass="dn"/>
-                <StatCard label="VOL SURGE 🔥" value={boStats.volSurge} valClass="am"/>
+                <StatCard label="TOTAL SIGNALS" value={boStats.total} sub={`from ${boCards.length} stocks`} valClass="bl"/>
+                <StatCard label="BULLISH 📈" value={boStats.bullCount} sub={`${boStats.goldCross||0}GC · ${boStats.pdhBreak||0}PDH · ${boStats.wk52Hi||0}52wkH`} valClass="up"/>
+                <StatCard label="BEARISH 📉" value={boStats.bearCount} sub={`${boStats.deathCross||0}DC · ${boStats.pdlBreak||0}PDL`} valClass="dn"/>
+                <StatCard label="VOL SURGE 🔥" value={boStats.volSurge||0} sub={`${boStats.stCrossed||0} ST crossed`} valClass="am"/>
               </div>}
               <div style={{display:'flex',gap:6,marginBottom:12,overflowX:'auto',paddingBottom:4}}>
                 {BO_FILTERS.map(f=><button key={f.id} onClick={()=>setBoFilter(f.id)} style={{whiteSpace:'nowrap',padding:'6px 12px',borderRadius:20,border:boFilter===f.id?'none':'1px solid #e2e8f0',fontSize:11,fontWeight:700,cursor:'pointer',background:boFilter===f.id?'#7c3aed':'#fff',color:boFilter===f.id?'#fff':'#374151'}}>{f.label}</button>)}
