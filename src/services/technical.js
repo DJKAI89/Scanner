@@ -38,27 +38,69 @@ export function calcRSI(closes, period = 14) {
 }
 
 // ── RSI Divergence ────────────────────────────────────────────
-export function calcRSIDivergence(closes, period = 14) {
-  if (!closes || closes.length < 30) return null;
-  const rsiValues = [];
-  for (let i = period + 1; i <= closes.length; i++) rsiValues.push(calcRSI(closes.slice(0, i), period));
-  if (rsiValues.length < 10) return null;
-  const prices = closes.slice(-(rsiValues.length));
-  const lookback = 10;
-  const rSlice = rsiValues.slice(-lookback), pSlice = prices.slice(-lookback);
-  const pMin1 = Math.min(...pSlice.slice(0, -1)), pMin2 = pSlice[pSlice.length - 1];
-  const rMin1 = Math.min(...rSlice.slice(0, -1)), rMin2 = rSlice[rSlice.length - 1];
-  const pMax1 = Math.max(...pSlice.slice(0, -1)), pMax2 = pSlice[pSlice.length - 1];
-  const rMax1 = Math.max(...rSlice.slice(0, -1)), rMax2 = rSlice[rSlice.length - 1];
-  const bullish        = pMin2 < pMin1 && rMin2 > rMin1 && rMin2 < 40;
-  const bearish        = pMax2 > pMax1 && rMax2 < rMax1 && rMax2 > 60;
-  const hidden_bullish = pMin2 > pMin1 && rMin2 < rMin1 && rMin2 < 45;
-  const hidden_bearish = pMax2 < pMax1 && rMax2 > rMax1 && rMax2 > 55;
-  const strength = bullish || bearish ? Math.abs(rMin2 - rMin1) : 0;
-  return { bullish, bearish, hidden_bullish, hidden_bearish, strength: +strength.toFixed(1) };
-}
+// Exact port of HTML detectRSIDivergence — swing high/low based
+export function calcRSIDivergence(candlesOrCloses, period = 14) {
+  const result = { bullish: false, bearish: false, hidden_bullish: false, hidden_bearish: false, strength: 0 };
+  // Accept either candles (2D newest-first) or closes (1D oldest-first)
+  let candles;
+  if (Array.isArray(candlesOrCloses[0])) {
+    candles = candlesOrCloses; // already candles newest-first
+  } else {
+    // closes oldest-first — convert to fake candles (close only, newest-first)
+    candles = [...candlesOrCloses].reverse().map(c => [0, c, c, c, c, 0]);
+  }
+  if (!candles || candles.length < 20) return result;
+  const closes = candles.map(c => +c[4]).reverse(); // oldest-first
+  if (closes.length < 16) return result;
 
-// ── MACD Advanced ─────────────────────────────────────────────
+  // Build RSI array
+  const rsiArr = [];
+  for (let end = 15; end <= closes.length; end++) rsiArr.push(calcRSI(closes.slice(0, end)));
+
+  const n = Math.min(15, candles.length - 1);
+  const swingLows = [], swingHighs = [];
+  for (let i = 1; i < n - 1; i++) {
+    const price  = +candles[i][4];
+    const rsiIdx = rsiArr.length - 1 - i;
+    if (rsiIdx < 0 || rsiIdx >= rsiArr.length) continue;
+    const rsi = rsiArr[rsiIdx];
+    if (!rsi) continue;
+    if (price < +candles[i-1][4] && price < +candles[i+1][4]) swingLows.push({ i, price, rsi });
+    if (price > +candles[i-1][4] && price > +candles[i+1][4]) swingHighs.push({ i, price, rsi });
+  }
+
+  const currPrice = +candles[0][4];
+  const currRSI   = rsiArr[rsiArr.length - 1];
+  if (!currRSI) return result;
+
+  // Bullish: price lower low, RSI higher low
+  if (swingLows.length >= 1) {
+    const prev = swingLows[0];
+    if (currPrice < prev.price && currRSI > prev.rsi + 2) {
+      result.bullish  = true;
+      result.strength = Math.round((currRSI - prev.rsi) * 2);
+    }
+  }
+  // Bearish: price higher high, RSI lower high
+  if (swingHighs.length >= 1) {
+    const prev = swingHighs[0];
+    if (currPrice > prev.price && currRSI < prev.rsi - 2) {
+      result.bearish  = true;
+      result.strength = Math.round((prev.rsi - currRSI) * 2);
+    }
+  }
+  // Hidden bullish: price higher low, RSI lower low
+  if (swingLows.length >= 1) {
+    const prev = swingLows[0];
+    if (currPrice > prev.price && currRSI < prev.rsi - 2 && currRSI < 50) result.hidden_bullish = true;
+  }
+  // Hidden bearish: price lower high, RSI higher high
+  if (swingHighs.length >= 1) {
+    const prev = swingHighs[0];
+    if (currPrice < prev.price && currRSI > prev.rsi + 2 && currRSI > 50) result.hidden_bearish = true;
+  }
+  return result;
+}
 export function calcMACD(closes) {
   if (!closes || closes.length < 35) return { macdLine: 0, signal: 0, hist: 0, bull: null, bullCross: false, bearCross: false, histRising: false, bullish: false };
   const fast = calcEMA(closes, 12), slow = calcEMA(closes, 26);
@@ -120,19 +162,37 @@ export function calcSupertrend(candles, period = 7, mult = 3) {
 // ── Bollinger Bands Advanced ──────────────────────────────────
 export function calcBBSqueeze(closes, period = 20) {
   if (!closes || closes.length < period) return null;
-  const recent = closes.slice(-period);
-  const mean = recent.reduce((s, v) => s + v, 0) / period;
-  const std  = Math.sqrt(recent.reduce((s, v) => s + (v - mean) ** 2, 0) / period);
-  const upper = mean + 2 * std, lower = mean - 2 * std;
-  const bw    = (upper - lower) / mean;
-  const ltp   = closes[closes.length - 1];
+  const recent  = closes.slice(-period);
+  const mean    = recent.reduce((s, v) => s + v, 0) / period;
+  const std     = Math.sqrt(recent.reduce((s, v) => s + (v - mean) ** 2, 0) / period);
+  const upper   = mean + 2 * std, lower = mean - 2 * std;
+  const ltp     = closes[closes.length - 1];
   const percentB = std > 0 ? (ltp - lower) / (upper - lower) : 0.5;
+  const bw      = mean > 0 ? +((upper - lower) / mean * 100).toFixed(2) : 0;
+
+  // Historical squeeze: same as HTML — bw at 20-period low (need 50+ points)
+  let squeeze = false, extremeSqueeze = false;
+  if (closes.length >= period + 30) {
+    const bwHistory = [];
+    for (let i = period; i <= closes.length; i++) {
+      const sl = closes.slice(i - period, i);
+      const m  = sl.reduce((a, b) => a + b, 0) / period;
+      const s  = Math.sqrt(sl.reduce((a, x) => a + (x - m) ** 2, 0) / period);
+      bwHistory.push(m > 0 ? (m + 2*s - (m - 2*s)) / m * 100 : 0);
+    }
+    const mn = Math.min(...bwHistory), mx = Math.max(...bwHistory);
+    squeeze       = bw < mn + (mx - mn) * 0.2;
+    extremeSqueeze = bw < mn + (mx - mn) * 0.05;
+  }
+
+  // nearLowerBand: HTML uses ltp <= mid - sd*0.8 && ltp >= mid - sd*2.2
+  const nearLowerBand = ltp <= mean - std * 0.8 && ltp >= mean - std * 2.2;
+
   return {
     upper: +upper.toFixed(2), lower: +lower.toFixed(2), mean: +mean.toFixed(2),
-    bw: +bw.toFixed(4), squeeze: bw < 0.05, extremeSqueeze: bw < 0.025,
+    bw, squeeze, extremeSqueeze,
     aboveUpper: ltp > upper, belowLower: ltp < lower,
-    nearLowerBand: percentB < 0.2,  // within lower 20% of band = oversold
-    nearUpperBand: percentB > 0.8,
+    nearLowerBand, nearUpperBand: percentB > 0.8,
     percentB: +percentB.toFixed(3),
   };
 }
@@ -204,16 +264,40 @@ export function calcVWAP(candles) {
 
 export function calcVWAPBands(candles) {
   if (!candles || candles.length < 5) return null;
-  const vwap = calcVWAP(candles);
-  if (!vwap) return null;
+  const recent = candles.slice(0, 20);
+  let sumPV = 0, sumV = 0;
+  const tpArr = [];
+  for (const c of recent) {
+    const tp = (+c[2] + +c[3] + +c[4]) / 3, v = +c[5] || 1;
+    sumPV += tp * v; sumV += v; tpArr.push({ tp, v });
+  }
+  if (sumV === 0) return null;
+  const vwap = sumPV / sumV;
+  let sumPV2 = 0;
+  for (const { tp, v } of tpArr) sumPV2 += (tp - vwap) ** 2 * v;
+  const sd  = Math.sqrt(sumPV2 / sumV);
   const ltp = +candles[0][4];
-  const distPct = (ltp - vwap) / vwap * 100;
+  // SD-based positions — exact match with HTML
+  let position;
+  if      (ltp > vwap + sd * 2) position = 'FAR_ABOVE';
+  else if (ltp > vwap + sd)     position = 'ABOVE_1SD';
+  else if (ltp > vwap)          position = 'ABOVE_VWAP';
+  else if (ltp > vwap - sd)     position = 'BELOW_VWAP';
+  else if (ltp > vwap - sd * 2) position = 'BELOW_1SD';
+  else                          position = 'FAR_BELOW';
+  const distPct = +((ltp - vwap) / vwap * 100).toFixed(2);
   return {
-    vwap,
-    distPct: +distPct.toFixed(2),
-    position: distPct > 1.5 ? 'FAR_ABOVE' : distPct > 0.5 ? 'ABOVE' : distPct < -1.5 ? 'FAR_BELOW' : distPct < -0.5 ? 'BELOW' : 'AT',
-    nearLowerBand: distPct < -0.5 && distPct > -2.0,
-    aboveVWAP: ltp >= vwap,
+    vwap:       +vwap.toFixed(2),
+    upper1:     +(vwap + sd).toFixed(2),
+    upper2:     +(vwap + sd * 2).toFixed(2),
+    lower1:     +(vwap - sd).toFixed(2),
+    lower2:     +(vwap - sd * 2).toFixed(2),
+    sd:         +sd.toFixed(2),
+    position,
+    distPct,
+    aboveVWAP:  ltp >= vwap,
+    // nearLowerBand: HTML = ltp <= vwap-sd*0.8 && ltp >= vwap-sd*2.2
+    nearLowerBand: ltp <= vwap - sd * 0.8 && ltp >= vwap - sd * 2.2,
   };
 }
 
