@@ -527,18 +527,19 @@ export default function StocksPane() {
             const _bb      = calcBBSqueeze(closes);
             const _adx     = calcADX(candles);
             const _vwapB   = calcVWAPBands(candles);
-            const _rsiDiv  = calcRSIDivergence(closes);
+            const _rsiDiv  = calcRSIDivergence(candles);   // HTML passes candles, not closes
             const instLtp = inst._q?.last_price || 0;
+            const isAboveMA = (cls, p) => cls.length >= p ? cls[cls.length-1] > cls.slice(-p).reduce((a,b)=>a+b,0)/p : null;
             tech[inst.s] = {
               rsi:      calcRSI(closes),
-              macdBull: _macd ? _macd.bullish : null,
+              macdBull: _macd ? _macd.bullish : (closes.length>=35 ? (calcEMA(closes,12)-calcEMA(closes,26))>0 : null),
               macd:     _macd,
               bb:       _bb,
               adx:      _adx,
               vwapBands:_vwapB,
               rsiDiv:   _rsiDiv,
-              a50:      closes.length>=50  ? instLtp > (calcEMA(closes,50)||0)  : null,
-              a200:     closes.length>=200 ? instLtp > (calcEMA(closes,200)||0) : null,
+              a50:      isAboveMA(closes, 50),
+              a200:     isAboveMA(closes, 200),
               atr:      calcATR(candles),
               patterns: detectPatterns(candles),
               avgVol20, sr: calcSR(candles), vwap: calcVWAP(candles),
@@ -606,7 +607,7 @@ export default function StocksPane() {
         if(t.rsiDiv?.bearish)        conf=Math.max(1, conf-8);
         if(t.rsiDiv?.hidden_bearish) conf=Math.max(1, conf-4);
         if(vwapBands?.nearLowerBand)               conf=Math.min(99,conf+3);
-        if(vwapBands?.position==='FAR_ABOVE')      conf=Math.max(1, conf-4);
+        if(vwapBands?.position==='FAR_ABOVE'||vwapBands?.position==='ABOVE_1SD') conf=Math.max(1,conf-4);
         const delivBoost=delivPct!=null?(delivPct>=60?1:delivPct<=25?-1:0):0;
         conf=Math.min(100,Math.max(0,conf+delivBoost*5));
         conf=applyFIIBias(conf,preRec==='BUY'||preRec==='STRONG BUY',null);
@@ -647,7 +648,6 @@ export default function StocksPane() {
       lg(`Passes: pot≥${cfg.pot||3}%=${allScored.filter(s=>s.pot.base>=(cfg.pot||3)).length} risk<${cfg.risk||55}%=${allScored.filter(s=>s.risk<(cfg.risk||55)).length} rr≥${cfg.rr||1.2}=${allScored.filter(s=>s.pot.rr>=(cfg.rr||1.2)).length} conf≥${cfg.minStockConf||50}%=${allScored.filter(s=>s.conf>=(cfg.minStockConf||50)).length}`);
 
       results.sort((a,b)=>b.conf-a.conf);
-      results.sort((a,b)=>b.conf-a.conf);
 
       // ── MTF 30-min boost for top 5 picks (exact HTML port) ──
       const today2=getISTDate();
@@ -678,19 +678,21 @@ export default function StocksPane() {
           }
         }catch(e){ lg('MTF '+p.s+': '+e.message,'w'); }
       }));
-      // Re-sort after MTF boost may change conf
+      // Re-sort after MTF boost may change conf, cap at 12 like HTML
       results.sort((a,b)=>b.conf-a.conf);
+      const cappedResults = results.slice(0, 12);
 
       // ── Fallback: if 0 picks pass all filters, show top-5 by conf (exact HTML)
-      let finalPicks=results;
-      if(!finalPicks.length&&allScored.length>0){
+      let finalPicks = cappedResults;
+      if (!finalPicks.length && allScored.length > 0) {
         lg('⚠ 0 stocks passed all filters → showing top 5 by confidence. Relax thresholds in ⚙ Settings.','w');
-        finalPicks=allScored
-          .filter(s=>s.conf>=(cfg.minStockConf||50))
-          .sort((a,b)=>b.conf-a.conf)
-          .slice(0,5)
-          .map(s=>({...s,passes:false,_fallback:true}));
-        if(!finalPicks.length) finalPicks=allScored.sort((a,b)=>b.conf-a.conf).slice(0,5).map(s=>({...s,_fallback:true}));
+        finalPicks = allScored
+          .filter(s => s.conf >= (cfg.minStockConf||50))
+          .sort((a,b) => b.conf - a.conf)
+          .slice(0, 5)
+          .map(s => ({...s, passes:false, _fallback:true}));
+        if (!finalPicks.length)
+          finalPicks = allScored.sort((a,b) => b.conf-a.conf).slice(0,5).map(s=>({...s,_fallback:true}));
       }
 
       const topSec=Object.entries(secMap).filter(([,v])=>v.c>0).sort((a,b)=>(b[1].g/b[1].c)-(a[1].g/a[1].c))[0]?.[0]||'Mixed';
