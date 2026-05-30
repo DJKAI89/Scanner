@@ -67,35 +67,75 @@ function _decodeFeed(buf) {
 }
 
 function _decodeFullFeed(buf) {
-  let ltpc = null, pos = 0;
+  let result = null, pos = 0;
   while (pos < buf.length) {
     const { v: tag, p } = _readVarint(buf, pos); pos = p;
     const fn = tag >> 3, wt = tag & 7;
-    if (fn === 1 && wt === 2) {
-      const { v, p: p2 } = _readBytes(buf, pos); pos = p2;
-      ltpc = _decodeMarketFullFeed(v) || ltpc;
-    } else if (fn === 2 && wt === 2) {
-      const { v, p: p2 } = _readBytes(buf, pos); pos = p2;
-      ltpc = _decodeNestedLTPC(v) || ltpc;
-    } else { pos = _skip(buf, pos, wt); }
+    if      (fn === 1 && wt === 2) { const { v, p: p2 } = _readBytes(buf, pos); pos = p2; result = _decodeMarketFullFeed(v) || result; }
+    else if (fn === 2 && wt === 2) { const { v, p: p2 } = _readBytes(buf, pos); pos = p2; result = _decodeIndexFullFeed(v)  || result; }
+    else { pos = _skip(buf, pos, wt); }
   }
-  return ltpc;
+  return result;
+}
+
+// ── OHLC entry: interval(1,str) open(2,dbl) high(3,dbl) low(4,dbl) close(5,dbl) vol(6,varint) ts(7,varint)
+function _decodeOHLCEntry(buf) {
+  let interval = '', open = 0, high = 0, low = 0, close = 0, vol = 0;
+  let pos = 0;
+  while (pos < buf.length) {
+    const { v: tag, p } = _readVarint(buf, pos); pos = p;
+    const fn = tag >> 3, wt = tag & 7;
+    if      (fn === 1 && wt === 2) { const { v, p: p2 } = _readStr(buf, pos);    pos = p2; interval = v; }
+    else if (fn === 2 && wt === 1) { const { v, p: p2 } = _readDouble(buf, pos); pos = p2; open  = v; }
+    else if (fn === 3 && wt === 1) { const { v, p: p2 } = _readDouble(buf, pos); pos = p2; high  = v; }
+    else if (fn === 4 && wt === 1) { const { v, p: p2 } = _readDouble(buf, pos); pos = p2; low   = v; }
+    else if (fn === 5 && wt === 1) { const { v, p: p2 } = _readDouble(buf, pos); pos = p2; close = v; }
+    else if (fn === 6 && wt === 0) { const { v, p: p2 } = _readVarint(buf, pos); pos = p2; vol   = v; }
+    else { pos = _skip(buf, pos, wt); }
+  }
+  return { interval, open, high, low, close, vol };
+}
+
+// MarketOHLC: repeated OHLC ohlc = 1
+function _decodeMarketOHLC(buf) {
+  const ohlc = [];
+  let pos = 0;
+  while (pos < buf.length) {
+    const { v: tag, p } = _readVarint(buf, pos); pos = p;
+    const fn = tag >> 3, wt = tag & 7;
+    if (fn === 1 && wt === 2) { const { v, p: p2 } = _readBytes(buf, pos); pos = p2; ohlc.push(_decodeOHLCEntry(v)); }
+    else { pos = _skip(buf, pos, wt); }
+  }
+  return ohlc; // array of { interval, open, high, low, close, vol }
+}
+
+// IndexFullFeed: ltpc(1) marketOHLC(2)
+function _decodeIndexFullFeed(buf) {
+  let ltpc = null, ohlcMap = {};
+  let pos = 0;
+  while (pos < buf.length) {
+    const { v: tag, p } = _readVarint(buf, pos); pos = p;
+    const fn = tag >> 3, wt = tag & 7;
+    if      (fn === 1 && wt === 2) { const { v, p: p2 } = _readBytes(buf, pos); pos = p2; ltpc = _decodeLTPC(v); }
+    else if (fn === 2 && wt === 2) { const { v, p: p2 } = _readBytes(buf, pos); pos = p2; _decodeMarketOHLC(v).forEach(o => { ohlcMap[o.interval] = o; }); }
+    else { pos = _skip(buf, pos, wt); }
+  }
+  return ltpc ? { ...ltpc, ohlcMap } : null;
 }
 
 function _decodeMarketFullFeed(buf) {
-  let out = null, pos = 0;
+  let out = {}, pos = 0;
   while (pos < buf.length) {
     const { v: tag, p } = _readVarint(buf, pos); pos = p;
     const fn = tag >> 3, wt = tag & 7;
-    if (fn === 1 && wt === 2) {
-      const { v, p: p2 } = _readBytes(buf, pos); pos = p2;
-      out = { ...(out || {}), ..._decodeLTPC(v) };
-    } else if (fn === 7 && wt === 1) {
-      const { v, p: p2 } = _readDouble(buf, pos); pos = p2;
-      out = { ...(out || {}), oi: v };
-    } else { pos = _skip(buf, pos, wt); }
+    if      (fn === 1 && wt === 2) { const { v, p: p2 } = _readBytes(buf, pos); pos = p2; Object.assign(out, _decodeLTPC(v)); }
+    else if (fn === 4 && wt === 2) { const { v, p: p2 } = _readBytes(buf, pos); pos = p2; const arr = _decodeMarketOHLC(v); arr.forEach(o => { out.ohlcMap = out.ohlcMap||{}; out.ohlcMap[o.interval] = o; }); }
+    else if (fn === 5 && wt === 1) { const { v, p: p2 } = _readDouble(buf, pos); pos = p2; out.atp = v; }
+    else if (fn === 6 && wt === 0) { const { v, p: p2 } = _readVarint(buf, pos); pos = p2; out.vtt = v; }
+    else if (fn === 7 && wt === 1) { const { v, p: p2 } = _readDouble(buf, pos); pos = p2; out.oi  = v; }
+    else { pos = _skip(buf, pos, wt); }
   }
-  return out;
+  return Object.keys(out).length ? out : null;
 }
 
 function _decodeNestedLTPC(buf) {
@@ -151,6 +191,83 @@ function sendFeedRequest(socket, data) {
   socket.send(new TextEncoder().encode(JSON.stringify(data)));
 }
 
+// ── fetchScanQuotesViaWS — one-shot WebSocket quote fetch for scan ─
+// Replaces batched fetchQ REST calls. Connects in 'full' mode,
+// collects snapshot for all instrument keys, disconnects.
+// Returns map: { [key]: { ltp, cp, vtt, atp, ohlcMap, high, low, open } }
+export async function fetchScanQuotesViaWS(token, instrumentKeys, timeoutMs = 8000) {
+  if (!token || !instrumentKeys?.length) return {};
+
+  // Get authorized WS URL (one REST call total)
+  let wsUrl = null;
+  for (const url of AUTHORIZE_URLS) {
+    try {
+      const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' } });
+      if (r.ok) {
+        const d = await r.json();
+        wsUrl = d?.data?.authorized_redirect_uri || d?.data?.uri || d?.authorized_redirect_uri;
+        if (wsUrl) break;
+      }
+    } catch (_) {}
+  }
+  if (!wsUrl) throw new Error('WS auth failed — cannot get scan quotes');
+
+  return new Promise((resolve) => {
+    const quotes = {};
+    let settled = false;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hardTimeout);
+      try { ws.onclose = null; ws.close(1000); } catch (_) {}
+      resolve(quotes);
+    };
+
+    const hardTimeout = setTimeout(finish, timeoutMs);
+
+    const ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => {
+      // Subscribe all keys in full mode — one message covers all 500 stocks
+      ws.send(new TextEncoder().encode(JSON.stringify({
+        guid:   crypto.randomUUID(),
+        method: 'sub',
+        data:   { mode: 'full', instrumentKeys },
+      })));
+    };
+
+    ws.onmessage = (evt) => {
+      if (!(evt.data instanceof ArrayBuffer)) return;
+      try {
+        const feeds = decodeFeedResponse(evt.data);
+        for (const [key, data] of Object.entries(feeds)) {
+          if (!data) continue;
+          const day = data.ohlcMap?.['1d'] || {};
+          quotes[key] = {
+            last_price:        data.ltp  || 0,
+            volume:            data.vtt  || 0,
+            atp:               data.atp  || 0,
+            ohlc: {
+              open:  day.open  || 0,
+              high:  day.high  || 0,
+              low:   day.low   || 0,
+              close: data.cp   || day.close || 0,
+            },
+            // delivery_volume not available in WS feed
+          };
+        }
+        // Finish early once we have 90 %+ of expected instruments
+        if (Object.keys(quotes).length >= instrumentKeys.length * 0.9) finish();
+      } catch (_) {}
+    };
+
+    ws.onerror = () => finish();
+    ws.onclose = () => { if (!settled) finish(); };
+  });
+}
+
 export function useMarketFeed(token, instrumentKeys = [], enabled = true, options = {}) {
   const mode = options.mode || 'ltpc';
   const pollFallback = options.pollFallback !== false;
@@ -175,13 +292,20 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
       for (const [k, v] of Object.entries(map)) {
         if (v && v.ltp > 0) {
           const cp = v.cp || v.ltp;
-          next[k] = { 
-                      ltp: v.ltp, 
-                      cp, 
-                      oi: v.oi, 
-                      chgPct: cp > 0 ? +((v.ltp - cp) / cp * 100).toFixed(2) : 0,
-                      changeAmt: (v.ltp - cp).toFixed(2)
-                    };
+          const day = v.ohlcMap?.['1d'] || {};
+          next[k] = {
+            ltp:       v.ltp,
+            cp,
+            oi:        v.oi,
+            atp:       v.atp  || 0,
+            vtt:       v.vtt  || 0,
+            high:      day.high  || 0,
+            low:       day.low   || 0,
+            open:      day.open  || 0,
+            ohlcMap:   v.ohlcMap || {},
+            chgPct:    cp > 0 ? +((v.ltp - cp) / cp * 100).toFixed(2) : 0,
+            changeAmt: (v.ltp - cp).toFixed(2),
+          };
         }
       }
       return next;
