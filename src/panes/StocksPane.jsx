@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
 import StockCard from '../components/StockCard.jsx';
 import { fetchQ, fetchCandles, fetchOptions } from '../services/api';
+import { fetchScanQuotesViaWS } from '../hooks/useMarketFeed';
 import { logSignals, buildStockSignal } from '../services/github';
 import {
   calcRSI, calcEMACrossover, calcATR, calcSupertrend, calcBBSqueeze, calcNR7, calcADX,
@@ -466,105 +467,186 @@ export default function StocksPane() {
       const sent   = nChgPct>0.5?'BULLISH':nChgPct<-0.5?'BEARISH':'NEUTRAL';
       const sentSc = Math.round(Math.min(Math.max((nChgPct+3)/6*10,1),10));
 
-      // Stock quotes
-      setPickProgress('Step 3: Loading quotes...');
+      // Step 3 — All stock quotes via WebSocket (one connection, all stocks at once)
+      // Falls back to batched REST if WS fails
+      setPickProgress('Step 3/5: Fetching quotes via WebSocket...');
       const scanList = stocks.filter(s=>s.scan!==false);
-      const rawQ = {};
-      for (let b=0; b<Math.ceil(scanList.length/50); b++) {
-        const sl = scanList.slice(b*50,(b+1)*50);
-        setPickProgress(`Step 3: Quotes ${Math.min((b+1)*50,scanList.length)}/${scanList.length}`);
-        Object.assign(rawQ, await fetchQ(sl.map(s=>s.key).join(','),token,onTokenExpired).catch(()=>({})));
-        if ((b+1)*50<scanList.length) await sleep(200);
+      let rawQ = {};
+      try {
+        rawQ = await fetchScanQuotesViaWS(token, scanList.map(s=>s.key));
+        const wsCount = Object.keys(rawQ).filter(k=>rawQ[k]?.last_price>0).length;
+        lg(`WS quotes: ${wsCount}/${scanList.length} stocks`,'o');
+        // Fallback to REST for any missing keys
+        const missing = scanList.filter(s=>!rawQ[s.key]?.last_price).map(s=>s.key);
+        if (missing.length > 0) {
+          lg(`REST fallback for ${missing.length} missing quotes`,'w');
+          for (let b=0; b<Math.ceil(missing.length/50); b++) {
+            const sl = missing.slice(b*50,(b+1)*50);
+            Object.assign(rawQ, await fetchQ(sl.join(','),token,onTokenExpired).catch(()=>({})));
+            if ((b+1)*50 < missing.length) await sleep(200);
+          }
+        }
+      } catch(e) {
+        lg(`WS quotes failed (${e.message}), falling back to REST`,'w');
+        for (let b=0; b<Math.ceil(scanList.length/50); b++) {
+          const sl = scanList.slice(b*50,(b+1)*50);
+          setPickProgress(`Step 3/5: REST quotes ${Math.min((b+1)*50,scanList.length)}/${scanList.length}`);
+          Object.assign(rawQ, await fetchQ(sl.map(s=>s.key).join(','),token,onTokenExpired).catch(()=>({})));
+          if ((b+1)*50<scanList.length) await sleep(200);
+        }
       }
+      // All quoted stocks sorted by volume — same as HTML's `byVol = quoted`
       const byVol = scanList.map(s=>({...s,_q:rawQ[s.key]})).filter(s=>s._q?.last_price)
         .sort((a,b)=>(b._q.volume||0)-(a._q.volume||0));
 
+      // Step 4 — Candles for TOP 20 only (exact HTML: staggered batches of 3, 220ms apart)
+      setPickProgress('Step 4/5: Fetching candle history (staggered)...');
       const today  = getISTDate();
-      const from90 = new Date(Date.now()-95*86400000).toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
-      const results=[], secMap={};
-      const BATCH=5;
+      const from60 = new Date(Date.now()-65*86400000).toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
+      const top20  = byVol.slice(0, Math.min(20, byVol.length));
+      const tech   = {};
+      let candleOK = 0;
+      const CANDLE_BATCH = 3;
+      for (let b=0; b<top20.length; b+=CANDLE_BATCH) {
+        const batch = top20.slice(b, b+CANDLE_BATCH);
+        setPickProgress(`Step 4/5: Candles ${b+1}–${Math.min(b+CANDLE_BATCH,top20.length)}/20...`);
+        const fetched = await Promise.allSettled(
+          batch.map((inst,idx) => sleep(idx*220).then(() =>
+            fetchCandles(inst.key,from60,today,'day',token,onTokenExpired)
+              .then(candles=>({inst,candles}))
+          ))
+        );
+        for (const res of fetched) {
+          if (res.status!=='fulfilled') { lg('Candle batch error: '+res.reason,'w'); continue; }
+          const {inst, candles} = res.value;
+          if (candles.length>=5) {
+            const closes   = candles.map(c=>+c[4]).reverse();
+            const rc       = candles.slice(0,20);
+            const avgVol20 = rc.reduce((s,x)=>s+(+x[5]||0),0)/Math.max(1,rc.length);
+            const _macd    = calcMACD(closes);
+            const _bb      = calcBBSqueeze(closes);
+            const _adx     = calcADX(candles);
+            const _vwapB   = calcVWAPBands(candles);
+            const _rsiDiv  = calcRSIDivergence(closes);
+            const instLtp = inst._q?.last_price || 0;
+            tech[inst.s] = {
+              rsi:      calcRSI(closes),
+              macdBull: _macd ? _macd.bullish : null,
+              macd:     _macd,
+              bb:       _bb,
+              adx:      _adx,
+              vwapBands:_vwapB,
+              rsiDiv:   _rsiDiv,
+              a50:      closes.length>=50  ? instLtp > (calcEMA(closes,50)||0)  : null,
+              a200:     closes.length>=200 ? instLtp > (calcEMA(closes,200)||0) : null,
+              atr:      calcATR(candles),
+              patterns: detectPatterns(candles),
+              avgVol20, sr: calcSR(candles), vwap: calcVWAP(candles),
+              candles, closes,
+            };
+            candleOK++;
+          }
+        }
+        if (b+CANDLE_BATCH<top20.length) await sleep(300);
+      }
+      lg(`✅ Candle data: ${candleOK}/${top20.length} stocks`,'o');
 
-      for (let b=0; b<byVol.length; b+=BATCH) {
-        setPickProgress(`Step 4: Analysing ${b+1}–${Math.min(b+BATCH,byVol.length)} / ${byVol.length}`);
-        await Promise.allSettled(byVol.slice(b,b+BATCH).map(async(inst,idx)=>{
-          await sleep(idx*120);
-          const q=inst._q;
-          const ltp=q.last_price, chgPct=getChgPct(q), high=q.ohlc?.high||ltp, low=q.ohlc?.low||ltp, vol=q.volume||0;
-          let candles=[];
-          try { candles=await fetchCandles(inst.key,from90,today,'day',token,onTokenExpired); } catch(e){}
-          if (candles.length<5) return;
-          const closes=candles.map(c=>+c[4]).reverse();
-          const rsi=calcRSI(closes), ema=calcEMACrossover(closes), macd=calcMACD(closes);
-          const atr=calcATR(candles), bb=calcBBSqueeze(closes), adx=calcADX(candles);
-          const sr=calcSR(candles), volObj=calcVolumeSurge(candles), patterns=detectPatterns(candles);
-          const rsiDiv=calcRSIDivergence(closes), vwap=calcVWAP(candles), avgVol20=volObj?.avgVol||1;
-          const a50=closes.length>=50?ltp>(ema?.e50||0):null;
-          const a200=closes.length>=200?ltp>(ema?.e200||0):null;
-          const macdBull=macd.bull, volOk=vol>avgVol20*(cfg.vol||1.2);
-          const nearSupp=isNearSupport(ltp,sr,Math.min(...candles.slice(0,5).map(c=>+c[3])));
-          const aboveVWAP=vwap>0?ltp>=vwap:null;
-          const sec=getSector(inst.s);
-          if (!secMap[sec]) secMap[sec]={g:0,c:0};
-          const secSc=secMap[sec].c>0?Math.round(secMap[sec].g/secMap[sec].c*100):50;
-          const numInds=countIndicatorsEx(rsi,macdBull,a50,a200,volOk,nearSupp,patterns,'BUY',macd,bb,adx,rsiDiv);
-          const initRec=numInds>=4?'BUY':numInds>=3?'MODERATE':numInds>=2?'WATCH':'AVOID';
-          // calcConfidence with vixSc, pcrSc, secSc — exact HTML
-          let conf=calcConfidence(null,vixSc,pcrSc,nBull,secSc,vol,avgVol20,patterns,initRec,numInds);
-          // HTML enhancements
-          if(macd.bullCross)                 conf=Math.min(99,conf+6);
-          if(macd.histRising&&macd.bullish)  conf=Math.min(99,conf+3);
-          if(macd.bearCross)                 conf=Math.max(1, conf-8);
-          if(bb?.squeeze)                    conf=Math.min(99,conf+5);
-          if(bb?.nearLowerBand)              conf=Math.min(99,conf+4);
-          if(bb?.percentB>1.0)               conf=Math.max(1, conf-5);
-          if(adx?.bullTrend)                 conf=Math.min(99,conf+5);
-          if(adx?.bearTrend)                 conf=Math.max(1, conf-6);
-          if(adx&&!adx.trending&&!adx.weakTrend) conf=Math.max(1,conf-3);
-          // RSI Divergence enhancements
-          if(rsiDiv?.bullish)        conf=Math.min(99,conf+7+Math.min(5,rsiDiv.strength||0));
-          if(rsiDiv?.hidden_bullish) conf=Math.min(99,conf+4);
-          if(rsiDiv?.bearish)        conf=Math.max(1, conf-8);
-          if(rsiDiv?.hidden_bearish) conf=Math.max(1, conf-4);
-          // VWAP bands
-          const vwapBands=calcVWAPBands(candles);
-          if(vwapBands?.nearLowerBand)             conf=Math.min(99,conf+3);
-          if(vwapBands?.position==='FAR_ABOVE')    conf=Math.max(1, conf-4);
-          // Delivery % boost (same as HTML: high delivery=institutional conviction)
-          const delivPct=getDeliveryPct(q);
-          const delivBoost=delivPct!=null?(delivPct>=60?1:delivPct<=25?-1:0):0;
-          conf=Math.min(100,Math.max(0,conf+delivBoost*5));
-          // FII bias + calibration
-          conf=applyFIIBias(conf, initRec==='BUY'||initRec==='STRONG BUY', null);
-          conf=applyCalibration(conf,'STOCK');
-          if (conf<(cfg.minStockConf||50)) return;
-          const {sl,target:tgtMod,targets}=autoSLTarget(ltp,high,low,atr,sr,vixVal,rsi);
-          // Determine SL/Target method labels for card display
-          const risk2=(ltp-sl); const useS1=sl>0&&sr?.pivotS1>0&&Math.abs(sl-sr.pivotS1)<risk2*0.3;
-          const slMethod=useS1?'S1 support':'ATR+VIX';
-          const slTargets={consMethod:slMethod,modMethod:'2:1 R:R'};
-          const pot=calcPotential(ltp,tgtMod,sl,numInds,initRec);
-          const risk=calcRisk(ltp,sl,tgtMod,atr,vixVal);
-          if (pot.base<(cfg.pot||3)||pot.rr<(cfg.rr||1.2)||risk>(cfg.risk||55)) return;
-          const rec=getRec(conf,pot.base,risk,pot.rr); if(rec==='AVOID') return;
-          secMap[sec].g+=rec==='BUY'||rec==='STRONG BUY'?1:0; secMap[sec].c++;
-          const entryTrigger=calcEntryTrigger(ltp,high,sr,atr,rec,vwap,chgPct);
-          const reversal=detectReversal(ltp,rsi,patterns,sr,vixVal,pcr,nBull,chgPct,atr,high,low);
-          results.push({
-            s:inst.s, n:inst.n, key:inst.key, sec:inst.sec||sec,
-            ltp, chgPct, rsi, conf, rec,
-            sl, target:tgtMod, pot:{...targets,rr:pot.rr,wr:pot.wr||0,base:pot.base,adj:pot.adj||0,ev:pot.ev||0},
-            risk, atr, numInds, slTargets,
-            macd, macdBull, bb, adx, rsiDiv,
-            a50, a200, nearSupp, patterns,
-            vwap, aboveVWAP, vwapType:'daily', vwapBands,
-            vol, avgVol20, high, low, delivPct,
-            entryTrigger, reversal,
-            recentCandles:candles.slice(0,20), closes,
-          });
-        }));
-        if (b+BATCH<byVol.length) await sleep(300);
+      // Step 5 — Pre-build secMap from ALL quoted (exact HTML)
+      setPickProgress('Step 5/5: Calculating scores...');
+      const secMap = {};
+      for (const item of byVol) {
+        const sec = getSector(item.s);
+        if (!secMap[sec]) secMap[sec]={g:0,c:0};
+        if (getChgPct(item._q)>0) secMap[sec].g++;
+        secMap[sec].c++;
       }
 
+      // Score ALL byVol stocks (exact HTML — stocks beyond top20 get empty tech={})
+      const allScored=[], results=[];
+      for (const item of byVol) {
+        const q   = item._q;
+        const ltp = q.last_price;
+        const high= q.ohlc?.high||ltp, low=q.ohlc?.low||ltp, vol=q.volume||0;
+        const chgPct = getChgPct(q);
+        const t      = tech[item.s] || {};
+        const patterns= t.patterns||{};
+        const sr      = t.sr||{};
+        const vwap    = t.vwap||0;
+        const nearSupp= isNearSupport(ltp,sr,low);
+        const delivPct= getDeliveryPct(q);
+        const sec     = getSector(item.s);
+        const secSc   = secMap[sec] ? Math.round(secMap[sec].g/secMap[sec].c*100) : 50;
+        const aboveVWAP = vwap>0 ? ltp>=vwap : null;
+        const vwapBands = t.vwapBands||null;
+        const avgVol20  = t.avgVol20||0;
+        const _isHoliday= getIntradayPhase()==='holiday'||!marketStatus.open;
+        const effectiveVol = (_isHoliday&&vol===0) ? (avgVol20||1) : vol;
+        const volOk    = avgVol20>0 ? effectiveVol>=avgVol20*1.2 : null;
+
+        // preRec from R:R (exact HTML)
+        const {sl,target:tgtMod,targets}=autoSLTarget(ltp,high,low,t.atr||0,sr,vixVal,t.rsi||null);
+        const preRR  = (sl>0&&ltp>sl) ? (tgtMod-ltp)/(ltp-sl) : 2;
+        const preRec = preRR>=2.0?'BUY':preRR>=1.5?'MODERATE':'WATCH';
+
+        const numInds = countIndicatorsEx(t.rsi,t.macdBull,t.a50,t.a200,volOk,nearSupp,patterns,preRec,t.macd,t.bb,t.adx,t.rsiDiv);
+        let conf = calcConfidence(null,vixSc,pcrSc,nBull,secSc,effectiveVol,avgVol20||effectiveVol,patterns,preRec,numInds);
+
+        // Enhancements (exact HTML order)
+        if(t.macd?.bullCross)                      conf=Math.min(99,conf+6);
+        if(t.macd?.histRising&&t.macd?.bullish)    conf=Math.min(99,conf+3);
+        if(t.macd?.bearCross)                      conf=Math.max(1, conf-8);
+        if(t.bb?.squeeze)                          conf=Math.min(99,conf+5);
+        if(t.bb?.nearLowerBand)                    conf=Math.min(99,conf+4);
+        if(t.bb?.percentB>1.0)                     conf=Math.max(1, conf-5);
+        if(t.adx?.bullTrend)                       conf=Math.min(99,conf+5);
+        if(t.adx?.bearTrend)                       conf=Math.max(1, conf-6);
+        if(t.adx&&!t.adx.trending&&!t.adx.weakTrend) conf=Math.max(1,conf-3);
+        if(t.rsiDiv?.bullish)        conf=Math.min(99,conf+7+Math.min(5,t.rsiDiv.strength||0));
+        if(t.rsiDiv?.hidden_bullish) conf=Math.min(99,conf+4);
+        if(t.rsiDiv?.bearish)        conf=Math.max(1, conf-8);
+        if(t.rsiDiv?.hidden_bearish) conf=Math.max(1, conf-4);
+        if(vwapBands?.nearLowerBand)               conf=Math.min(99,conf+3);
+        if(vwapBands?.position==='FAR_ABOVE')      conf=Math.max(1, conf-4);
+        const delivBoost=delivPct!=null?(delivPct>=60?1:delivPct<=25?-1:0):0;
+        conf=Math.min(100,Math.max(0,conf+delivBoost*5));
+        conf=applyFIIBias(conf,preRec==='BUY'||preRec==='STRONG BUY',null);
+        conf=applyCalibration(conf,'STOCK');
+
+        const risk2=(ltp-sl); const useS1=sl>0&&sr?.pivotS1>0&&Math.abs(sl-sr.pivotS1)<risk2*0.3;
+        const slTargets={consMethod:useS1?'S1 support':'ATR+VIX',modMethod:'2:1 R:R'};
+        const pot  = calcPotential(ltp,tgtMod,sl,numInds,preRec);
+        const risk = calcRisk(ltp,sl,tgtMod,t.atr||0,vixVal);
+        const rec  = getRec(conf,pot.base,risk,pot.rr);
+        const passes = conf>=(cfg.minStockConf||50) && pot.base>=(cfg.pot||3) && risk<(cfg.risk||55) && pot.rr>=(cfg.rr||1.2);
+
+        const entryTrigger=calcEntryTrigger(ltp,high,sr,t.atr||0,rec,vwap,chgPct);
+        const reversal=detectReversal(ltp,t.rsi,patterns,sr,vixVal,pcr,nBull,chgPct,t.atr||0,high,low);
+        const macd=t.macd||{}, macdBull=t.macdBull, bb=t.bb, adx=t.adx, rsiDiv=t.rsiDiv;
+        const a50=t.a50, a200=t.a200, nearSuppF=nearSupp;
+        const scored = {
+          s:item.s, n:item.n, key:item.key, sec:item.sec||sec,
+          ltp, chgPct, rsi:t.rsi, conf, rec, passes,
+          sl, target:tgtMod, pot:{...targets,rr:pot.rr,wr:pot.wr||0,base:pot.base,adj:pot.adj||0,ev:pot.ev||0},
+          risk, atr:t.atr||0, numInds, slTargets,
+          macd, macdBull, bb, adx, rsiDiv,
+          a50, a200, nearSupp:nearSuppF, patterns,
+          vwap, aboveVWAP, vwapType:'daily', vwapBands,
+          vol, avgVol20, high, low, delivPct,
+          entryTrigger, reversal,
+          recentCandles:(t.candles||[]).slice(0,20), closes:t.closes||[],
+        };
+        allScored.push(scored);
+        if (passes && rec!=='AVOID') results.push(scored);
+        secMap[sec].g+=rec==='BUY'||rec==='STRONG BUY'?1:0;
+      }
+
+      // Log score distribution (same as HTML)
+      const confBuckets={0:0,30:0,40:0,50:0,60:0,70:0,80:0};
+      allScored.forEach(s=>{ const b=Math.floor(s.conf/10)*10; const k=[0,30,40,50,60,70,80].reverse().find(k=>b>=k)||0; confBuckets[k]++; });
+      lg(`Score dist: ${JSON.stringify(confBuckets)} (threshold: ${cfg.minStockConf||50}%)`);
+      lg(`Passes: pot≥${cfg.pot||3}%=${allScored.filter(s=>s.pot.base>=(cfg.pot||3)).length} risk<${cfg.risk||55}%=${allScored.filter(s=>s.risk<(cfg.risk||55)).length} rr≥${cfg.rr||1.2}=${allScored.filter(s=>s.pot.rr>=(cfg.rr||1.2)).length} conf≥${cfg.minStockConf||50}%=${allScored.filter(s=>s.conf>=(cfg.minStockConf||50)).length}`);
+
+      results.sort((a,b)=>b.conf-a.conf);
       results.sort((a,b)=>b.conf-a.conf);
 
       // ── MTF 30-min boost for top 5 picks (exact HTML port) ──
@@ -599,14 +681,16 @@ export default function StocksPane() {
       // Re-sort after MTF boost may change conf
       results.sort((a,b)=>b.conf-a.conf);
 
-      // ── Fallback: if 0 picks pass all filters, show top-5 by conf ──
+      // ── Fallback: if 0 picks pass all filters, show top-5 by conf (exact HTML)
       let finalPicks=results;
-      if(!finalPicks.length&&byVol.length>0){
-        lg('⚠ 0 picks passed all filters — showing top 5 by confidence as fallback','w');
-        finalPicks=byVol.slice(0,5).map(inst=>{
-          const q=inst._q; if(!q) return null;
-          return {...inst,ltp:q.last_price,chgPct:getChgPct(q),conf:0,rec:'WATCH',_fallback:true};
-        }).filter(Boolean);
+      if(!finalPicks.length&&allScored.length>0){
+        lg('⚠ 0 stocks passed all filters → showing top 5 by confidence. Relax thresholds in ⚙ Settings.','w');
+        finalPicks=allScored
+          .filter(s=>s.conf>=(cfg.minStockConf||50))
+          .sort((a,b)=>b.conf-a.conf)
+          .slice(0,5)
+          .map(s=>({...s,passes:false,_fallback:true}));
+        if(!finalPicks.length) finalPicks=allScored.sort((a,b)=>b.conf-a.conf).slice(0,5).map(s=>({...s,_fallback:true}));
       }
 
       const topSec=Object.entries(secMap).filter(([,v])=>v.c>0).sort((a,b)=>(b[1].g/b[1].c)-(a[1].g/a[1].c))[0]?.[0]||'Mixed';
@@ -637,11 +721,24 @@ export default function StocksPane() {
       let niftyCloses=[];
       try { niftyCloses=(await fetchCandles('NSE_INDEX|Nifty 50',from52,today,'day',token,onTokenExpired)).map(c=>+c[4]).reverse(); } catch(e){}
       const scanList=stocks.filter(s=>s.scan!==false);
-      const rawQ={};
-      for (let b=0; b<Math.ceil(scanList.length/50); b++) {
-        const keys=scanList.slice(b*50,(b+1)*50).map(s=>s.key).join(',');
-        Object.assign(rawQ, await fetchQ(keys,token,onTokenExpired).catch(()=>({})));
-        if ((b+1)*50<scanList.length) await sleep(200);
+      // WebSocket quotes — same as picks scan
+      setBoProgress('Fetching quotes via WebSocket...');
+      let rawQ={};
+      try {
+        rawQ = await fetchScanQuotesViaWS(token, scanList.map(s=>s.key));
+        const missing=scanList.filter(s=>!rawQ[s.key]?.last_price).map(s=>s.key);
+        if (missing.length>0) {
+          for (let b=0;b<Math.ceil(missing.length/50);b++) {
+            Object.assign(rawQ, await fetchQ(missing.slice(b*50,(b+1)*50).join(','),token,onTokenExpired).catch(()=>({})));
+            if((b+1)*50<missing.length) await sleep(200);
+          }
+        }
+      } catch(e) {
+        lg(`BO WS quotes failed (${e.message}), falling back to REST`,'w');
+        for (let b=0;b<Math.ceil(scanList.length/50);b++) {
+          Object.assign(rawQ, await fetchQ(scanList.slice(b*50,(b+1)*50).map(s=>s.key).join(','),token,onTokenExpired).catch(()=>({})));
+          if((b+1)*50<scanList.length) await sleep(200);
+        }
       }
       const byVol=scanList.map(s=>({...s,_q:rawQ[s.key]})).filter(s=>s._q?.last_price)
         .sort((a,b)=>(b._q.volume||0)-(a._q.volume||0)).slice(0,80);
