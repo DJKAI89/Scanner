@@ -398,7 +398,7 @@ function fireBreakoutAlerts(results) {
 export default function StocksPane() {
   const { token, cfg, marketStatus, lg, onTokenExpired, updateBadge, gh,
           setScanning, setStatusDot, setStatusTxt, setScanSecs,
-          stocks, fiiInterp } = useApp();
+          stocks, fiiInterp, setTickerStats, confCalibration } = useApp();
 
   const [mode, setMode]               = useState('picks');
   const [picksLoading, setPicksLoading] = useState(false);
@@ -422,13 +422,31 @@ export default function StocksPane() {
   );
 
   // ── Derive live index values (update on every WS tick) ──
-  const niftyLTP      = liveIndexPrices['NSE_INDEX|Nifty 50']?.ltp     || 0;
-  const niftyChgPct   = liveIndexPrices['NSE_INDEX|Nifty 50']?.chgPct  || 0;
-  const niftyPts      = niftyLTP > 0 ? +(niftyChgPct / 100 * niftyLTP).toFixed(2) : 0;
-  const bnkLTP        = liveIndexPrices['NSE_INDEX|Nifty Bank']?.ltp    || 0;
-  const bnkChgPct     = liveIndexPrices['NSE_INDEX|Nifty Bank']?.chgPct || 0;
-  const bnkPts        = bnkLTP > 0 ? +(bnkChgPct / 100 * bnkLTP).toFixed(2) : 0;
-  const vixLTP        = liveIndexPrices['NSE_INDEX|India VIX']?.ltp     || 0;
+  const niftyLTP    = idxPrices['NSE_INDEX|Nifty 50']?.ltp    || 0;
+  const niftyChgPct = idxPrices['NSE_INDEX|Nifty 50']?.chgPct || 0;
+  const niftyPts    = niftyLTP > 0 ? +(niftyChgPct / 100 * niftyLTP).toFixed(2) : 0;
+  const bnkLTP      = idxPrices['NSE_INDEX|Nifty Bank']?.ltp    || 0;
+  const bnkChgPct   = idxPrices['NSE_INDEX|Nifty Bank']?.chgPct || 0;
+  const bnkPts      = bnkLTP > 0 ? +(bnkChgPct / 100 * bnkLTP).toFixed(2) : 0;
+  const vixLTP      = idxPrices['NSE_INDEX|India VIX']?.ltp     || 0;
+
+  // ── loadClosedMarketStats: fetch index prices when market is closed ──
+  const [closedIdxPrices, setClosedIdxPrices] = useState({});
+  useEffect(() => {
+    if (marketStatus.open || !token || niftyLTP > 0) return;
+    fetchQ('NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank,NSE_INDEX|India VIX', token, onTokenExpired)
+      .then(q => {
+        const out = {};
+        ['NSE_INDEX|Nifty 50','NSE_INDEX|Nifty Bank','NSE_INDEX|India VIX'].forEach(k => {
+          const d = q[k]; if (d?.last_price > 0) out[k] = { ltp:d.last_price, chgPct:d.net_change?(+(d.net_change/(d.last_price-d.net_change)*100).toFixed(2)):0 };
+        });
+        setClosedIdxPrices(out);
+      })
+      .catch(() => {});
+  }, [marketStatus.open, token]); // eslint-disable-line
+
+  // Merge closed-market prices as fallback when WS has no data
+  const idxPrices = { ...closedIdxPrices, ...liveIndexPrices };
 
   // ── Stock picks WebSocket ──
   const topKeys = picks.slice(0, 20).map(p => p.key).filter(Boolean);
@@ -648,7 +666,7 @@ export default function StocksPane() {
         const delivBoost=delivPct!=null?(delivPct>=60?1:delivPct<=25?-1:0):0;
         conf=Math.min(100,Math.max(0,conf+delivBoost*5));
         conf=applyFIIBias(conf,preRec==='BUY'||preRec==='STRONG BUY',null);
-        conf=applyCalibration(conf,'STOCK');
+        conf=applyCalibration(conf, confCalibration||null);
 
         const risk2=(ltp-sl); const useS1=sl>0&&sr?.pivotS1>0&&Math.abs(sl-sr.pivotS1)<risk2*0.3;
         const slTargets={consMethod:useS1?'S1 support':'ATR+VIX',modMethod:'2:1 R:R'};
@@ -735,6 +753,7 @@ export default function StocksPane() {
       const topSec=Object.entries(secMap).filter(([,v])=>v.c>0).sort((a,b)=>(b[1].g/b[1].c)-(a[1].g/a[1].c))[0]?.[0]||'Mixed';
       setPicks(finalPicks);
       setScanStats({pcr,pcrTxt,sent,sentSc,topSec,cnt:finalPicks.length,totalScanned:byVol.length});
+      setTickerStats({ vix:vixVal, pcr, sentiment:sent, sentSc, topSec });
       updateBadge('stocks',String(finalPicks.length));
       setPicksTime('Updated: '+getIST());
       setStatusDot('live'); setStatusTxt('Live');
