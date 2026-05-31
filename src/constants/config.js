@@ -50,6 +50,33 @@ export const QUICK_STOCKS = [
 
 export const THROTTLE_MS = 420;
 
+export const TOP_FO_SYMBOLS = ['RELIANCE','TCS','HDFCBANK','ICICIBANK','INFY','SBIN','AXISBANK','BAJFINANCE','WIPRO','KOTAKBANK','ITC','LT','TATAMOTORS','ADANIENT','MARUTI'];
+
+export const SECTOR_CTX_MAP = {
+  HDFCBANK:'BANKNIFTY', ICICIBANK:'BANKNIFTY', KOTAKBANK:'BANKNIFTY', AXISBANK:'BANKNIFTY',
+  SBIN:'BANKNIFTY', IDFCFIRSTB:'BANKNIFTY', BANDHANBNK:'BANKNIFTY', RBLBANK:'BANKNIFTY',
+  FEDERALBNK:'BANKNIFTY', INDIANB:'BANKNIFTY', BANKINDIA:'BANKNIFTY', BANKBARODA:'BANKNIFTY',
+  CANBK:'BANKNIFTY', PNB:'BANKNIFTY', UNIONBANK:'BANKNIFTY', INDUSINDBK:'BANKNIFTY',
+};
+
+// Weekly expiry day detection — NSE: Thu (NIFTY), Wed (BANKNIFTY)
+export function isWeeklyExpiryDay() {
+  const d = new Date(new Date().toLocaleString('en-US', { timeZone:'Asia/Kolkata' }));
+  return d.getDay() === 4 || d.getDay() === 3; // Thu=4, Wed=3
+}
+
+// Time-of-day penalty (same as HTML getTimeOfDayPenalty)
+export function getTimeOfDayPenalty() {
+  const d = new Date(new Date().toLocaleString('en-US', { timeZone:'Asia/Kolkata' }));
+  const mins = d.getHours() * 60 + d.getMinutes();
+  if (mins >= 555 && mins <= 585) return +5;   // 9:15-9:45 opening
+  if (mins >= 585 && mins <= 660) return  0;   // 9:45-11:00 ideal
+  if (mins >= 660 && mins <= 810) return -5;   // 11:00-13:30 mid
+  if (mins >= 810 && mins <= 870) return -12;  // 13:30-14:30 afternoon
+  if (mins >= 870)                return -18;  // 14:30+ pre-close
+  return 0;
+}
+
 // ── Fallback Nifty 50 stock list (used when stocks.json not loaded from GitHub) ──
 export const NIFTY50_FALLBACK = [
   { key:'NSE_EQ|INE040A01034', s:'HDFCBANK',   n:'HDFC Bank',              sec:'Banking',  fo:true,  lot:550,  step:50  },
