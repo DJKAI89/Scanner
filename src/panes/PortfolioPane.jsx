@@ -93,6 +93,27 @@ export default function PortfolioPane() {
   const todayPnl  = portfolioRows.reduce((s, i) => s + (i.todayPnl || 0), 0);
   const totalValue = portfolioRows.reduce((s, i) => s + (i.value || 0), 0);
 
+  // ── Sector exposure analysis ──────────────────────────────
+  const sectorMap = useMemo(() => {
+    const map = {};
+    enrichedHld.concat(enrichedPos).forEach(item => {
+      const sec = item.sector || item.exchange || 'Other';
+      if (!map[sec]) map[sec] = { value: 0, pnl: 0, count: 0 };
+      map[sec].value += item.value || 0;
+      map[sec].pnl   += item.pnl   || 0;
+      map[sec].count++;
+    });
+    return Object.entries(map).sort((a, b) => b[1].value - a[1].value);
+  }, [enrichedHld, enrichedPos]);
+
+  // ── Correlation warnings (same sector > 40% of portfolio) ─
+  const correlationWarnings = useMemo(() => {
+    if (!totalValue) return [];
+    return sectorMap
+      .filter(([, v]) => v.value / totalValue > 0.4)
+      .map(([sec, v]) => `⚠ ${sec} is ${((v.value / totalValue) * 100).toFixed(0)}% of portfolio — high concentration risk`);
+  }, [sectorMap, totalValue]);
+
   const current = tab === 'positions' ? enrichedPos : enrichedHld;
 
   function Row({ item }) {
@@ -148,6 +169,36 @@ export default function PortfolioPane() {
             <StatCard label="POSITIONS"   value={positions.length} valClass="am" />
             <StatCard label="HOLDINGS"    value={holdings.length}  valClass="pu" />
           </div>
+
+          {/* Correlation warnings */}
+          {correlationWarnings.length > 0 && (
+            <div style={{ background:'#fef3c7', border:'1px solid #fcd34d', borderRadius:8, padding:'10px 13px', marginBottom:10 }}>
+              <div style={{ fontSize:10, fontWeight:800, color:'#92400e', marginBottom:4 }}>⚠ Concentration Risk</div>
+              {correlationWarnings.map((w,i) => <div key={i} style={{ fontSize:10, color:'#78350f' }}>{w}</div>)}
+            </div>
+          )}
+
+          {/* Sector exposure */}
+          {sectorMap.length > 1 && totalValue > 0 && (
+            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:'12px 14px', marginBottom:10 }}>
+              <div style={{ fontSize:11, fontWeight:800, color:'#0f172a', marginBottom:10 }}>🏭 Sector Exposure</div>
+              {sectorMap.map(([sec, v]) => {
+                const pct = totalValue > 0 ? (v.value / totalValue * 100) : 0;
+                const col = pct > 40 ? '#dc2626' : pct > 25 ? '#d97706' : '#16a34a';
+                return (
+                  <div key={sec} style={{ marginBottom:7 }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, marginBottom:2 }}>
+                      <span style={{ color:'#374151', fontWeight:600 }}>{sec} ({v.count})</span>
+                      <span style={{ fontWeight:700, color:col }}>{pct.toFixed(0)}% · ₹{fmt(v.value)}</span>
+                    </div>
+                    <div style={{ background:'#f1f5f9', borderRadius:4, height:5 }}>
+                      <div style={{ background:col, width:Math.min(100,pct)+'%', height:5, borderRadius:4 }}/>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* Tab toggle */}
           <div style={{ display: 'flex', gap: 0, marginBottom: 12, background: '#f1f5f9', borderRadius: 10, padding: 3 }}>
