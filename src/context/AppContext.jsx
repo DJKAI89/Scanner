@@ -3,7 +3,7 @@ import { DEF, CFG_VERSION } from '../constants/config';
 import { localIsOpen, getMarketStatusLocal, getIST } from '../utils/marketTime';
 import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken } from '../services/api';
 import { interpretFIIDII } from '../services/technical';
-import { pullSettingsFromGH, pushSettingsToGH } from '../services/github';
+import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays } from '../services/github';
 
 const AppContext = createContext(null);
 
@@ -66,6 +66,8 @@ export function AppProvider({ children }) {
   const [logOpen, setLogOpen]     = useState(false);
   const [logLines, setLogLines]   = useState([]);
   const [toast, setToast]         = useState(null);
+  const [tickerStats, setTickerStats] = useState({ vix:0, pcr:null, sentiment:'—', sentSc:5, topSec:'—' });
+  const [confCalibration, setConfCalibration] = useState(null);
 
   // ── Settings-pulled-from-GH callback ref (so SettingsPane can react) ──
   const [ghSettingsPulled, setGhSettingsPulled] = useState(0);
@@ -207,6 +209,37 @@ export function AppProvider({ children }) {
     } catch (e) { lg('loadFIIDII: ' + e.message, 'w'); }
   }, [gh, fiiData, lg, showToast]); // eslint-disable-line
 
+  // ── loadConfCalibration — self-calibrating confidence from GitHub signal history ──
+  const loadConfCalibration = useCallback(async (ghCfg) => {
+    const g = ghCfg || gh;
+    if (!g?.token || !g?.user || !g?.repo) return;
+    try {
+      const signals = await ghReadMultipleDays(g, 30);
+      if (!signals?.length) return;
+      const closed = signals.filter(s => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
+      if (closed.length < 10) { lg(`Calibration: need 10+ closed signals, have ${closed.length}`, 'w'); return; }
+      const bands = {};
+      for (const s of closed) {
+        const bucket = Math.floor((s.confidence || 50) / 10) * 10;
+        if (!bands[bucket]) bands[bucket] = { hits:0, total:0 };
+        bands[bucket].total++;
+        if (s.status === 'TARGET_HIT') bands[bucket].hits++;
+      }
+      const calibration = {};
+      for (const [band, data] of Object.entries(bands)) {
+        if (data.total < 3) continue;
+        const b = parseInt(band);
+        const actualWR = data.hits / data.total;
+        const expectedWR = b / 100;
+        const rawAdj = Math.round((actualWR - expectedWR) * 100);
+        calibration[b] = { adj: Math.max(-15, Math.min(15, rawAdj)), hits:data.hits, total:data.total, winRate:Math.round(actualWR*100) };
+      }
+      setConfCalibration(calibration);
+      const summary = Object.entries(calibration).map(([b,d]) => `${b}%→${d.winRate}%WR(n=${d.total})`).join(' ');
+      lg('Calibration loaded: ' + summary, 'o');
+    } catch(e) { lg('loadConfCalibration: ' + e.message, 'w'); }
+  }, [gh, lg]);
+
   // ── pullGHSettings — pull settings from GitHub (same as HTML: on boot after profile fetch) ──
   const pullGHSettings = useCallback(async (ghCfg) => {
     const g = ghCfg || gh;
@@ -274,7 +307,7 @@ export function AppProvider({ children }) {
       // Still load stocks/FII even if profile fails
       setTimeout(() => {
         const g = { token: localStorage.getItem('friday_gh_token') || '', user: localStorage.getItem('friday_gh_user') || '', repo: localStorage.getItem('friday_gh_repo') || '' };
-        if (g.token) { loadStocks(g); loadFIIDII(g); }
+        if (g.token) { loadStocks(g); loadFIIDII(g); loadConfCalibration(g); }
       }, 2000);
     });
   }, [booted]); // eslint-disable-line
@@ -319,6 +352,8 @@ export function AppProvider({ children }) {
     stocks,   setStocks,   stocksStatus, loadStocks,
     fiiData,  fiiInterp,   loadFIIDII,
     userName, userId,
+    tickerStats, setTickerStats,
+    confCalibration, setConfCalibration, loadConfCalibration,
     // helpers
     lg, showToast, refreshMarketStatus,
   };
