@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
+import { TimeOfDayBanner } from './StocksPane';
 import { fetchQ, fetchOptions, fetchIntraday, resolveAccessToken } from '../services/api';
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST, sleep } from '../utils/marketTime';
@@ -537,6 +538,10 @@ export default function OptionsPane() {
   return (
     <div>
       {!marketStatus.open && <MarketClosedBanner msg={marketStatus.msg || '🔔 NSE Market Closed'} />}
+      {marketStatus.open && Object.keys(marketCtxMap).length > 0 && (() => {
+        const niftyCtx = marketCtxMap['NIFTY']; if (!niftyCtx) return null;
+        return <TimeOfDayBanner niftyChgPct={niftyCtx.dayChange||0} vix={niftyCtx.vix||15} />;
+      })()}
       {error && <ErrorBanner title="⚠ Options Error" message={error} onRetry={() => loadOptions(true)} />}
       {loading ? (
         <Spinner label="Scanning F&O options..." progress={progress}

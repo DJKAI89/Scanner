@@ -492,7 +492,7 @@ export default function LookupPane() {
                   )}
 
                   {r.foData.picks.length === 0 && (
-                    <div style={{ fontSize:11, color:'#64748b', padding:8 }}>No signals meet confidence >= {cfg.minOptConf}%. Lower Options Min Confidence in settings.</div>
+                    <div style={{ fontSize:11, color:'#64748b', padding:8 }}>No signals meet confidence ≥ {cfg.minOptConf}%. Lower Options Min Confidence in settings.</div>
                   )}
 
                   {r.foData.multiExpiry && (

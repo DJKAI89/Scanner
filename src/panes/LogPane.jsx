@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, EmptyState, StatCard } from '../components/common.jsx';
-import { ghReadMultipleDays, ghWriteDay, ghUpdateIndex } from '../services/github';
+import { ghReadMultipleDays, ghWriteDay, ghUpdateIndex, ghReadDay, ghReadIndex } from '../services/github';
+import { fetchQ } from '../services/api';
 import { fmt } from '../utils/formatters';
 import { getIST, getISTDate } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed.js';
@@ -164,6 +165,7 @@ export default function LogPane() {
   const { gh, token, onTokenExpired, updateBadge, lg, marketStatus } = useApp();
 
   const [loading, setLoading]         = useState(false);
+  const [checking, setChecking]       = useState(false);
   const [error, setError]             = useState('');
   const [signals, setSignals]         = useState([]);
   const [sigShaMap, setSigShaMap]     = useState({});
@@ -239,6 +241,47 @@ export default function LogPane() {
   const load = useCallback(async () => {
     if (!gh.token||!gh.user||!gh.repo) { setError('GitHub not configured — go to ⚙ Settings to set it up.'); return; }
     setLoading(true); setError('');
+
+  // ── checkAllOutcomes — auto-check open signals vs current prices ──
+  const checkAllOutcomes = useCallback(async () => {
+    if (!gh.token||!gh.user||!gh.repo) { setError('GitHub not configured.'); return; }
+    if (!token) { setError('No Upstox token — log in first.'); return; }
+    setChecking(true); setError('');
+    try {
+      const istDate = new Date().toLocaleDateString('en-CA', { timeZone:'Asia/Kolkata' });
+      const { dates, dailyStats } = await ghReadIndex(gh);
+      const datesWithOpen = dates.filter(d => dailyStats[d]?.open > 0);
+      if (!datesWithOpen.includes(istDate)) datesWithOpen.push(istDate);
+      if (!datesWithOpen.length) { lg('No open signals found.', 'w'); return; }
+      lg(`checkAllOutcomes: checking ${datesWithOpen.length} day file(s)`, 'o');
+
+      const dayMap = {};
+      const reads = await Promise.allSettled(datesWithOpen.map(d => ghReadDay(gh, d)));
+      reads.forEach((res, i) => { if (res.status==='fulfilled') dayMap[datesWithOpen[i]] = { signals:res.value.signals, sha:res.value.sha }; });
+
+      let updated = 0;
+      for (const [date, { signals: daySigs, sha }] of Object.entries(dayMap)) {
+        const openSigs = daySigs.filter(s => s.status === 'OPEN');
+        if (!openSigs.length) continue;
+        const keys = [...new Set(openSigs.map(s => s.key).filter(Boolean))].join(',');
+        let quotes = {};
+        try { quotes = await fetchQ(keys, token, onTokenExpired); } catch(_) {}
+        let changed = false;
+        const newSigs = daySigs.map(s => {
+          if (s.status !== 'OPEN' || !s.key) return s;
+          const q = quotes[s.key]; if (!q?.last_price) return s;
+          const ltp = q.last_price;
+          if (s.target > 0 && ltp >= s.target) { lg(`✅ TARGET HIT: ${s.sym} @ ₹${ltp}`, 'o'); changed = true; updated++; return { ...s, status:'TARGET_HIT', exitPrice:ltp, exitTime:new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour12:false}) }; }
+          if (s.sl > 0 && ltp <= s.sl)         { lg(`❌ SL HIT: ${s.sym} @ ₹${ltp}`, 'w'); changed = true; updated++; return { ...s, status:'SL_HIT',     exitPrice:ltp, exitTime:new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour12:false}) }; }
+          return s;
+        });
+        if (changed) await ghWriteDay(gh, newSigs, sha, date);
+      }
+      lg(`✅ checkAllOutcomes: ${updated} signal(s) updated`, 'o');
+      await load();
+    } catch(e) { setError('Outcome check failed: ' + e.message); lg('checkAllOutcomes: '+e.message,'e'); }
+    finally { setChecking(false); }
+  }, [gh, token, onTokenExpired, load, lg]); // eslint-disable-line
     try {
       const all = await ghReadMultipleDays(gh, days);
       all.sort((a,b) => (b.date+b.time).localeCompare(a.date+a.time));
@@ -311,6 +354,9 @@ export default function LogPane() {
         </select>
         <button className="btn btn-g" onClick={load} disabled={loading} style={{ padding:'7px 14px', fontSize:11 }}>
           {loading?'⏳':'🔄 Refresh'}
+        </button>
+        <button className="btn btn-g" onClick={checkAllOutcomes} disabled={loading||checking} title="Auto-check all OPEN signals against current prices — marks TARGET_HIT or SL_HIT" style={{ padding:'7px 14px', fontSize:11, background:'#eff6ff', color:'#1d4ed8' }}>
+          {checking?'⏳ Checking...':'✅ Check Outcomes'}
         </button>
       </div>
 

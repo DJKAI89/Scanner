@@ -51,7 +51,7 @@ const INDEX_WS_KEYS = [
 ];
 
 // ── Time-of-Day reliability banner ──────────────────────────
-function TimeOfDayBanner({ niftyChgPct, vix }) {
+export function TimeOfDayBanner({ niftyChgPct, vix }) {
   const now = new Date();
   const h   = parseInt(now.toLocaleString('en-US',{timeZone:'Asia/Kolkata',hour:'2-digit',hour12:false}))%24;
   const m   = parseInt(now.toLocaleString('en-US',{timeZone:'Asia/Kolkata',minute:'2-digit'}));
@@ -356,6 +356,43 @@ function calcStockVWAPSignal(ltp, intradayVWAP) {
   const strong   = Math.abs(distPct) > 0.5;
   const nearVWAP = Math.abs(distPct) <= 0.2;
   return { vwap: intradayVWAP, distPct, aboveVWAP, strong, nearVWAP };
+}
+
+// ── Push notification helpers (exact HTML port) ─────────────
+function sendNotification(title, body, key) {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  try {
+    const n = new Notification(title, { body, icon:'/favicon.ico', tag: key });
+    n.onclick = () => { window.focus(); n.close(); };
+  } catch(_) {}
+}
+function checkPickAlerts(picks) {
+  if (!picks?.length) return;
+  const today = new Date().toLocaleDateString('en-CA', { timeZone:'Asia/Kolkata' });
+  const highConf = picks.filter(p => p.passes && p.conf >= 80);
+  if (highConf.length) {
+    const top = highConf.sort((a,b)=>b.conf-a.conf)[0];
+    const k = 'high-conf-'+top.s+'-'+today;
+    if (!sessionStorage.getItem(k)) { sessionStorage.setItem(k,'1'); sendNotification(`🔥 High Confidence: ${top.s} (${top.conf}%)`, `${top.rec} · Entry ₹${top.ltp} · Target ₹${top.target} · R:R ${top.pot?.rr}:1`, k); }
+  }
+  picks.filter(p=>p.passes&&p.rsiDiv?.bullish).slice(0,1).forEach(d=>{
+    const k='rsidiv-'+d.s+'-'+today;
+    if(!sessionStorage.getItem(k)){sessionStorage.setItem(k,'1');sendNotification(`📊 RSI Divergence: ${d.s}`,`Bullish divergence · Conf ${d.conf}%`,k);}
+  });
+  picks.filter(p=>p.passes&&p.bb?.squeeze).slice(0,1).forEach(sq=>{
+    const k='squeeze-'+sq.s+'-'+today;
+    if(!sessionStorage.getItem(k)){sessionStorage.setItem(k,'1');sendNotification(`⚡ BB Squeeze: ${sq.s}`,`Bollinger squeeze — breakout imminent · Conf ${sq.conf}%`,k);}
+  });
+}
+const _alertedBreakouts = new Set();
+function fireBreakoutAlerts(results) {
+  if (typeof Notification==='undefined'||Notification.permission!=='granted') return;
+  results.filter(r=>r.score>=7).forEach(r=>{
+    const sigType = r.ema?.goldenCross?'GOLDEN_CROSS':r.ema?.deathCross?'DEATH_CROSS':r.wk52?.breakHigh?'52WK_HIGH':r.wk52?.breakLow?'52WK_LOW':r.pdhl?.bullBreakout?'PDH_BREAK':r.pdhl?.bearBreakout?'PDL_BREAK':r.st?.crossed?(r.st.trend==='UP'?'ST_UP':'ST_DOWN'):'GENERIC';
+    const k = r.s+'_'+sigType;
+    if (_alertedBreakouts.has(k)) return; _alertedBreakouts.add(k);
+    sendNotification(`${r.isBull?'📈':'📉'} Breakout: ${r.s} ${r.dir} (${r.score}/10)`, `${sigType.replace(/_/g,' ')} · ₹${r.ltp} → Target ₹${r.trade?.target} · SL ₹${r.trade?.sl}`, 'bo_'+k);
+  });
 }
 
 export default function StocksPane() {
@@ -704,6 +741,7 @@ export default function StocksPane() {
       lg(`✅ Picks: ${finalPicks.length} from ${byVol.length} stocks`,'o');
       if (!finalPicks.length) lg(`⚠ 0 picks — lower Conf(${cfg.minStockConf}%)/Pot(${cfg.pot}%)/Risk(${cfg.risk}%) in ⚙ Settings`,'w');
       if (finalPicks.length&&gh?.token) logSignals(gh,finalPicks.filter(p=>!p._fallback).map(p=>buildStockSignal(p,vixVal)),vixVal,lg);
+      checkPickAlerts(finalPicks);
     } catch(e) {
       setPicksError(e.message); setStatusDot('err'); setStatusTxt('Error');
       lg('Scan error: '+e.message,'e');
@@ -845,6 +883,7 @@ export default function StocksPane() {
       }));
       setBoTime('Scanned: '+getIST()); updateBadge('stocks',results.length+' 🚀');
       lg(`✅ Breakout: ${results.length} signals`,'o');
+      fireBreakoutAlerts(results);
     } catch(e) { setBoError(e.message); lg('Breakout error: '+e.message,'e'); }
     finally { setBoLoading(false); }
   }
