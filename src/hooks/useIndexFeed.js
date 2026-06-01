@@ -25,7 +25,7 @@ function parseQ(q) {
 // Poll every 5 seconds — matches HTML behaviour
 const INTERVAL_MS = 5000;
 
-export function useIndexFeed(token, onTokenExpired, _tickSecs, enabled = true) {
+export function useIndexFeed(token, onTokenExpired, enabled = true) {
   const [prices, setPrices]   = useState({});
   const [loading, setLoading] = useState(false);
   const timerRef              = useRef(null);

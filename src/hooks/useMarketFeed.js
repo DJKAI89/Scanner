@@ -272,12 +272,12 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
   const mode = options.mode || 'ltpc';
   const pollFallback = options.pollFallback !== false;
   const ws          = useRef(null);
+  const connectSeq  = useRef(0);
   const retryRef    = useRef(0);
   const retryTimer  = useRef(null);
   const pollTimer   = useRef(null);
   const keysRef     = useRef([]);
   const tokenRef    = useRef(token);
-  const onPriceRef  = useRef(null);
 
   const [connected,   setConnected]   = useState(false);
   const [lastPrices,  setLastPrices]  = useState({});
@@ -346,10 +346,11 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
   const connect = useCallback(async () => {
     const accessToken = resolveAccessToken(token);
     if (!accessToken || !keysRef.current.length || !enabled) return;
-    if (ws.current?.readyState === WebSocket.OPEN) return;
+    if (ws.current?.readyState === WebSocket.OPEN || ws.current?.readyState === WebSocket.CONNECTING) return;
+
+    const seq = ++connectSeq.current;
 
     try {
-      // Step 1: Get authorized WebSocket URL
       let authData = null;
       let authError = '';
       for (const url of AUTHORIZE_URLS) {
@@ -366,37 +367,40 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
         if (!detail.includes('UDAPI100012')) break;
       }
       if (!authData) throw new Error(authError || 'Auth failed');
-      const wsUrl    = authData?.data?.authorized_redirect_uri
-                    || authData?.authorized_redirect_uri
-                    || authData?.data?.uri
-                    || authData?.uri;
-      if (!wsUrl) throw new Error('No WebSocket URL in response');
 
-      // Step 2: Connect to signed URL
+      const wsUrl = authData?.data?.authorized_redirect_uri
+        || authData?.authorized_redirect_uri
+        || authData?.data?.uri
+        || authData?.uri;
+      if (!wsUrl || seq !== connectSeq.current) return;
+
       const socket = new WebSocket(wsUrl);
-      socket.binaryType = 'arraybuffer'; // CRITICAL — v3 sends binary protobuf
+      socket.binaryType = 'arraybuffer';
+      ws.current = socket;
 
       socket.onopen = () => {
+        if (seq !== connectSeq.current || ws.current !== socket) {
+          try { socket.close(1000); } catch (_) {}
+          return;
+        }
         retryRef.current = 0;
         setConnected(true);
         setWsMode('ws');
-        stopPolling(); // Stop polling once WS works
-        // Subscribe in requested feed mode
+        stopPolling();
         sendFeedRequest(socket, {
-          guid:   crypto.randomUUID(),
+          guid: crypto.randomUUID(),
           method: 'sub',
-          data:   { mode, instrumentKeys: keysRef.current },
+          data: { mode, instrumentKeys: keysRef.current },
         });
       };
 
       socket.onmessage = (evt) => {
+        if (seq !== connectSeq.current || ws.current !== socket) return;
         try {
-          // v3 always sends binary protobuf
           if (evt.data instanceof ArrayBuffer) {
             const feeds = decodeFeedResponse(evt.data);
             if (Object.keys(feeds).length > 0) applyPrices(feeds);
           } else if (typeof evt.data === 'string') {
-            // Shouldn't happen in v3, but handle gracefully
             const d = JSON.parse(evt.data);
             if (d?.feeds) applyPrices(d.feeds);
           }
@@ -404,32 +408,31 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
       };
 
       socket.onerror = () => {
+        if (seq !== connectSeq.current || ws.current !== socket) return;
         setConnected(false);
         setWsMode('poll');
-        startPolling(); // Fall back to polling on WS error when enabled
+        startPolling();
       };
 
       socket.onclose = (e) => {
+        if (seq !== connectSeq.current || ws.current !== socket) return;
         setConnected(false);
         ws.current = null;
-        if (e.code === 1000) return; // normal close
-        // Retry with back-off, poll in the meantime
+        if (e.code === 1000) return;
         startPolling();
         const delay = Math.min(30000, 2000 * Math.pow(2, retryRef.current));
         retryRef.current++;
         retryTimer.current = setTimeout(connect, delay);
       };
-
-      ws.current = socket;
     } catch (e) {
-      console.warn('WS init failed:', e.message, '— falling back to REST polling');
+      if (seq !== connectSeq.current) return;
+      console.warn('WS init failed:', e.message, '- falling back to REST polling');
       startPolling();
-      // Retry WebSocket after 30s
       retryTimer.current = setTimeout(connect, 30000);
     }
   }, [token, enabled, mode, applyPrices, startPolling, stopPolling]);
-
   const disconnect = useCallback(() => {
+    connectSeq.current++;
     clearTimeout(retryTimer.current);
     stopPolling();
     if (ws.current) {
@@ -466,3 +469,4 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
 
   return { connected, lastPrices, wsMode, subscribe, disconnect };
 }
+

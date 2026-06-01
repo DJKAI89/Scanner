@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
-import { TimeOfDayBanner } from './StocksPane';
 import { fetchQ, fetchOptions, fetchIntraday, resolveAccessToken } from '../services/api';
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST, sleep } from '../utils/marketTime';
@@ -346,14 +345,16 @@ export default function OptionsPane() {
   useEffect(() => {
     const liveVix = liveIndexPrices[VIX_KEY]?.ltp;
     if (liveVix > 0) setVix(liveVix);
-    if (Object.keys(liveIndexPrices).length > 0) setUpdTime('Live: ' + getIST());
+    if (Object.keys(liveIndexPrices).length > 0) {
+      setUpdTime('Live: ' + getIST());
+    }
   }, [liveIndexPrices]);
 
   async function loadOptions() {
     if (loadingRef.current) return;
     loadingRef.current = true;
     setScanning(true); setStatusDot('scan'); setStatusTxt('Scanning options...');
-    setLoading(false); setError(''); setProgress('Step 1: Fetching Nifty direction + VIX...');
+    setLoading(true); setError(''); setProgress('Step 1: Fetching Nifty direction + VIX...');
     try {
       // Step 1: index quotes + VIX
       const mktD = await fetchQ('NSE_INDEX|Nifty 50,NSE_INDEX|India VIX', accessToken, onTokenExpired);
@@ -507,6 +508,7 @@ export default function OptionsPane() {
       }
       const withTrend = built.reduce((s, g) => s + g.picks.filter(p => p.trendAligned).length, 0);
       const total     = built.reduce((s, g) => s + g.picks.length, 0);
+      setGroups(built);
       updateBadge('options', withTrend > 0 ? withTrend + ' signals' : '—');
       setUpdTime('Updated: ' + getIST());
       setStatusDot('live'); setStatusTxt('Live');
@@ -538,10 +540,6 @@ export default function OptionsPane() {
   return (
     <div>
       {!marketStatus.open && <MarketClosedBanner msg={marketStatus.msg || '🔔 NSE Market Closed'} />}
-      {marketStatus.open && Object.keys(marketCtxMap).length > 0 && (() => {
-        const niftyCtx = marketCtxMap['NIFTY']; if (!niftyCtx) return null;
-        return <TimeOfDayBanner niftyChgPct={niftyCtx.dayChange||0} vix={niftyCtx.vix||15} />;
-      })()}
       {error && <ErrorBanner title="⚠ Options Error" message={error} onRetry={() => loadOptions(true)} />}
       {loading ? (
         <Spinner label="Scanning F&O options..." progress={progress}

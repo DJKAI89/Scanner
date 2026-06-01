@@ -37,7 +37,10 @@ function AppShell() {
   return (
     <div>
       {/* ── Always-visible Header ── */}
-      <Header onMenuToggle={() => setMenuOpen((v) => !v)} />
+      <Header
+        menuOpen={menuOpen}
+        onMenuToggle={() => setMenuOpen((v) => !v)}
+      />
 
       {/* ── Ticker tape ── */}
       <Ticker />

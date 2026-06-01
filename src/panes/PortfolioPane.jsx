@@ -45,7 +45,9 @@ export default function PortfolioPane() {
 
   useEffect(() => { if (accessToken) load(); }, [accessToken]); // eslint-disable-line
   useEffect(() => {
-    if (Object.keys(lastPrices).length > 0) setUpdTime('Live: ' + getIST());
+    if (Object.keys(lastPrices).length > 0) {
+      setUpdTime('Live: ' + getIST());
+    }
   }, [lastPrices]);
 
   async function load() {

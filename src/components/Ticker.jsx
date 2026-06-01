@@ -7,14 +7,14 @@ function fmtNum(n, dec = 2) {
 }
 
 export default function Ticker() {
-  const { token, onTokenExpired, cfg, tickerStats } = useApp();
-  const { nifty, banknifty, sensex } = useIndexFeed(token, onTokenExpired, cfg.tick || 15, !!token);
+  const { token, onTokenExpired, tickerStats } = useApp();
+  const { nifty, banknifty, sensex } = useIndexFeed(token, onTokenExpired, true);
   const { vix, pcr, sentiment, sentSc, topSec } = tickerStats || {};
 
   const sign = n => n >= 0 ? '+' : '';
   const liveParts = [
-    nifty     ? `NIFTY ₹${fmtNum(nifty.ltp,0)} ${sign(nifty.pts)}${fmtNum(nifty.pts)} pts`      : 'NIFTY --',
-    banknifty ? `BANKNIFTY ₹${fmtNum(banknifty.ltp,0)} ${sign(banknifty.pts)}${fmtNum(banknifty.pts)} pts` : 'BANKNIFTY --',
+     nifty ? `NIFTY ${fmtNum(nifty.ltp)} [${nifty.pts >= 0 ? '+' : ''}${fmtNum(nifty.pts)} pts]` : 'NIFTY --',
+    banknifty ? `BANKNIFTY ${fmtNum(banknifty.ltp)} [${banknifty.pts >= 0 ? '+' : ''}${fmtNum(banknifty.pts)} pts]` : 'BANKNIFTY --',
     vix       ? `VIX ${Number(vix).toFixed(1)}`                                                   : null,
     pcr != null ? `PCR ${Number(pcr).toFixed(2)}`                                                 : null,
     sentiment ? `${sentiment} ${sentSc ?? 5}/10`                                                  : null,

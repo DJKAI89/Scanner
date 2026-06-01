@@ -2,10 +2,15 @@ import React from 'react';
 import { useApp } from '../context/AppContext';
 import { TABS } from '../constants/config';
 
-export default function Header({ onMenuToggle }) {
+export default function Header({ menuOpen, onMenuToggle }) {
   const {
-    booted, statusDot, statusTxt, activeTab, marketStatus,
-    scanning, setLogOpen,
+    booted,
+    statusDot,
+    statusTxt,
+    activeTab,
+    marketStatus,
+    scanning,
+    setLogOpen,
   } = useApp();
 
   const currentTab = TABS.find((t) => t.id === activeTab);
@@ -16,7 +21,6 @@ export default function Header({ onMenuToggle }) {
 
   return (
     <div className="hdr">
-      {/* Pre-login logo */}
       {!booted && (
         <div className="logo">
           <div className="logo-ic"><span>F</span></div>
@@ -27,37 +31,39 @@ export default function Header({ onMenuToggle }) {
         </div>
       )}
 
-      {/* Post-login: hamburger + page label */}
       {booted && (
-        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-          <button className="menu-btn" aria-label="Menu" onClick={onMenuToggle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <button
+            className={'menu-btn' + (menuOpen ? ' open' : '')}
+            aria-label="Menu"
+            aria-expanded={menuOpen}
+            onClick={onMenuToggle}
+          >
             <span /><span /><span />
           </button>
-          <span className="active-page-lbl">{currentTab?.pageLabel || '📈 Stocks'}</span>
+          <span className="active-page-lbl">{currentTab?.pageLabel || 'Stocks'}</span>
         </div>
       )}
 
-      {/* Right controls */}
       {booted && (
         <div className="hdr-r">
-          {/* Live dot */}
-          <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <div className={`dot ${displayDot}`} />
-            <span style={{ fontSize:10, color:'#64748b' }}>{displayTxt}</span>
+            <span style={{ fontSize: 10, color: '#64748b' }}>{displayTxt}</span>
           </div>
 
-          {/* Scan button */}
           <button
             className="btn btn-g"
             disabled={scanning}
-            style={{ fontWeight:700, fontSize:12, padding:'7px 14px' }}
+            style={{ fontWeight: 700, fontSize: 12, padding: '7px 14px' }}
             onClick={() => document.dispatchEvent(new CustomEvent('friday:scan'))}
           >
-            {scanning ? '⏳' : '▶ Scan'}
+            {scanning ? 'Scanning...' : 'Scan'}
           </button>
 
-          {/* Log toggle */}
-          <button className="btn btn-s" onClick={() => setLogOpen(v => !v)} title="Scan log">🔍</button>
+          <button className="btn btn-s" onClick={() => setLogOpen((v) => !v)} title="Scan log">
+            Log
+          </button>
         </div>
       )}
     </div>

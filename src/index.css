@@ -16,7 +16,6 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#0f172
 .btn-g{background:#16a34a;color:#fff;box-shadow:0 2px 6px rgba(22,163,74,.3)}
 .btn-g:hover{opacity:.9}.btn-g:disabled{background:#e2e8f0;color:#94a3b8;box-shadow:none;cursor:not-allowed}
 .btn-s{background:#f8fafc;color:#374151;border:1px solid #e2e8f0}
-.refresh-info{font-size:9px;color:#94a3b8;text-align:right;line-height:1.4}
 
 /* TICKER */
 .tkr-w{overflow:hidden;background:#0f172a;padding:5px 0;border-bottom:2px solid #16a34a}
@@ -67,6 +66,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#0f172
 /* APP */
 .pane{display:none;padding:12px}
 .pane.active{display:block}
+.pane > *:not(.tkr-w),.pane-inner{padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right))}
 
 /* STATS GRID */
 .stats-g{display:grid;grid-template-columns:repeat(auto-fill,minmax(clamp(120px,22vw,180px),1fr));gap:8px;margin-bottom:12px}
@@ -187,12 +187,34 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#0f172
 @media(max-width:600px){
   .ptbl-h,.ptbl-r{grid-template-columns:2fr 60px 45px 70px 75px 80px 80px}
 }
+@media(min-width:600px){
+  .pane{padding:14px 16px}
+  .stats-g{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+  .cards-g{grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+  .cm4{grid-template-columns:repeat(4,1fr)}
+}
+@media(min-width:1024px){
+  .pane{padding:16px 24px;max-width:1400px;margin:0 auto}
+  .stats-g{grid-template-columns:repeat(auto-fill,minmax(160px,1fr))}
+  .cards-g{grid-template-columns:repeat(auto-fill,minmax(360px,1fr))}
+  .settings-g{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+}
+@media(min-width:1440px){
+  .cards-g{grid-template-columns:repeat(3,1fr)}
+}
+@media(max-width:360px){
+  .pane{padding:8px}
+  .sc{padding:8px 10px}
+  .card{padding:11px 10px}
+  .cm4{grid-template-columns:repeat(2,1fr)}
+  .c-head{padding-right:75px}
+  .hdr{padding:8px 10px}
+}
 @media(max-width:380px){
   .hdr{padding:8px 10px}
 }
 @media(max-width:480px){
   .hdr{flex-wrap:wrap;gap:6px}
-  .refresh-info{display:none!important}
 }
 
 /* ── ANIMATIONS ── */

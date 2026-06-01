@@ -51,54 +51,6 @@ const INDEX_WS_KEYS = [
 ];
 
 // ── Time-of-Day reliability banner ──────────────────────────
-export function TimeOfDayBanner({ niftyChgPct, vix }) {
-  const now = new Date();
-  const h   = parseInt(now.toLocaleString('en-US',{timeZone:'Asia/Kolkata',hour:'2-digit',hour12:false}))%24;
-  const m   = parseInt(now.toLocaleString('en-US',{timeZone:'Asia/Kolkata',minute:'2-digit'}));
-  const t   = h*60+m;
-  if (t<9*60+15||t>15*60+30) return null;
-  let base,label,msg;
-  if      (t<=9*60+45)  {base=35;label='Opening (9:15–9:45 AM)';      msg='Early volatility — gap fills, stop hunts common. Best to wait.';}
-  else if (t<=10*60+30) {base=60;label='Early Session (9:45–10:30 AM)';msg='Market finding direction. Monitor for trend confirmation.';}
-  else if (t<=14*60)    {base=85;label='Mid Session (10:30 AM–2 PM)';  msg='Most reliable window. Trend established, cleanest signals.';}
-  else if (t<=15*60)    {base=65;label='Pre-Close (2–3 PM)';           msg='Watch for reversals as positions unwind.';}
-  else                   {base=25;label='Closing (3–3:30 PM)';          msg='High noise near close. Avoid new intraday entries.';}
-  const lv=vix||15,nc=niftyChgPct||0;let adj=0;const conds=[];
-  if      (lv>25){adj-=20;conds.push(`⚠ VIX ${lv.toFixed(1)} (Panic)`);}
-  else if (lv>20){adj-=12;conds.push(`⚠ VIX ${lv.toFixed(1)} (High fear)`);}
-  else if (lv>17){adj-=5; conds.push(`VIX ${lv.toFixed(1)} (Elevated)`);}
-  else if (lv<13){adj+=5; conds.push(`✅ VIX ${lv.toFixed(1)} (Low vol)`);}
-  else            {        conds.push(`✅ VIX ${lv.toFixed(1)} (Normal)`);}
-  const ac=Math.abs(nc);
-  if      (ac>2.0){adj-=15;conds.push(`⚠ Nifty ${nc>=0?'+':''}${nc.toFixed(2)}% (Extreme)`);}
-  else if (ac>1.2){adj+=5; conds.push(`📈 Nifty ${nc>=0?'+':''}${nc.toFixed(2)}% (Strong)`);}
-  else if (ac<0.3){adj-=8; conds.push(`📊 Nifty ${nc>=0?'+':''}${nc.toFixed(2)}% (Sideways)`);}
-  else             {        conds.push(`Nifty ${nc>=0?'+':''}${nc.toFixed(2)}%`);}
-  const rel=Math.max(10,Math.min(95,base+adj));
-  const col=rel>=75?'#15803d':rel>=50?'#d97706':'#dc2626';
-  const bg=rel>=75?'#f0fdf4':rel>=50?'#fffbeb':'#fef2f2';
-  const bdr=rel>=75?'#86efac':rel>=50?'#fcd34d':'#fca5a5';
-  return (
-    <div style={{background:bg,border:`1px solid ${bdr}`,borderRadius:8,padding:'10px 13px',marginBottom:12}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
-        <span style={{fontWeight:800,color:col,fontSize:11}}>{rel>=75?'✅':rel>=50?'⚡':'⚠'} {label}</span>
-        <span style={{fontSize:10,fontWeight:800,color:col}}>{rel}% reliable</span>
-      </div>
-      <div style={{color:col,opacity:.9,fontSize:10,marginBottom:5}}>{msg}</div>
-      <div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:6}}>
-        {conds.map((c,i)=><span key={i} style={{fontSize:9,color:'#475569',background:'#f1f5f9',borderRadius:10,padding:'2px 7px'}}>{c}</span>)}
-      </div>
-      <div style={{display:'flex',alignItems:'center',gap:6}}>
-        <span style={{fontSize:9,color:'#64748b',fontWeight:600,whiteSpace:'nowrap'}}>SIGNAL RELIABILITY</span>
-        <div style={{flex:1,height:5,background:'#e2e8f0',borderRadius:3}}>
-          <div style={{width:`${rel}%`,height:'100%',borderRadius:3,background:col,transition:'width .5s'}}/>
-        </div>
-        <span style={{fontSize:9,fontWeight:800,color:col}}>{rel}%</span>
-      </div>
-    </div>
-  );
-}
-
 const BO_FILTERS = [
   {id:'all',label:'All'},{id:'bull',label:'📈 Bullish'},{id:'bear',label:'📉 Bearish'},
   {id:'ema',label:'⭐ EMA'},{id:'pdhl',label:'🚀 PDH/PDL'},{id:'st',label:'📈 ST'},
@@ -397,8 +349,8 @@ function fireBreakoutAlerts(results) {
 
 export default function StocksPane() {
   const { token, cfg, marketStatus, lg, onTokenExpired, updateBadge, gh,
-          setScanning, setStatusDot, setStatusTxt, setScanSecs,
-          stocks, fiiInterp, setTickerStats, confCalibration } = useApp();
+           setScanning, setStatusDot, setStatusTxt,
+           stocks, fiiInterp, setTickerStats, confCalibration } = useApp();
 
   const [mode, setMode]               = useState('picks');
   const [picksLoading, setPicksLoading] = useState(false);
@@ -416,12 +368,35 @@ export default function StocksPane() {
   const [boFilter, setBoFilter]       = useState('all');
   const scanInProgress = useRef(false);
 
-  // ── Index WebSocket — SAME pattern as OptionsPane ──
+  // ── Index WebSocket ──────────────────────────────────────────
   const { lastPrices: liveIndexPrices, connected: idxConnected } = useMarketFeed(
     token, INDEX_WS_KEYS, !!token
   );
 
-  // ── Derive live index values (update on every WS tick) ──
+  // ── Closed-market fallback: fetch index prices when WS has no data ──
+  const [closedIdxPrices, setClosedIdxPrices] = useState({});
+  useEffect(() => {
+    if (marketStatus.open || !token) return;
+    if (Object.keys(liveIndexPrices).length > 0) return; // WS already has data
+    fetchQ('NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank,NSE_INDEX|India VIX', token, onTokenExpired)
+      .then(q => {
+        const out = {};
+        ['NSE_INDEX|Nifty 50','NSE_INDEX|Nifty Bank','NSE_INDEX|India VIX'].forEach(k => {
+          const d = q[k];
+          if (d?.last_price > 0) out[k] = {
+            ltp:     d.last_price,
+            chgPct:  d.net_change ? +(d.net_change / (d.last_price - d.net_change) * 100).toFixed(2) : 0,
+          };
+        });
+        if (Object.keys(out).length) setClosedIdxPrices(out);
+      })
+      .catch(() => {});
+  }, [marketStatus.open, token]); // eslint-disable-line
+
+  // Merge: WS prices take priority; closed-market REST prices as fallback
+  const idxPrices = { ...closedIdxPrices, ...liveIndexPrices };
+
+  // ── Derive live index values (idxPrices MUST be declared above this line) ──
   const niftyLTP    = idxPrices['NSE_INDEX|Nifty 50']?.ltp    || 0;
   const niftyChgPct = idxPrices['NSE_INDEX|Nifty 50']?.chgPct || 0;
   const niftyPts    = niftyLTP > 0 ? +(niftyChgPct / 100 * niftyLTP).toFixed(2) : 0;
@@ -429,24 +404,6 @@ export default function StocksPane() {
   const bnkChgPct   = idxPrices['NSE_INDEX|Nifty Bank']?.chgPct || 0;
   const bnkPts      = bnkLTP > 0 ? +(bnkChgPct / 100 * bnkLTP).toFixed(2) : 0;
   const vixLTP      = idxPrices['NSE_INDEX|India VIX']?.ltp     || 0;
-
-  // ── loadClosedMarketStats: fetch index prices when market is closed ──
-  const [closedIdxPrices, setClosedIdxPrices] = useState({});
-  useEffect(() => {
-    if (marketStatus.open || !token || niftyLTP > 0) return;
-    fetchQ('NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank,NSE_INDEX|India VIX', token, onTokenExpired)
-      .then(q => {
-        const out = {};
-        ['NSE_INDEX|Nifty 50','NSE_INDEX|Nifty Bank','NSE_INDEX|India VIX'].forEach(k => {
-          const d = q[k]; if (d?.last_price > 0) out[k] = { ltp:d.last_price, chgPct:d.net_change?(+(d.net_change/(d.last_price-d.net_change)*100).toFixed(2)):0 };
-        });
-        setClosedIdxPrices(out);
-      })
-      .catch(() => {});
-  }, [marketStatus.open, token]); // eslint-disable-line
-
-  // Merge closed-market prices as fallback when WS has no data
-  const idxPrices = { ...closedIdxPrices, ...liveIndexPrices };
 
   // ── Stock picks WebSocket ──
   const topKeys = picks.slice(0, 20).map(p => p.key).filter(Boolean);
@@ -464,19 +421,6 @@ export default function StocksPane() {
     if (!token) return;
     if (marketStatus.open) setTimeout(() => runPicksScan(), 2000);
   }, [token]); // eslint-disable-line
-
-  // Auto-scan countdown
-  useEffect(() => {
-    if (!token || !marketStatus.open || !setScanSecs) return;
-    setScanSecs((cfg.scanStocks||15)*60);
-    const id = setInterval(() => {
-      setScanSecs(s => {
-        if (s<=1) { runPicksScan(); return (cfg.scanStocks||15)*60; }
-        return s-1;
-      });
-    }, 1000);
-    return () => clearInterval(id);
-  }, [token, marketStatus.open]); // eslint-disable-line
 
   // ── PICKS SCAN ────────────────────────────────────────────────
   async function runPicksScan() {
@@ -755,7 +699,7 @@ export default function StocksPane() {
       setScanStats({pcr,pcrTxt,sent,sentSc,topSec,cnt:finalPicks.length,totalScanned:byVol.length});
       setTickerStats({ vix:vixVal, pcr, sentiment:sent, sentSc, topSec });
       updateBadge('stocks',String(finalPicks.length));
-      setPicksTime('Updated: '+getIST());
+      setPicksTime('Updated: ' + getIST());
       setStatusDot('live'); setStatusTxt('Live');
       lg(`✅ Picks: ${finalPicks.length} from ${byVol.length} stocks`,'o');
       if (!finalPicks.length) lg(`⚠ 0 picks — lower Conf(${cfg.minStockConf}%)/Pot(${cfg.pot}%)/Risk(${cfg.risk}%) in ⚙ Settings`,'w');
@@ -900,7 +844,8 @@ export default function StocksPane() {
           setBoCards(prev => prev.map(x => x.s === r.s ? { ...x, stockVWAP: r.stockVWAP } : x));
         } catch (_) { /* intraday VWAP is optional — silently skip on error */ }
       }));
-      setBoTime('Scanned: '+getIST()); updateBadge('stocks',results.length+' 🚀');
+      setBoTime('Scanned: ' + getIST());
+      updateBadge('stocks',results.length+' 🚀');
       lg(`✅ Breakout: ${results.length} signals`,'o');
       fireBreakoutAlerts(results);
     } catch(e) { setBoError(e.message); lg('Breakout error: '+e.message,'e'); }
@@ -940,8 +885,6 @@ export default function StocksPane() {
           {picksLoading&&<div style={{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:8,padding:'10px 14px',marginBottom:10}}><div style={{fontSize:11,fontWeight:700,color:'#1d4ed8',marginBottom:4}}>⏳ Scanning... {pickProgress}</div><div style={{height:3,background:'#e2e8f0',borderRadius:3}}><div style={{height:'100%',background:'#3b82f6',borderRadius:3,width:'60%',animation:'pulse 1.5s ease-in-out infinite'}}/></div></div>}
           {!picksLoading||picks.length>0?(
             <div>
-              {marketStatus.open&&<TimeOfDayBanner niftyChgPct={niftyChgPct} vix={vixLTP}/>}
-
               {/* 6 stat cards — live via WebSocket */}
               <div className="stats-g">
                 <div className="sc">
