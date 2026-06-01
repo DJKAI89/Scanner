@@ -39,8 +39,13 @@ export function useIndexFeed(token, onTokenExpired, enabled = true) {
       setPrices(prev => {
         const next = { ...prev };
         for (const [key, q] of Object.entries(d)) {
-          const p = parseQ(q);
-          if (p) next[key] = p;
+          const chgPct  = parseQ(q);
+           next[key] = {
+              ltp:    q.last_price,
+              chgPct,
+              pts:    q.net_change ?? (chgPct / 100 * q.last_price),
+              volume: q.volume || 0,
+           };
         }
         return next;
       });
