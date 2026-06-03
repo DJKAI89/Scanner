@@ -354,9 +354,12 @@ export default function OptionsPane() {
     if (loadingRef.current) return;
     loadingRef.current = true;
     setScanning(true); setStatusDot('scan'); setStatusTxt('Scanning options...');
-    setLoading(true); setError(''); setProgress('Step 1: Fetching Nifty direction + VIX...');
+    setLoading(true); setError('');
+    const foStocks = NIFTY50_FALLBACK.filter(s => s.fo && TOP_FO_SYMBOLS.includes(s.s));
+    const totalSteps = foStocks.length > 0 ? 4 : 3;
     try {
-      // Step 1: index quotes + VIX
+      // ── Step 1: Market context (Nifty + VIX + PCR) ──────────
+      setProgress(`Step 1/${totalSteps}: Fetching market context (Nifty + VIX)...`);
       const mktD = await fetchQ('NSE_INDEX|Nifty 50,NSE_INDEX|India VIX', accessToken, onTokenExpired);
       const nQ   = mktD['NSE_INDEX|Nifty 50'];
       const vQ   = mktD['NSE_INDEX|India VIX'];
@@ -368,8 +371,8 @@ export default function OptionsPane() {
       const niftyBull = nChgPct > -0.3;
       setVix(vixVal);
 
-      // Step 1b: Per-index intraday candles SEQUENTIALLY (same as HTML — 400ms gaps)
-      setProgress('Step 1b: Fetching intraday candles...');
+      // ── Step 1b: Intraday candles for each index ─────────────
+      setProgress(`Step 1/${totalSteps}: Fetching intraday candles (${INDEX_OPTS.length} indices)...`);
       const INDEX_CANDLE_KEYS = [
         'NSE_INDEX|Nifty 50',
         'NSE_INDEX|Nifty Bank',
@@ -377,7 +380,8 @@ export default function OptionsPane() {
         'NSE_INDEX|Nifty Fin Service',
       ];
       const idxCandles = {};
-      for (const key of INDEX_CANDLE_KEYS) {
+      for (const [ci, key] of INDEX_CANDLE_KEYS.entries()) {
+        setProgress(`Step 1/${totalSteps}: Candles ${ci+1}/${INDEX_CANDLE_KEYS.length} (${key.split('|')[1]})...`);
         try { idxCandles[key] = await fetchIntraday(key, '5minute', accessToken, onTokenExpired); }
         catch (e) { idxCandles[key] = []; }
         await sleep(400);
@@ -394,17 +398,18 @@ export default function OptionsPane() {
       }
       setMarketCtxMap(ctxMap);
 
-      // Step 2: Scan each index
+      // ── Step 2: Scan index chains ────────────────────────────
       const built = [];
       for (const [ui, idx] of INDEX_OPTS.entries()) {
+        setProgress(`Step 2/${totalSteps}: ${idx.name} option chain (${ui+1}/${INDEX_OPTS.length})...`);
         const q = await fetchQ(idx.key, accessToken, onTokenExpired).then(d => d[idx.key]).catch(() => null);
         if (!q?.last_price) continue;
-        setProgress(`Step 2: Scanning ${idx.name} chain (${ui+1}/${INDEX_OPTS.length})...`);
         const spot    = q.last_price;
         const spotChg = getChgPct(q);
         const marketCtx = ctxMap[idx.name] || computeCtxFromCandles([], spot, spotChg, vixVal, null);
 
         // Expiry
+        setProgress(`Step 2/${totalSteps}: ${idx.name} fetching expiry...`);
         let expiry = '';
         try {
           const cd = await fetch(
@@ -415,6 +420,7 @@ export default function OptionsPane() {
         } catch (e) { lg('Contract ' + idx.name + ': ' + e.message, 'w'); }
         if (!expiry) continue;
 
+        setProgress(`Step 2/${totalSteps}: ${idx.name} scanning ${spot} strikes...`);
         // Full chain
         const chain = await fetchOptions(idx.key, expiry, accessToken, onTokenExpired);
         if (!chain.length) { lg(idx.name + ': empty chain', 'w'); continue; }
@@ -461,51 +467,58 @@ export default function OptionsPane() {
         built.push({ name: idx.name, spot, spotChg, picks: picksWithFII, expiry, chain, maxPain, oiWalls, pcr, pcrTrend, ivTrend });
       }
 
-      // Step 3: Stock F&O options (same as HTML — top F&O stocks)
-      const foStocks = NIFTY50_FALLBACK.filter(s => s.fo && TOP_FO_SYMBOLS.includes(s.s));
-      const foKeys = foStocks.map(s => s.key).join(',');
-      let foSpots = {};
-      try { foSpots = await fetchQ(foKeys, accessToken, onTokenExpired); lg(`FO spots: ${Object.keys(foSpots).length}`, 'o'); }
-      catch(e) { lg('FO spots: ' + e.message, 'w'); }
-
-      for (let fi = 0; fi < foStocks.length; fi++) {
-        const inst = foStocks[fi];
-        setProgress(`Step 3: Stock options ${fi+1}/${foStocks.length}: ${inst.s}...`);
+      // ── Step 3: Stock F&O options ────────────────────────────
+      // foStocks already computed above
+      if (foStocks.length > 0) {
+        const foKeys2 = foStocks.map(s => s.key).join(',');
+        let foSpots2 = {};
         try {
-          const q = foSpots[inst.key]; const spot = q?.last_price || 0;
-          if (spot < 1) { lg(inst.s + ': no spot', 'w'); continue; }
-          const spotChg = getChgPct(q);
-          // Sector-aware context — banking stocks use BankNifty ctx
-          const ctxKey = SECTOR_CTX_MAP[inst.s] || 'NIFTY';
-          const baseCtx = ctxMap[ctxKey] || ctxMap['NIFTY'] || computeCtxFromCandles([], spot, spotChg, vixVal, null);
-          const dayScore = spotChg > 1 ? 2 : spotChg > 0.3 ? 1 : spotChg < -1 ? -2 : spotChg < -0.3 ? -1 : 0;
-          const stkCtx = { ...baseCtx, spot, dayChange: spotChg, dayScore };
-          stkCtx.compositeScore = +((stkCtx.momentumScore||0)*1.0 + dayScore*0.3 + (stkCtx.vwapScore||0)*1.5 + ((stkCtx.emaScore||0))*2.0).toFixed(2);
-          stkCtx.bullish = stkCtx.compositeScore > 0;
-          stkCtx.neutral = Math.abs(stkCtx.compositeScore) < 0.5;
-          // PCR + IV trend
-          let expiry = '';
-          try { const cd = await fetch(`https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent(inst.key)}`, { headers:{ Authorization:'Bearer '+accessToken, Accept:'application/json' } }).then(r=>r.json()); expiry = (cd?.data?.map(e=>e.expiry).sort()||[])[0]||''; } catch(e) {}
-          if (!expiry) continue;
-          await sleep(300);
-          const chain = await fetchOptions(inst.key, expiry, accessToken, onTokenExpired);
-          if (!chain.length) continue;
-          const ceOI2 = chain.reduce((s,x)=>s+(x.call_options?.market_data?.oi||0),0), peOI2 = chain.reduce((s,x)=>s+(x.put_options?.market_data?.oi||0),0);
-          const pcr2 = ceOI2 > 0 ? +(peOI2/ceOI2).toFixed(2) : 1;
-          const prevPCR2 = prevPCRCache.current[inst.s] ?? pcr2; prevPCRCache.current[inst.s] = pcr2;
-          const chainIVs2 = chain.flatMap(r=>[r.call_options?.option_greeks?.iv,r.put_options?.option_greeks?.iv]).filter(v=>v>0);
-          const avgIV2 = chainIVs2.length ? +(chainIVs2.reduce((a,b)=>a+b,0)/chainIVs2.length).toFixed(1) : null;
-          const prevAvgIV2 = prevAvgIVCache.current[inst.s] ?? avgIV2; if(avgIV2!=null) prevAvgIVCache.current[inst.s]=avgIV2;
-          const ivTrend2 = avgIV2!=null&&prevAvgIV2!=null ? +(avgIV2-prevAvgIV2).toFixed(2) : 0;
-          stkCtx.pcr=pcr2; stkCtx.pcrTrend=+(pcr2-prevPCR2).toFixed(3); stkCtx.ivTrend=ivTrend2; stkCtx.avgIV=avgIV2;
-          const step2 = spot<200?5:spot<500?10:spot<2000?20:spot<5000?50:100;
-          const atm2 = Math.round(spot/step2)*step2;
-          const stkMaxPain = calcMaxPain(chain);
-          const picks2 = scanChain(chain, atm2, spot, inst.s, expiry, inst.lot, niftyBull, vixVal, stkMaxPain, pcr2, stkCtx, cfg);
-          const fPicks2 = picks2.map(p=>({...p, confidence:applyFIIBias(p.confidence, p.action==='BUY', fiiData)})).filter(p=>p.confidence>=cfg.minOptConf&&(cfg.maxOptCapital<=0||p.amtRequired<=cfg.maxOptCapital));
-          if (fPicks2.length) { built.push({ name:inst.s, spot, spotChg, picks:fPicks2, expiry, chain, maxPain:stkMaxPain, oiWalls:calcOIWalls(chain), pcr:pcr2, pcrTrend:stkCtx.pcrTrend, ivTrend:ivTrend2, type:'stock', fullName:inst.n }); lg(`${inst.s}: ${chain.length} strikes → ${fPicks2.length} signals`, 'o'); }
-        } catch(e) { lg(inst.s + ' opts: ' + e.message, 'w'); }
+          setProgress(`Step 3/${totalSteps}: Fetching F&O stock quotes...`);
+          foSpots2 = await fetchQ(foKeys2, accessToken, onTokenExpired);
+          lg(`FO spots: ${Object.keys(foSpots2).length}`, 'o');
+        } catch(e) { lg('FO spots: ' + e.message, 'w'); }
+
+        for (let fi = 0; fi < foStocks.length; fi++) {
+          const inst = foStocks[fi];
+          setProgress(`Step 3/${totalSteps}: ${inst.s} options (${fi+1}/${foStocks.length})...`);
+          try {
+            const q = foSpots2[inst.key]; const spot = q?.last_price || 0;
+            if (spot < 1) { lg(inst.s + ': no spot', 'w'); continue; }
+            const spotChg = getChgPct(q);
+            const ctxKey = SECTOR_CTX_MAP[inst.s] || 'NIFTY';
+            const baseCtx = ctxMap[ctxKey] || ctxMap['NIFTY'] || computeCtxFromCandles([], spot, spotChg, vixVal, null);
+            const dayScore = spotChg > 1 ? 2 : spotChg > 0.3 ? 1 : spotChg < -1 ? -2 : spotChg < -0.3 ? -1 : 0;
+            const stkCtx = { ...baseCtx, spot, dayChange: spotChg, dayScore };
+            stkCtx.compositeScore = +((stkCtx.momentumScore||0)*1.0 + dayScore*0.3 + (stkCtx.vwapScore||0)*1.5 + ((stkCtx.emaScore||0))*2.0).toFixed(2);
+            stkCtx.bullish = stkCtx.compositeScore > 0;
+            stkCtx.neutral = Math.abs(stkCtx.compositeScore) < 0.5;
+            let expiry = '';
+            try { const cd = await fetch(`https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent(inst.key)}`, { headers:{ Authorization:'Bearer '+accessToken, Accept:'application/json' } }).then(r=>r.json()); expiry = (cd?.data?.map(e=>e.expiry).sort()||[])[0]||''; } catch(e) {}
+            if (!expiry) continue;
+            await sleep(300);
+            const chain = await fetchOptions(inst.key, expiry, accessToken, onTokenExpired);
+            if (!chain.length) continue;
+            const ceOI2 = chain.reduce((s,x)=>s+(x.call_options?.market_data?.oi||0),0), peOI2 = chain.reduce((s,x)=>s+(x.put_options?.market_data?.oi||0),0);
+            const pcr2 = ceOI2 > 0 ? +(peOI2/ceOI2).toFixed(2) : 1;
+            const prevPCR2 = prevPCRCache.current[inst.s] ?? pcr2; prevPCRCache.current[inst.s] = pcr2;
+            const chainIVs2 = chain.flatMap(r=>[r.call_options?.option_greeks?.iv,r.put_options?.option_greeks?.iv]).filter(v=>v>0);
+            const avgIV2 = chainIVs2.length ? +(chainIVs2.reduce((a,b)=>a+b,0)/chainIVs2.length).toFixed(1) : null;
+            const prevAvgIV2 = prevAvgIVCache.current[inst.s] ?? avgIV2; if(avgIV2!=null) prevAvgIVCache.current[inst.s]=avgIV2;
+            const ivTrend2 = avgIV2!=null&&prevAvgIV2!=null ? +(avgIV2-prevAvgIV2).toFixed(2) : 0;
+            stkCtx.pcr=pcr2; stkCtx.pcrTrend=+(pcr2-prevPCR2).toFixed(3); stkCtx.ivTrend=ivTrend2; stkCtx.avgIV=avgIV2;
+            const step2 = spot<200?5:spot<500?10:spot<2000?20:spot<5000?50:100;
+            const atm2 = Math.round(spot/step2)*step2;
+            const stkMaxPain = calcMaxPain(chain);
+            const picks2 = scanChain(chain, atm2, spot, inst.s, expiry, inst.lot, niftyBull, vixVal, stkMaxPain, pcr2, stkCtx, cfg);
+            const fPicks2 = picks2.map(p=>({...p, confidence:applyFIIBias(p.confidence, p.action==='BUY', fiiData)})).filter(p=>p.confidence>=cfg.minOptConf&&(cfg.maxOptCapital<=0||p.amtRequired<=cfg.maxOptCapital));
+            if (fPicks2.length) { built.push({ name:inst.s, spot, spotChg, picks:fPicks2, expiry, chain, maxPain:stkMaxPain, oiWalls:calcOIWalls(chain), pcr:pcr2, pcrTrend:stkCtx.pcrTrend, ivTrend:ivTrend2, type:'stock', fullName:inst.n }); lg(`${inst.s}: ${chain.length} strikes → ${fPicks2.length} signals`, 'o'); }
+          } catch(e) { lg(inst.s + ' opts: ' + e.message, 'w'); }
+        }
       }
+
+
+      // ── Step final: Sort + apply FII bias ───────────────────
+      setProgress(`Step ${totalSteps}/${totalSteps}: Calculating signals + applying FII bias...`);
       const withTrend = built.reduce((s, g) => s + g.picks.filter(p => p.trendAligned).length, 0);
       const total     = built.reduce((s, g) => s + g.picks.length, 0);
       setGroups(built);

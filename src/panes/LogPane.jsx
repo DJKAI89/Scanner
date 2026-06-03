@@ -242,9 +242,38 @@ export default function LogPane() {
     if (!gh.token||!gh.user||!gh.repo) { setError('GitHub not configured — go to ⚙ Settings to set it up.'); return; }
     setLoading(true); setError('');
     try {
-      const all = await ghReadMultipleDays(gh, days);
+      // Build actual calendar dates (not just index entries)
+      const todayDate = new Date().toLocaleDateString('en-CA', { timeZone:'Asia/Kolkata' });
+      const calDates = [];
+      for (let i = 0; i < days; i++) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        calDates.push(d.toLocaleDateString('en-CA', { timeZone:'Asia/Kolkata' }));
+      }
+
+      const all = [];
+      const shaMap = {};
+      // Read each calendar date in batches of 5
+      for (let i = 0; i < calDates.length; i += 5) {
+        const batch = calDates.slice(i, i + 5);
+        const res = await Promise.allSettled(batch.map(d => ghReadDay(gh, d)));
+        res.forEach((r, idx) => {
+          if (r.status === 'fulfilled' && r.value?.signals?.length) {
+            all.push(...r.value.signals);
+            if (r.value.sha) shaMap[batch[idx]] = r.value.sha;
+          }
+        });
+      }
+      // Also read today explicitly if not already included
+      if (!calDates.includes(todayDate)) {
+        const { signals: todaySigs, sha: todaySha } = await ghReadDay(gh, todayDate);
+        all.push(...(todaySigs||[]));
+        if (todaySha) shaMap[todayDate] = todaySha;
+      }
+
       all.sort((a,b) => (b.date+b.time).localeCompare(a.date+a.time));
       setSignals(all);
+      setSigShaMap(prev => ({ ...prev, ...shaMap })); // preserve existing SHAs + add new ones
       resolvedRef.current.clear();
       const closed  = all.filter(s=>s.status==='TARGET_HIT'||s.status==='SL_HIT');
       const hits    = all.filter(s=>s.status==='TARGET_HIT').length;
@@ -275,13 +304,14 @@ export default function LogPane() {
       for (const [date, { signals: daySigs, sha }] of Object.entries(dayMap)) {
         const openSigs = daySigs.filter(s => s.status === 'OPEN');
         if (!openSigs.length) continue;
-        const keys = [...new Set(openSigs.map(s => s.key).filter(Boolean))].join(',');
+        const keys = [...new Set(openSigs.map(s => s.instrKey || s.key).filter(Boolean))].join(',');
         let quotes = {};
         try { if (keys) quotes = await fetchQ(keys, token, onTokenExpired); } catch(_) {}
         let changed = false;
         const newSigs = daySigs.map(s => {
-          if (s.status !== 'OPEN' || !s.key) return s;
-          const q = quotes[s.key]; if (!q?.last_price) return s;
+          if (s.status !== 'OPEN') return s;
+          const instrK = s.instrKey || s.key; if (!instrK) return s;
+          const q = quotes[instrK]; if (!q?.last_price) return s;
           const ltp = q.last_price;
           const exitTime = new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour12:false});
           if (s.target > 0 && ltp >= s.target) { lg(`✅ TARGET HIT: ${s.sym} @ ₹${ltp}`, 'o'); changed = true; updated++; return { ...s, status:'TARGET_HIT', exitPrice:ltp, exitTime }; }
