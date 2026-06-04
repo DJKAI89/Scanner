@@ -126,7 +126,15 @@ export async function ghWriteDay(gh, signals, sha, date) {
     upstoxId:    _uid(),
     date,
   };
-  const r = await _ghPut(gh, getLogDayPath(date), payload, sha, `FRIDAY signal log · ${_uid()} · ${date}`);
+  let r = await _ghPut(gh, getLogDayPath(date), payload, sha, `FRIDAY signal log · ${_uid()} · ${date}`);
+  // 409/422 = SHA conflict (file exists but we have wrong/null SHA) — retry with fresh SHA
+  if (r && (r.status === 409 || r.status === 422)) {
+    const fresh = await _ghFetch(gh, getLogDayPath(date));
+    const freshSha = fresh?.sha || null;
+    if (freshSha && freshSha !== sha) {
+      r = await _ghPut(gh, getLogDayPath(date), payload, freshSha, `FRIDAY signal log · ${_uid()} · ${date}`);
+    }
+  }
   if (r?.ok) {
     const rd = await r.json();
     const newSha = rd?.content?.sha || sha;
