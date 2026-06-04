@@ -318,10 +318,11 @@ function sendNotification(title, body, key) {
     n.onclick = () => { window.focus(); n.close(); };
   } catch(_) {}
 }
-function checkPickAlerts(picks) {
+function checkPickAlerts(picks, cfg) {
   if (!picks?.length) return;
+  const highConfThresh = (cfg?.minStockConf || 50) + 25; // 25pts above min = "high confidence"
   const today = new Date().toLocaleDateString('en-CA', { timeZone:'Asia/Kolkata' });
-  const highConf = picks.filter(p => p.passes && p.conf >= 80);
+  const highConf = picks.filter(p => p.passes && p.conf >= highConfThresh);
   if (highConf.length) {
     const top = highConf.sort((a,b)=>b.conf-a.conf)[0];
     const k = 'high-conf-'+top.s+'-'+today;
@@ -581,7 +582,7 @@ export default function StocksPane() {
         const avgVol20  = t.avgVol20||0;
         const _isHoliday= getIntradayPhase()==='holiday'||!marketStatus.open;
         const effectiveVol = (_isHoliday&&vol===0) ? (avgVol20||1) : vol;
-        const volOk    = avgVol20>0 ? effectiveVol>=avgVol20*1.2 : null;
+        const volOk    = avgVol20>0 ? effectiveVol>=avgVol20*(cfg.vol||1.2) : null;
 
         // preRec from R:R (exact HTML)
         const {sl,target:tgtMod,targets}=autoSLTarget(ltp,high,low,t.atr||0,sr,vixVal,t.rsi||null);
@@ -704,7 +705,7 @@ export default function StocksPane() {
       lg(`✅ Picks: ${finalPicks.length} from ${byVol.length} stocks`,'o');
       if (!finalPicks.length) lg(`⚠ 0 picks — lower Conf(${cfg.minStockConf}%)/Pot(${cfg.pot}%)/Risk(${cfg.risk}%) in ⚙ Settings`,'w');
       if (finalPicks.length&&gh?.token) logSignals(gh,finalPicks.filter(p=>!p._fallback).map(p=>buildStockSignal(p,vixVal)),vixVal,lg);
-      checkPickAlerts(finalPicks);
+      checkPickAlerts(finalPicks, cfg);
     } catch(e) {
       setPicksError(e.message); setStatusDot('err'); setStatusTxt('Error');
       lg('Scan error: '+e.message,'e');

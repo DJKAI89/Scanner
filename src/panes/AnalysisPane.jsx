@@ -11,7 +11,7 @@ function wr(arr) {
   return { h, t: arr.length, r: Math.round(h / arr.length * 100) };
 }
 
-const sc  = v => v === null ? '#94a3b8' : v >= 65 ? '#16a34a' : v >= 50 ? '#d97706' : '#dc2626';
+// sc uses cfg thresholds — defined inside component, see below
 const pct = v => v === null ? '—' : v + '%';
 const avgPnlOf = arr => {
   const v = arr.filter(s => s.pnlPct != null);
@@ -48,7 +48,9 @@ function Card({ title, children }) {
 }
 
 export default function AnalysisPane() {
-  const { gh, updateBadge, lg } = useApp();
+  const { gh, cfg, updateBadge, lg } = useApp();
+  // Color thresholds from settings — green above minOptConf, amber above minStockConf
+  const sc = v => v === null ? '#94a3b8' : v >= (cfg.minOptConf||65) ? '#16a34a' : v >= (cfg.minStockConf||50) ? '#d97706' : '#dc2626';
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState('');
   const [data, setData]       = useState(null);

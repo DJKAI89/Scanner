@@ -534,21 +534,25 @@ export default function OptionsPane() {
   }
 
   const { txt: vixTxt } = interpVIX(vix);
-  const filtered = liveGroups.map(g => ({
+  const filtered = useMemo(() => liveGroups.map(g => ({
     ...g,
     picks: g.picks.filter(p => {
-      if (filter === 'all')       return true;
+      // Always re-apply capital + confidence from current cfg (reactive to settings changes)
+      if (cfg.maxOptCapital > 0 && p.amtRequired > cfg.maxOptCapital) return false;
+      if (p.confidence < (cfg.minOptConf || 65)) return false;
+      // Tab filter
       if (filter === 'nifty')     return g.name === 'NIFTY';
       if (filter === 'banknifty') return g.name === 'BANKNIFTY';
       if (filter === 'sensex')    return g.name === 'SENSEX';
       if (filter === 'finnifty')  return g.name === 'FINNIFTY';
+      if (filter === 'stocks')    return g.type === 'stock';
       if (filter === 'buy')       return p.action === 'BUY';
       if (filter === 'sell')      return p.action === 'SELL';
-      if (filter === 'stocks')    return g.type === 'stock';
+      if (filter === 'aligned')   return p.trendAligned;
       if (filter === 'counter')   return !p.trendAligned;
-      return true;
+      return true; // 'all'
     }),
-  })).filter(g => g.picks.length > 0);
+  })).filter(g => g.picks.length > 0), [liveGroups, filter, cfg.maxOptCapital, cfg.minOptConf]);
 
   return (
     <div>

@@ -221,19 +221,31 @@ export default function LogPane() {
 
     setSignals(updated);
 
-    // Write resolved signals to GitHub
+    // Write resolved signals to GitHub — always fetch latest SHA to prevent 422 conflicts
     if (changed) {
       const byDate = {};
-      updated.forEach(s => { (byDate[s.date] = byDate[s.date]||[]).push(s); });
-      Object.entries(byDate).forEach(async ([date, sigs]) => {
-        if (!sigs.some(s => resolvedRef.current.has(s.id))) return;
-        const sha = sigShaMap[date] || null;
+      updated.forEach(s => {
+        if (s.status !== 'OPEN' && s.status !== 'TARGET_HIT' && s.status !== 'SL_HIT') return;
+        (byDate[s.date] = byDate[s.date] || []).push(s);
+      });
+      Object.entries(byDate).forEach(async ([date, dateSigs]) => {
+        if (!dateSigs.some(s => resolvedRef.current.has(s.id))) return;
         try {
-          const newSha = await ghWriteDay(gh, sigs, sha, date);
-          if (newSha) setSigShaMap(m => ({ ...m, [date]:newSha }));
-          await ghUpdateIndex(gh, date, computeDayStats(sigs));
-          lg(`⚡ WS resolved signal — written to GitHub (${date})`, 'o');
-        } catch(e) { lg('WS write: '+e.message, 'w'); }
+          // Always read latest SHA from GitHub — prevents conflicts when logSignals
+          // created the file but sigShaMap doesn't know about it yet
+          const { signals: latestSigs, sha: latestSha } = await ghReadDay(gh, date);
+          // Merge: apply our resolved statuses on top of the latest GitHub state
+          const merged = latestSigs.length > 0
+            ? latestSigs.map(s => {
+                const resolved = dateSigs.find(u => u.id === s.id && resolvedRef.current.has(u.id));
+                return resolved ? { ...s, status:resolved.status, exitPrice:resolved.exitPrice, exitTime:resolved.exitTime, exitDate:resolved.exitDate, pnlPct:resolved.pnlPct } : s;
+              })
+            : dateSigs.map(s => { const { livePrice:_, livePnlPct:__, ...clean } = s; return clean; }); // strip live fields
+          const newSha = await ghWriteDay(gh, merged, latestSha, date);
+          if (newSha) setSigShaMap(m => ({ ...m, [date]: newSha }));
+          await ghUpdateIndex(gh, date, computeDayStats(merged));
+          lg(`⚡ WS resolved — written to GitHub (${date}) SHA:${newSha?.slice(0,7)})`, 'o');
+        } catch(e) { lg('WS write: ' + e.message, 'w'); }
       });
     }
   }, [lastPrices, wsConnected]); // eslint-disable-line

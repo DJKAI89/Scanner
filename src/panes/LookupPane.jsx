@@ -206,12 +206,14 @@ export default function LookupPane() {
           const a200 = closes.length >= 200 ? ltp > (ema?.e200 || 0) : null;
           const volOk = (q.volume || 0) > (volObj?.avgVol || 1) * cfg.vol;
           const nearS = isNearSupport(ltp, sr, candles[candles.length - 1]?.[3]);
-          const numInds = countIndicatorsEx(rsi, macd.bull, a50, a200, volOk, nearS, pats, 'BUY', macd, bb, adx, rsiDiv);
-          const rec = numInds >= 4 ? 'BUY' : numInds >= 3 ? 'MODERATE' : numInds >= 2 ? 'WATCH' : 'AVOID';
-          const conf = calcConfidence(null, 0, 0, chgPct > 0, 0, q.volume || 0, volObj?.avgVol || 1, pats, rec, numInds);
           const { sl, target, targets } = autoSLTarget(ltp, q.ohlc?.high || ltp, q.ohlc?.low || ltp, atr, sr, 0, rsi);
-          const pot = calcPotential(ltp, target, sl, numInds, rec);
+          const preRR  = (sl>0&&ltp>sl) ? (target-ltp)/(ltp-sl) : 2;
+          const preRec = preRR>=2.0?'BUY':preRR>=1.5?'MODERATE':'WATCH';
+          const numInds = countIndicatorsEx(rsi, macd.bull, a50, a200, volOk, nearS, pats, preRec, macd, bb, adx, rsiDiv);
+          const rec = numInds >= 4 ? 'BUY' : numInds >= 3 ? 'MODERATE' : numInds >= 2 ? 'WATCH' : 'AVOID';
+          const conf = calcConfidence(null, 0, 0, chgPct > 0, 0, q.volume || 0, volObj?.avgVol || 1, pats, preRec, numInds);
           const risk = calcRisk(ltp, sl, target, atr, 0);
+          const pot = calcPotential(ltp, target, sl, numInds, rec);
           const finalRec = getRec(conf, pot.base, risk, pot.rr);
           const strength = getSignalStrength(numInds, conf, { type:'NONE' });
           const vwap = calcVWAP(candles);
@@ -396,7 +398,7 @@ export default function LookupPane() {
               </div>
               <div style={{ fontSize:11, color:'#475569', lineHeight:1.6, marginTop:8 }}>
                 {[
-                  r.tech.rsi < 35 ? `RSI oversold (${r.tech.rsi?.toFixed(0)})` : r.tech.rsi > 70 ? `RSI overbought (${r.tech.rsi?.toFixed(0)})` : `RSI ${r.tech.rsi?.toFixed(0)}`,
+                  r.tech.rsi < (cfg.rsiOS||35) ? `RSI oversold (${r.tech.rsi?.toFixed(0)})` : r.tech.rsi > (cfg.rsiOB||65) ? `RSI overbought (${r.tech.rsi?.toFixed(0)})` : `RSI ${r.tech.rsi?.toFixed(0)}`,
                   r.tech.macd?.bull === true ? 'MACD bullish' : r.tech.macd?.bull === false ? 'MACD bearish' : null,
                   r.tech.a50 === true ? 'Above MA50' : r.tech.a50 === false ? 'Below MA50' : null,
                   r.tech.a200 === true ? 'Above MA200' : r.tech.a200 === false ? 'Below MA200' : null,
@@ -407,7 +409,7 @@ export default function LookupPane() {
           )}
 
           <div className="stats-g">
-            <StatCard label="RSI (14)" value={r.tech.rsi?.toFixed(1) || '—'} sub={r.tech.rsi < 35 ? 'Oversold' : r.tech.rsi > 70 ? 'Overbought' : 'Neutral'} valClass={r.tech.rsi < 35 ? 'up' : r.tech.rsi > 70 ? 'dn' : 'bl'} />
+            <StatCard label="RSI (14)" value={r.tech.rsi?.toFixed(1) || '—'} sub={r.tech.rsi < (cfg.rsiOS||35) ? 'Oversold' : r.tech.rsi > (cfg.rsiOB||65) ? 'Overbought' : 'Neutral'} valClass={r.tech.rsi < (cfg.rsiOS||35) ? 'up' : r.tech.rsi > (cfg.rsiOB||65) ? 'dn' : 'bl'} />
             <StatCard label="ATR" value={`Rs ${fmt(r.tech.atr || 0)}`} sub="14-day volatility" valClass="am" />
             <StatCard label="MA50" value={r.tech.ema?.e50 ? `Rs ${fmt(r.tech.ema.e50)}` : '—'} sub={r.tech.a50 ? 'Above' : r.tech.a50 === false ? 'Below' : 'N/A'} valClass={r.tech.a50 ? 'up' : 'dn'} />
             <StatCard label="MA200" value={r.tech.ema?.e200 ? `Rs ${fmt(r.tech.ema.e200)}` : '—'} sub={r.tech.a200 ? 'Above' : r.tech.a200 === false ? 'Below' : 'Need 200d'} valClass={r.tech.a200 ? 'up' : 'dn'} />
@@ -430,7 +432,7 @@ export default function LookupPane() {
             <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:14, marginBottom:12 }}>
               <div style={{ fontSize:11, fontWeight:700, marginBottom:10 }}>Multi-Timeframe</div>
               <div className="stats-g">
-                {r.tech.rsi && <StatCard label="DAILY RSI" value={r.tech.rsi?.toFixed(1)} sub="Daily" valClass={r.tech.rsi < 40 ? 'up' : r.tech.rsi > 65 ? 'dn' : 'bl'} />}
+                {r.tech.rsi && <StatCard label="DAILY RSI" value={r.tech.rsi?.toFixed(1)} sub="Daily" valClass={r.tech.rsi < (cfg.rsiOS||35) ? 'up' : r.tech.rsi > (cfg.rsiOB||65) ? 'dn' : 'bl'} />}
                 {r.tf30?.rsi && <StatCard label="30-MIN RSI" value={r.tf30.rsi.toFixed(1)} sub={`30-min · ${r.tf30.trend}`} valClass={r.tf30.trend === 'UP' ? 'up' : 'dn'} />}
                 {r.tf5?.rsi && <StatCard label="5-MIN RSI" value={r.tf5.rsi.toFixed(1)} sub={`5-min · ${r.tf5.trend}`} valClass={r.tf5.trend === 'UP' ? 'up' : 'dn'} />}
                 {r.tf5?.vwap && <StatCard label="INTRA VWAP" value={`Rs ${fmt(r.tf5.vwap)}`} sub={r.ltp >= r.tf5.vwap ? 'Above VWAP' : 'Below VWAP'} valClass={r.ltp >= r.tf5.vwap ? 'up' : 'dn'} />}
