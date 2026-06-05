@@ -360,6 +360,7 @@ export default function StocksPane() {
   const [scanStats, setScanStats]       = useState(null);
   const [picksTime, setPicksTime]       = useState('');
   const [pickProgress, setPickProgress] = useState('');
+  const [picksScanId, setPicksScanId]   = useState(0);
   const [boLoading, setBoLoading]     = useState(false);
   const [boError, setBoError]         = useState('');
   const [boCards, setBoCards]         = useState([]);
@@ -431,6 +432,8 @@ export default function StocksPane() {
     setScanning(true); setStatusDot('scan'); setStatusTxt('Scanning...');
     setPicksLoading(true); setPicksError('');
     setPickProgress('');
+    setPicks([]);
+    setPicksTime('');
     try {
       // Use live WS prices; if not yet populated, fetch via REST
       let nLtp    = niftyLTP;
@@ -696,7 +699,10 @@ export default function StocksPane() {
       }
 
       const topSec=Object.entries(secMap).filter(([,v])=>v.c>0).sort((a,b)=>(b[1].g/b[1].c)-(a[1].g/a[1].c))[0]?.[0]||'Mixed';
-      setPicks(finalPicks);
+      const scanId = Date.now();
+      const nextPicks = finalPicks.map((pick) => ({ ...pick, _scanId: scanId }));
+      setPicksScanId(scanId);
+      setPicks(nextPicks);
       setScanStats({pcr,pcrTxt,sent,sentSc,topSec,cnt:finalPicks.length,totalScanned:byVol.length});
       setTickerStats({ vix:vixVal, pcr, sentiment:sent, sentSc, topSec });
       updateBadge('stocks',String(finalPicks.length));
@@ -705,7 +711,7 @@ export default function StocksPane() {
       lg(`✅ Picks: ${finalPicks.length} from ${byVol.length} stocks`,'o');
       if (!finalPicks.length) lg(`⚠ 0 picks — lower Conf(${cfg.minStockConf}%)/Pot(${cfg.pot}%)/Risk(${cfg.risk}%) in ⚙ Settings`,'w');
       if (finalPicks.length&&gh?.token) logSignals(gh,finalPicks.filter(p=>!p._fallback).map(p=>buildStockSignal(p,vixVal)),vixVal,lg);
-      checkPickAlerts(finalPicks, cfg);
+      checkPickAlerts(nextPicks, cfg);
     } catch(e) {
       setPicksError(e.message); setStatusDot('err'); setStatusTxt('Error');
       lg('Scan error: '+e.message,'e');
@@ -941,7 +947,7 @@ export default function StocksPane() {
                   {!stocks?.length?'⚙ Configure stocks.json in GitHub Settings':marketStatus.open?'🔄 Click ▶ Scan to fetch picks':'📅 Market Closed'}
                   {scanStats&&<><br/><span style={{fontSize:11,color:'#64748b'}}>Conf≥{cfg.minStockConf||50}% · Pot≥{cfg.pot||3}% · Risk&lt;{cfg.risk||55}% · R:R≥{cfg.rr||1.2}</span><br/><span style={{fontSize:10}}>Scanned {scanStats.totalScanned||0} stocks · Lower thresholds in ⚙ Settings</span></>}
                 </EmptyState>
-                :<div className="cards-g">{picks.map((p,i)=>{const live=stockPrices[p.key];return(<StockCard key={p.s} pick={live?{...p,ltp:live.ltp,chgPct:live.chgPct}:p} rank={i+1} cfg={cfg}/>);})}</div>
+                :<div className="cards-g">{picks.map((p,i)=>{const live=stockPrices[p.key];return(<StockCard key={`${p._scanId||picksScanId}-${p.key||p.s}-${i}`} pick={live?{...p,ltp:live.ltp,chgPct:live.chgPct}:p} rank={i+1} cfg={cfg}/>);})}</div>
               }
               <div className="disc">⚠ Not SEBI advice. Always DYODD.</div>
             </div>

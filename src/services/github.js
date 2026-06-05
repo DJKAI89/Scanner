@@ -119,28 +119,58 @@ export async function ghReadDay(gh, date) {
   } catch (e) { return { signals: [], sha: null }; }
 }
 
-export async function ghWriteDay(gh, signals, sha, date) {
+function computeLogStats(signals = []) {
+  const hits = signals.filter((s) => s.status === 'TARGET_HIT').length;
+  const sls = signals.filter((s) => s.status === 'SL_HIT').length;
+  const open = signals.filter((s) => s.status === 'OPEN').length;
+  const closed = hits + sls;
+  return {
+    total: signals.length,
+    hits,
+    sls,
+    open,
+    winRate: closed ? Math.round(hits / closed * 100) : null,
+  };
+}
+
+export async function ghWriteDay(gh, signals, sha, date, retryCount = 0) {
   const payload = {
     signals,
     lastUpdated: new Date().toISOString(),
     upstoxId:    _uid(),
     date,
+    stats:       computeLogStats(signals),
   };
   let r = await _ghPut(gh, getLogDayPath(date), payload, sha, `FRIDAY signal log · ${_uid()} · ${date}`);
-  // 409/422 = SHA conflict (file exists but we have wrong/null SHA) — retry with fresh SHA
-  if (r && (r.status === 409 || r.status === 422)) {
-    const fresh = await _ghFetch(gh, getLogDayPath(date));
-    const freshSha = fresh?.sha || null;
-    if (freshSha && freshSha !== sha) {
-      r = await _ghPut(gh, getLogDayPath(date), payload, freshSha, `FRIDAY signal log · ${_uid()} · ${date}`);
-    }
-  }
   if (r?.ok) {
     const rd = await r.json();
     const newSha = rd?.content?.sha || sha;
     _cachePut(date, signals, newSha);
     return newSha;
   }
+
+  if (r && (r.status === 409 || r.status === 422) && retryCount < 2) {
+    const fresh = await _ghFetch(gh, getLogDayPath(date));
+    if (!fresh) {
+      return ghWriteDay(gh, signals, null, date, retryCount + 1);
+    }
+
+    let freshSignals = [];
+    try {
+      freshSignals = _decode(fresh.content).signals || [];
+    } catch (e) {
+      freshSignals = [];
+    }
+
+    const existingIds = new Set(freshSignals.map((s) => s.id));
+    const merged = freshSignals.map((sig) => {
+      const ours = signals.find((item) => item.id === sig.id);
+      return (ours && ours.status !== 'OPEN' && sig.status === 'OPEN') ? ours : sig;
+    });
+    merged.push(...signals.filter((sig) => !existingIds.has(sig.id)));
+    return ghWriteDay(gh, merged, fresh.sha || null, date, retryCount + 1);
+  }
+
   return null;
 }
 
@@ -228,12 +258,14 @@ export function buildStockSignal(p, vixVal) {
 
 export function buildOptionSignal(p, vixVal) {
   const { date, time } = _istNow();
+  const instrKey = p.instrKey || p.key || p.instrument_key || p.instrumentKey || null;
   return {
     id:             `${date}-${time.replace(/:/g,'').slice(0,4)}-${p.und}-${p.strike}-${p.type}`,
     date, time,
     type:           'OPTION',
     stock:          p.und,
-    instrKey:       p.instrKey || null,
+    instrKey,
+    key:            instrKey,
     name:           `${p.und} ${p.strike} ${p.type}`,
     optType:        p.type,
     strike:         p.strike,

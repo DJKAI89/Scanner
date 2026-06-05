@@ -8,8 +8,9 @@ function fmtNum(n, dec = 2) {
 }
 
 export default function Ticker() {
-  const { token, onTokenExpired, tickerStats } = useApp();
-  const { nifty, banknifty, sensex } = useIndexFeed(token, onTokenExpired, true);
+  const { token, onTokenExpired, tickerStats, activeTab } = useApp();
+  const feedEnabled = activeTab === 'stocks' || activeTab === 'options';
+  const { nifty, banknifty, sensex } = useIndexFeed(token, onTokenExpired, feedEnabled);
   const { vix, pcr, sentiment, sentSc, topSec } = tickerStats || {};
 
   const sign = n => n >= 0 ? '+' : '';

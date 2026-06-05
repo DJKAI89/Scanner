@@ -50,7 +50,7 @@ function IndexLiveCard({ group, live, ctx }) {
         🎯₹{fmt(group.maxPain || 0, 0)} · 📉₹{fmt(group.oiWalls?.callWall || 0, 0)} · 📈₹{fmt(group.oiWalls?.putWall || 0, 0)}
       </div>
       <div style={{ fontSize:9, color:ctx?.neutral ? '#d97706' : ctx?.bullish ? '#16a34a' : '#dc2626', marginTop:4, fontWeight:700 }}>
-        {ctx?.neutral ? 'Neutral' : ctx?.bullish ? 'With-trend' : 'Weak trend'} · cap≤₹10K · WS
+        {ctx?.neutral ? 'Neutral' : ctx?.bullish ? 'With-trend' : 'Weak trend'}  · WS
       </div>
     </div>
   );
@@ -306,6 +306,7 @@ export default function OptionsPane() {
   const [filter, setFilter]     = useState('all');
   const [progress, setProgress] = useState('');
   const [updTime, setUpdTime]   = useState('');
+  const [optionsScanId, setOptionsScanId] = useState(0);
   const [marketCtxMap, setMarketCtxMap] = useState({});
   const loadingRef = useRef(false);
   const prevAvgIVCache = useRef({}), prevPCRCache = useRef({});
@@ -355,6 +356,8 @@ export default function OptionsPane() {
     loadingRef.current = true;
     setScanning(true); setStatusDot('scan'); setStatusTxt('Scanning options...');
     setLoading(true); setError('');
+    setGroups([]);
+    setUpdTime('');
     const foStocks = NIFTY50_FALLBACK.filter(s => s.fo && TOP_FO_SYMBOLS.includes(s.s));
     const totalSteps = foStocks.length > 0 ? 4 : 3;
     try {
@@ -461,7 +464,7 @@ export default function OptionsPane() {
           confidence: applyFIIBias(p.confidence, p.action === 'BUY', fiiData),
           _dte: p._dte ?? null,
           nearMaxPain: maxPain > 0 && Math.abs(p.strike - maxPain) / spot < 0.01,
-        })).filter(p => p.confidence >= cfg.minOptConf && (cfg.maxOptCapital <= 0 || p.amtRequired <= cfg.maxOptCapital));
+        })).filter(p => p.confidence >= cfg.minOptConf && (cfg.maxOptCapital != 0 ? p.amtRequired <= cfg.maxOptCapital : p.amtRequired = p.amtRequired));
 
         lg(`${idx.name}: ${chain.length} strikes → ${picks.length} raw → ${picksWithFII.length} ≥${cfg.minOptConf}% | composite=${richCtx.compositeScore} pcr=${pcr}`, 'o');
         built.push({ name: idx.name, spot, spotChg, picks: picksWithFII, expiry, chain, maxPain, oiWalls, pcr, pcrTrend, ivTrend });
@@ -521,7 +524,14 @@ export default function OptionsPane() {
       setProgress(`Step ${totalSteps}/${totalSteps}: Calculating signals + applying FII bias...`);
       const withTrend = built.reduce((s, g) => s + g.picks.filter(p => p.trendAligned).length, 0);
       const total     = built.reduce((s, g) => s + g.picks.length, 0);
-      setGroups(built);
+      const scanId = Date.now();
+      const nextGroups = built.map((group) => ({
+        ...group,
+        _scanId: scanId,
+        picks: group.picks.map((pick, index) => ({ ...pick, _scanId: scanId, _scanIndex: index })),
+      }));
+      setOptionsScanId(scanId);
+      setGroups(nextGroups);
       updateBadge('options', withTrend > 0 ? withTrend + ' signals' : '—');
       setUpdTime('Updated: ' + getIST());
       setStatusDot('live'); setStatusTxt('Live');
@@ -655,7 +665,7 @@ export default function OptionsPane() {
                   </div>
                 )}
                 <div className="cards-g" style={{ marginBottom:8 }}>
-                  {g.picks.filter(p=>p.trendAligned).map((p,i) => <OptionCard key={i} pick={p} cfg={cfg} />)}
+                  {g.picks.filter(p=>p.trendAligned).map((p,i) => <OptionCard key={`${g._scanId||optionsScanId}-${p.und}-${p.strike}-${p.type}-${p.expiry}-${p._scanIndex??i}`} pick={p} cfg={cfg} />)}
                 </div>
                 {/* Counter-trend */}
                 {g.picks.filter(p=>!p.trendAligned).length > 0 && (
@@ -664,7 +674,7 @@ export default function OptionsPane() {
                       ⚠ {g.picks.filter(p=>!p.trendAligned).length} COUNTER-TREND — against market direction
                     </div>
                     <div className="cards-g" style={{ marginBottom:16 }}>
-                      {g.picks.filter(p=>!p.trendAligned).map((p,i) => <OptionCard key={i} pick={p} cfg={cfg} />)}
+                      {g.picks.filter(p=>!p.trendAligned).map((p,i) => <OptionCard key={`${g._scanId||optionsScanId}-${p.und}-${p.strike}-${p.type}-${p.expiry}-${p._scanIndex??i}`} pick={p} cfg={cfg} />)}
                     </div>
                   </>
                 )}

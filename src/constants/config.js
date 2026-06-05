@@ -37,9 +37,9 @@ export const TABS = [
   { id: 'stocks',    icon: '📈', label: 'Stocks',        pageLabel: '📈 Stocks'      },
   { id: 'options',   icon: '⚡', label: 'F&O Options',   pageLabel: '⚡ F&O Options' },
   { id: 'portfolio', icon: '💼', label: 'Portfolio',     pageLabel: '💼 Portfolio'   },
-  { id: 'lookup',    icon: '🔍', label: 'Analyse Stock', pageLabel: '🔍 Analyse'     },
+  { id: 'lookup',    icon: '🔍', label: 'Analyse Stock', pageLabel: '🔍 Analyse Stock'     },
   { id: 'log',       icon: '📋', label: 'Signal Log',    pageLabel: '📋 Signal Log'  },
-  { id: 'analysis',  icon: '📊', label: 'Analysis',      pageLabel: '📊 Analysis'    },
+  { id: 'analysis',  icon: '📊', label: 'Analysis Signal Log',      pageLabel: '📊 Analysis Signal Log'    },
   { id: 'settings',  icon: '⚙',  label: 'Settings',      pageLabel: '⚙ Settings'    },
 ];
 

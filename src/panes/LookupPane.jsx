@@ -130,14 +130,16 @@ export default function LookupPane() {
   useEffect(() => {
     const key = result?.inst?.key;
     const live = key ? livePrices[key] : null;
+   
     if (!key || !live?.ltp) return;
     setResult((prev) => {
+      console.log('Live update for', key, 'LTP:', live);
       if (!prev?.inst?.key || prev.inst.key !== key) return prev;
       const prevClose = prev.q?.ohlc?.close || live.cp || live.ltp;
       return {
         ...prev,
         q: { ...prev.q, last_price: live.ltp },
-        ltp: live.ltp,
+        ltp: live.ltp,        
         chgPct: prevClose > 0 ? ((live.ltp - prevClose) / prevClose) * 100 : 0,
         time: getIST(),
       };
@@ -379,7 +381,7 @@ export default function LookupPane() {
                 </div>
               </div>
               <div style={{ textAlign:'right' }}>
-                <div style={{ fontSize:24, fontWeight:800, color:r.chgPct >= 0 ? '#16a34a' : '#dc2626' }}>Rs {fmt(r.ltp)}</div>
+                <div style={{ fontSize:24, fontWeight:800, color:r.chgPct >= 0 ? '#16a34a' : '#dc2626' }}>Rs {fmt(r.ltp)}</div>                
                 <div style={{ fontSize:12, fontWeight:600, color:r.chgPct >= 0 ? '#16a34a' : '#dc2626' }}>{r.chgPct >= 0 ? '+' : ''}{r.chgPct.toFixed(2)}%</div>
               </div>
             </div>

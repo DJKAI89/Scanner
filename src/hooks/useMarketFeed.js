@@ -271,6 +271,7 @@ export async function fetchScanQuotesViaWS(token, instrumentKeys, timeoutMs = 80
 export function useMarketFeed(token, instrumentKeys = [], enabled = true, options = {}) {
   const mode = options.mode || 'ltpc';
   const pollFallback = options.pollFallback !== false;
+  const retryOnFailure = options.retryOnFailure !== false;
   const ws          = useRef(null);
   const connectSeq  = useRef(0);
   const retryRef    = useRef(0);
@@ -318,7 +319,7 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
     clearInterval(pollTimer.current);
     setWsMode('poll');
     setConnected(true);
-    pollTimer.current = setInterval(async () => {
+    const runPoll = async () => {
       const keys = keysRef.current;
       if (!keys.length || !tokenRef.current) return;
       try {
@@ -335,7 +336,9 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
           applyPrices(priceMap);
         }
       } catch (e) { /* silent */ }
-    }, 15000);
+    };
+    runPoll();
+    pollTimer.current = setInterval(runPoll, 15000);
   }, [applyPrices, pollFallback]);
 
   const stopPolling = useCallback(() => {
@@ -375,6 +378,8 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
       if (!wsUrl || seq !== connectSeq.current) return;
 
       const socket = new WebSocket(wsUrl);
+      let opened = false;
+      let handshakeFailed = false;
       socket.binaryType = 'arraybuffer';
       ws.current = socket;
 
@@ -383,6 +388,7 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
           try { socket.close(1000); } catch (_) {}
           return;
         }
+        opened = true;
         retryRef.current = 0;
         setConnected(true);
         setWsMode('ws');
@@ -409,6 +415,7 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
 
       socket.onerror = () => {
         if (seq !== connectSeq.current || ws.current !== socket) return;
+        handshakeFailed = !opened;
         setConnected(false);
         setWsMode('poll');
         startPolling();
@@ -420,6 +427,7 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
         ws.current = null;
         if (e.code === 1000) return;
         startPolling();
+        if (handshakeFailed || !retryOnFailure) return;
         const delay = Math.min(30000, 2000 * Math.pow(2, retryRef.current));
         retryRef.current++;
         retryTimer.current = setTimeout(connect, delay);
@@ -428,9 +436,8 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
       if (seq !== connectSeq.current) return;
       console.warn('WS init failed:', e.message, '- falling back to REST polling');
       startPolling();
-      retryTimer.current = setTimeout(connect, 30000);
     }
-  }, [token, enabled, mode, applyPrices, startPolling, stopPolling]);
+  }, [token, enabled, mode, applyPrices, startPolling, stopPolling, retryOnFailure]);
   const disconnect = useCallback(() => {
     connectSeq.current++;
     clearTimeout(retryTimer.current);

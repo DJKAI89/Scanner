@@ -18,13 +18,13 @@ const avgPnlOf = arr => {
   return v.length ? (v.reduce((a, s) => a + s.pnlPct, 0) / v.length).toFixed(1) : '—';
 };
 
-function Bar({ label, r, t, extra = '' }) {
+function Bar({ label, r, t, extra = '', colorForRate }) {
   if (!t) return (
     <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, color:'#94a3b8', padding:'3px 0' }}>
       <span>{label}</span><span>No data</span>
     </div>
   );
-  const color = sc(r), w = r || 0;
+  const color = colorForRate(r), w = r || 0;
   return (
     <div style={{ marginBottom:8 }}>
       <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, marginBottom:2 }}>
@@ -262,26 +262,26 @@ export default function AnalysisPane() {
             {/* By underlying */}
             {d.byUnderlying.length >= 2 && (
               <Card title="📊 Win Rate by Underlying">
-                {d.byUnderlying.map(x => <Bar key={x.u} label={x.u} r={x.r} t={x.t} />)}
+                {d.byUnderlying.map(x => <Bar key={x.u} label={x.u} r={x.r} t={x.t} colorForRate={sc} />)}
               </Card>
             )}
 
             {/* Signal type breakdown */}
             <Card title="📈 Signal Type Breakdown">
-              {d.ceWR && d.ceWR.t >= 2 && <Bar label="CE Options 📈" r={d.ceWR.r} t={d.ceWR.t} extra={` avg ${avgPnlOf(d.ceSignals)}%`} />}
-              {d.peWR && d.peWR.t >= 2 && <Bar label="PE Options 📉" r={d.peWR.r} t={d.peWR.t} extra={` avg ${avgPnlOf(d.peSignals)}%`} />}
-              {d.sigTypes.map(x => <Bar key={x.type} label={`${x.type === 'BUY' ? 'BUY 📈' : x.type === 'SELL' ? 'SELL 📉' : x.type} Signals`} r={x.r} t={x.t} />)}
+              {d.ceWR && d.ceWR.t >= 2 && <Bar label="CE Options 📈" r={d.ceWR.r} t={d.ceWR.t} extra={` avg ${avgPnlOf(d.ceSignals)}%`} colorForRate={sc} />}
+              {d.peWR && d.peWR.t >= 2 && <Bar label="PE Options 📉" r={d.peWR.r} t={d.peWR.t} extra={` avg ${avgPnlOf(d.peSignals)}%`} colorForRate={sc} />}
+              {d.sigTypes.map(x => <Bar key={x.type} label={`${x.type === 'BUY' ? 'BUY 📈' : x.type === 'SELL' ? 'SELL 📉' : x.type} Signals`} r={x.r} t={x.t} colorForRate={sc} />)}
             </Card>
 
             {/* Confidence bands */}
             <Card title="🎯 Win Rate by Confidence">
-              {d.confBands.map(b => <Bar key={b.band} label={b.band} r={b.r} t={b.t} />)}
+              {d.confBands.map(b => <Bar key={b.band} label={b.band} r={b.r} t={b.t} colorForRate={sc} />)}
               <div style={{ fontSize:8, color:'#94a3b8', marginTop:2 }}>Higher confidence should = higher win rate</div>
             </Card>
 
             {/* Time sessions */}
             <Card title="🕐 Best Time to Trade">
-              {d.timeBreak.map(t => <Bar key={t.label} label={t.label} r={t.r} t={t.t} />)}
+              {d.timeBreak.map(t => <Bar key={t.label} label={t.label} r={t.r} t={t.t} colorForRate={sc} />)}
             </Card>
 
             {/* CompositeScore calibration */}

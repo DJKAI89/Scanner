@@ -14,6 +14,7 @@ export default function Header({ menuOpen, onMenuToggle }) {
   } = useApp();
 
   const currentTab = TABS.find((t) => t.id === activeTab);
+  const showScanButton = activeTab === 'stocks' || activeTab === 'options';
   const displayDot = marketStatus?.open ? statusDot : 'err';
   const displayTxt = marketStatus?.open
     ? statusTxt
@@ -52,14 +53,16 @@ export default function Header({ menuOpen, onMenuToggle }) {
             <span style={{ fontSize: 10, color: '#64748b' }}>{displayTxt}</span>
           </div>
 
-          <button
-            className="btn btn-g"
-            disabled={scanning}
-            style={{ fontWeight: 700, fontSize: 12, padding: '7px 14px' }}
-            onClick={() => document.dispatchEvent(new CustomEvent('friday:scan'))}
-          >
-            {scanning ? 'Scanning...' : 'Scan'}
-          </button>
+          {showScanButton && (
+            <button
+              className="btn btn-g"
+              disabled={scanning}
+              style={{ fontWeight: 700, fontSize: 12, padding: '7px 14px' }}
+              onClick={() => document.dispatchEvent(new CustomEvent('friday:scan'))}
+            >
+              {scanning ? 'Scanning...' : 'Scan'}
+            </button>
+          )}
 
           <button className="btn btn-s" onClick={() => setLogOpen((v) => !v)} title="Scan log">
             Log

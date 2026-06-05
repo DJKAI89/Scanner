@@ -14,6 +14,10 @@ const STATUS_COLORS = {
   EXPIRED:    { bg:'#f8fafc', color:'#64748b', border:'#e2e8f0' },
 };
 
+function getSignalFeedKey(sig) {
+  return sig?.instrKey || sig?.key || '';
+}
+
 function SignalRow({ sig, livePrice }) {
   const sc = STATUS_COLORS[sig.status] || STATUS_COLORS.OPEN;
   const isBuy  = sig.signal !== 'SELL' && sig.signal !== 'SELL_CE' && sig.signal !== 'SELL_PE';
@@ -179,7 +183,7 @@ export default function LogPane() {
   // Collect ALL open signal instrument keys (stocks + options)
   const openSignals = useMemo(() => signals.filter(s => s.status==='OPEN'), [signals]);
   const openKeys    = useMemo(() => {
-    const keys = openSignals.map(s => s.instrKey).filter(Boolean);
+    const keys = openSignals.map(getSignalFeedKey).filter(Boolean);
     return [...new Set(keys)];
   }, [openSignals]);
 
@@ -196,9 +200,10 @@ export default function LogPane() {
     let changed = false;
 
     const updated = signals.map(sig => {
-      if (sig.status !== 'OPEN' || !sig.instrKey) return sig;
+      const feedKey = getSignalFeedKey(sig);
+      if (sig.status !== 'OPEN' || !feedKey) return sig;
       if (resolvedRef.current.has(sig.id)) return sig;
-      const live = lastPrices[sig.instrKey];
+      const live = lastPrices[feedKey];
       if (!live?.ltp) return { ...sig };
 
       const ltp    = live.ltp;
@@ -418,7 +423,7 @@ export default function LogPane() {
               <SignalRow
                 key={sig.id||i}
                 sig={sig}
-                livePrice={lastPrices[sig.instrKey]?.ltp ?? null}
+                livePrice={lastPrices[getSignalFeedKey(sig)]?.ltp ?? null}
               />
             ))
           }

@@ -50,7 +50,7 @@ export function AppProvider({ children }) {
   const [fiiInterp, setFiiInterp] = useState(null);
 
   // ── UI state ──
-  const [activeTab, setActiveTab] = useState('stocks');
+  const [activeTab, setActiveTabState] = useState(() => localStorage.getItem('friday_active_tab') || 'stocks');
   const [scanning, setScanning]   = useState(false);
   const [statusDot, setStatusDot] = useState('live');
   const [statusTxt, setStatusTxt] = useState('Live');
@@ -115,6 +115,12 @@ export function AppProvider({ children }) {
     localStorage.setItem('friday_gh_user',  newGh.user  || '');
     localStorage.setItem('friday_gh_repo',  newGh.repo  || '');
     setGhState(newGh);
+  }, []);
+
+  const setActiveTab = useCallback((tab) => {
+    const nextTab = tab || 'stocks';
+    localStorage.setItem('friday_active_tab', nextTab);
+    setActiveTabState(nextTab);
   }, []);
 
   const updateBadge = useCallback((tab, text) => {
