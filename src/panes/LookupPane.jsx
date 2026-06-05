@@ -69,9 +69,9 @@ function PositionSizing({ pick, portSize, riskPct }) {
       <div style={{ fontSize:8, color:'#64748b', fontWeight:700, marginBottom:4 }}>POSITION SIZING</div>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
         <div style={{ fontSize:16, fontWeight:800, color:'#1d4ed8' }}>{recLots} lot{recLots > 1 ? 's' : ''}</div>
-        <div style={{ textAlign:'right', fontSize:9, color:'#64748b' }}>
-          Capital: Rs {fmt(recCapital, 0)}<br />
-          Risk cap: Rs {fmt(maxRisk, 0)}
+        <div style={{ textAlign:'right', fontSize:11, color:'#64748b' }}>
+          <b>Capital:</b> Rs {fmt(recCapital, 0)}<br />
+          <b>Risk cap:</b> Rs {fmt(maxRisk, 0)}
         </div>
       </div>
     </div>
@@ -79,18 +79,61 @@ function PositionSizing({ pick, portSize, riskPct }) {
 }
 
 function OptionSuggestionCard({ pick, cfg, showTools = true }) {
+  const isBuy    = pick.action === 'BUY';
+  const isSell   = pick.action === 'SELL';
+  const actionBg = isBuy  ? '#16a34a' : isSell ? '#dc2626' : '#64748b';
+  const cardBg   = pick.type === 'CE' ? '#f0fdf4' : '#fef2f2';
+  const cardBdr  = pick.type === 'CE' ? '#86efac' : '#fca5a5';
+  // For SELL: SL is above entry, target is below — swap colors
+  const slColor  = isSell ? '#16a34a' : '#dc2626';
+  const tgtColor = isSell ? '#dc2626' : '#16a34a';
+  const slLabel  = isSell ? 'SL (ABOVE)' : 'STOP LOSS';
+  const tgtLabel = isSell ? 'TARGET (BELOW)' : 'TARGET';
+
   return (
     <div style={{ marginBottom:12 }}>
-      <div style={{ background: pick.type === 'CE' ? '#f0fdf4' : '#fef2f2', border:`1px solid ${pick.type === 'CE' ? '#86efac' : '#fca5a5'}`, borderRadius:10, padding:12, marginBottom:6 }}>
-        <div style={{ fontWeight:800, fontSize:14, marginBottom:6 }}>{pick.und} {pick.strike} {pick.type} · Rs {fmt(pick.entry)} · {pick.confidence}% conf</div>
+      <div style={{ background:cardBg, border:`1px solid ${cardBdr}`, borderRadius:10, padding:12, marginBottom:6, position:'relative' }}>
+        {/* BUY/SELL action badge */}
+        <div style={{ position:'absolute', top:10, right:10, background:actionBg, color:'#fff', fontSize:9, fontWeight:800, padding:'3px 10px', borderRadius:20, letterSpacing:'.5px' }}>
+          {pick.action || 'BUY'} {pick.type}
+        </div>
+
+        <div style={{ fontWeight:800, fontSize:14, marginBottom:4, paddingRight:70 }}>
+          {pick.und} {pick.strike} {pick.type}
+        </div>
+        <div style={{ fontSize:10, color:'#64748b', marginBottom:8 }}>
+          ₹{fmt(pick.entry)} entry · {pick.confidence}% conf · Exp {pick.expiry || '—'} · Lot {pick.lot || 1}
+        </div>
+
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:4, background:'#e2e8f0', borderRadius:7, padding:1, marginBottom:8 }}>
-          {[{ l:'ENTRY', v:`Rs ${fmt(pick.entry)}`, c:'#1d4ed8' }, { l:'SL', v:`Rs ${fmt(pick.sl)}`, c:'#dc2626' }, { l:'TARGET', v:`Rs ${fmt(pick.tgt)}`, c:'#16a34a' }].map((b) => (
+          {[
+            { l:'ENTRY',   v:`₹${fmt(pick.entry)}`, c:'#1d4ed8' },
+            { l:slLabel,   v:`₹${fmt(pick.sl)}`,    c:slColor,  s: pick.entry > 0 ? `${isBuy ? '-' : '+'}${((Math.abs(pick.sl - pick.entry)/pick.entry)*100).toFixed(1)}%` : '' },
+            { l:tgtLabel,  v:`₹${fmt(pick.tgt)}`,   c:tgtColor, s: pick.entry > 0 ? `${isBuy ? '+' : '-'}${((Math.abs(pick.tgt - pick.entry)/pick.entry)*100).toFixed(1)}%` : '' },
+          ].map((b) => (
             <div key={b.l} style={{ background:'#f8fafc', padding:'6px 8px', textAlign:'center' }}>
               <div style={{ fontSize:7, color:'#64748b' }}>{b.l}</div>
               <div style={{ fontSize:13, fontWeight:800, color:b.c }}>{b.v}</div>
+              {b.s && <div style={{ fontSize:8, color:b.c }}>{b.s}</div>}
             </div>
           ))}
         </div>
+
+        {/* R:R and capital */}
+        <div style={{ display:'flex', gap:12, fontSize:9, color:'#64748b', marginBottom:showTools?6:0 }}>
+          {pick.rr > 0 && <span>⚖ R:R {Number(pick.rr).toFixed(1)}:1</span>}
+          {pick.amtRequired > 0 && <span>💰 Capital ₹{fmt(pick.amtRequired,0)}</span>}
+          {pick.maxLoss > 0 && <span>⛔ Max Loss ₹{fmt(Math.abs(pick.maxLoss),0)}</span>}
+          {pick.maxProfit > 0 && <span>🎯 Max Profit ₹{fmt(pick.maxProfit,0)}</span>}
+        </div>
+
+        {/* Trend alignment */}
+        {pick.trendAligned !== undefined && (
+          <div style={{ fontSize:9, fontWeight:700, color:pick.trendAligned?'#16a34a':'#d97706', marginTop:4 }}>
+            {pick.trendAligned ? '✅ With Market Trend' : '⚠ Against Market Trend — lower confidence'}
+          </div>
+        )}
+
         {showTools && <PositionSizing pick={pick} portSize={cfg.portSize} riskPct={cfg.riskPct} />}
         {showTools && <PayoffCalc pick={pick} />}
       </div>
@@ -133,14 +176,16 @@ export default function LookupPane() {
    
     if (!key || !live?.ltp) return;
     setResult((prev) => {
-      console.log('Live update for', key, 'LTP:', live);
       if (!prev?.inst?.key || prev.inst.key !== key) return prev;
       const prevClose = prev.q?.ohlc?.close || live.cp || live.ltp;
+      const chgPts  = live.changeAmt;
+      const chgPct  = prevClose > 0 ? (chgPts / prevClose) * 100 : 0;
       return {
         ...prev,
         q: { ...prev.q, last_price: live.ltp },
-        ltp: live.ltp,        
-        chgPct: prevClose > 0 ? ((live.ltp - prevClose) / prevClose) * 100 : 0,
+        ltp: live.ltp,
+        chgPts,
+        chgPct,
         time: getIST(),
       };
     });
@@ -184,6 +229,7 @@ export default function LookupPane() {
 
       const ltp = q.last_price;
       const chgPct = getChgPct(q);
+      const chgPts = q.net_change != null ? +q.net_change : ltp - (q.ohlc?.close || ltp);
       const today = getISTDate();
       const from90 = new Date(Date.now() - 95 * 86400000).toLocaleDateString('en-CA', { timeZone:'Asia/Kolkata' });
       const from7 = new Date(Date.now() - 10 * 86400000).toLocaleDateString('en-CA', { timeZone:'Asia/Kolkata' });
@@ -317,7 +363,7 @@ export default function LookupPane() {
         foData = { error: e.message, picks: [] };
       }
 
-      setResult({ inst, q, ltp, chgPct, tech, tf30, tf5, marketCtx, foData, time:getIST() });
+      setResult({ inst, q, ltp, chgPct, chgPts, tech, tf30, tf5, marketCtx, foData, time:getIST() });
       setProgress('');
     } catch (e) {
       setError(e.message);
@@ -381,8 +427,12 @@ export default function LookupPane() {
                 </div>
               </div>
               <div style={{ textAlign:'right' }}>
-                <div style={{ fontSize:24, fontWeight:800, color:r.chgPct >= 0 ? '#16a34a' : '#dc2626' }}>Rs {fmt(r.ltp)}</div>                
-                <div style={{ fontSize:12, fontWeight:600, color:r.chgPct >= 0 ? '#16a34a' : '#dc2626' }}>{r.chgPct >= 0 ? '+' : ''}{r.chgPct.toFixed(2)}%</div>
+                <div style={{ fontSize:24, fontWeight:800, color:r.chgPct >= 0 ? '#16a34a' : '#dc2626' }}>₹{fmt(r.ltp)}</div>
+                <div style={{ fontSize:13, fontWeight:700, color:r.chgPct >= 0 ? '#16a34a' : '#dc2626' }}>
+                  {r.chgPts != null ? (r.chgPts >= 0 ? '+' : '') + fmt(r.chgPts) : (r.chgPct >= 0 ? '+' : '') + r.chgPct.toFixed(2) + '%'}
+                  {' '}
+                  <span style={{ fontSize:10, fontWeight:500 }}>({r.chgPct >= 0 ? '+' : ''}{r.chgPct.toFixed(2)}%)</span>
+                </div>
               </div>
             </div>
             {r.q.volume > 0 && (
