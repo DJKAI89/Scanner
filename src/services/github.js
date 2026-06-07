@@ -150,6 +150,7 @@ export async function ghWriteDay(gh, signals, sha, date, retryCount = 0) {
   }
 
   if (r && (r.status === 409 || r.status === 422) && retryCount < 2) {
+    await new Promise(res => setTimeout(res, 1200 + Math.random() * 800)); // match HTML sleep
     const fresh = await _ghFetch(gh, getLogDayPath(date));
     if (!fresh) {
       return ghWriteDay(gh, signals, null, date, retryCount + 1);
@@ -224,6 +225,11 @@ export function buildStockSignal(p, vixVal) {
   const { date, time } = _istNow();
   const rec = (p.rec || '').toUpperCase();
   const holdDays = rec.includes('STRONG') ? 5 : rec === 'BUY' || rec === 'SELL' ? 3 : rec === 'MODERATE' ? 2 : 1;
+  // strength label — exact HTML: getSignalStrength(numInds, conf, reversal).label
+  const ni = p.numInds || 0, cf = p.conf || 0;
+  const revBoost = p.reversal?.type && p.reversal.type !== 'NONE' ? 1 : 0;
+  const eff = ni + revBoost;
+  const strengthLabel = (eff >= 5 && cf >= 70) ? 'STRONG' : (eff >= 3 || cf >= 55) ? 'MODERATE' : 'WEAK';
   return {
     id:             `${date}-${time.replace(/:/g,'').slice(0,4)}-${p.s}-STOCK`,
     date, time,
@@ -233,7 +239,7 @@ export function buildStockSignal(p, vixVal) {
     name:           p.n,
     signal:         p.rec,
     confidence:     p.conf,
-    strength:       p.strength || '',
+    strength:       strengthLabel,
     numInds:        p.numInds  || 0,
     entry:          +p.ltp.toFixed(2),
     sl:             +p.sl.toFixed(2),
@@ -249,6 +255,9 @@ export function buildStockSignal(p, vixVal) {
     reversal:       p.reversal?.type || 'NONE',
     trigger:        p.entryTrigger?.trigger || p.ltp,
     triggerMethod:  p.entryTrigger?.method  || 'Market',
+    // SL/Target method labels — exact HTML: from slTargets
+    slMethod:       p.slTargets?.consMethod?.includes('R1') || p.slTargets?.consMethod?.includes('R2') ? 'S1 support' : 'ATR+VIX',
+    tgtMethod:      p.slTargets?.modMethod || '2:1 R:R',
     compositeScore: p.compositeScore || null,
     status:         'OPEN',
     holdDays,
@@ -259,6 +268,8 @@ export function buildStockSignal(p, vixVal) {
 export function buildOptionSignal(p, vixVal) {
   const { date, time } = _istNow();
   const instrKey = p.instrKey || p.key || p.instrument_key || p.instrumentKey || null;
+  const conf = p.confidence || 0;
+  const strengthLabel = conf >= 75 ? 'STRONG' : conf >= 55 ? 'MODERATE' : 'WEAK';
   return {
     id:             `${date}-${time.replace(/:/g,'').slice(0,4)}-${p.und}-${p.strike}-${p.type}`,
     date, time,
@@ -270,8 +281,12 @@ export function buildOptionSignal(p, vixVal) {
     optType:        p.type,
     strike:         p.strike,
     expiry:         p.expiry,
-    signal:         p.action === 'BUY' ? (p.type === 'CE' ? 'CALL' : 'PUT') : p.action,
-    confidence:     p.confidence || 0,
+    // signal stores the raw action (BUY or SELL) — exact match with HTML
+    signal:         p.action,
+    action:         p.action,
+    confidence:     conf,
+    strength:       strengthLabel,
+    numInds:        p.score || 0,
     entry:          +p.entry.toFixed(2),
     sl:             +p.sl.toFixed(2),
     target:         +(p.tgt || 0).toFixed(2),
@@ -280,19 +295,65 @@ export function buildOptionSignal(p, vixVal) {
     iv:             p.iv   || 0,
     delta:          p.delta || 0,
     theta:          p.theta || 0,
+    capitalReq:     p.amtRequired || 0,
     vix:            vixVal || null,
-    compositeScore: p.compositeScore || null,
-    priceZone:      p.priceZone || '',
-    oiBuildType:    p.oiBuildType || '',
-    trendAligned:   p.trendAligned || false,
+    slTgtMethod:    p.slTgtMethod  || null,
+    compositeScore: p.compositeScore  ?? null,
+    momentumScore:  p.momentumScore   ?? null,
+    emaCross:       p.emaCross        ?? null,
+    priceZone:      p.priceZone       || '',
+    oiBuildType:    p.oiBuildType     || '',
+    trendAligned:   p.trendAligned    || false,
     status:         'OPEN',
     holdDays:       1,
-    exitPrice:      null, 
-    exitTime:       null, 
-    exitDate:       null, 
-    pnlPct:         null, 
+    exitPrice:      null,
+    exitTime:       null,
+    exitDate:       null,
+    pnlPct:         null,
     note:           '',
   };
+}
+
+// ── One-time migration from legacy single file → daily files (exact HTML port) ──
+export async function ghMigrateIfNeeded(gh, lg = () => {}) {
+  if (!gh.token || !gh.user || !gh.repo) return;
+  const migKey = `friday_log_migrated_v2_${_uid()}`;
+  if (localStorage.getItem(migKey)) return; // already done
+  try {
+    const legacyPath = `signal-logs/${_uid()}.json`;
+    const d = await _ghFetch(gh, legacyPath);
+    if (!d) { localStorage.setItem(migKey, '1'); return; } // no legacy file
+    lg('📦 Migrating legacy signal log to daily files...', 'o');
+    const content = _decode(d.content);
+    const signals = content.signals || [];
+    if (!signals.length) { localStorage.setItem(migKey, '1'); return; }
+    // Group by date
+    const byDate = {};
+    for (const sig of signals) {
+      if (!sig.date) continue;
+      if (!byDate[sig.date]) byDate[sig.date] = [];
+      byDate[sig.date].push(sig);
+    }
+    let written = 0;
+    for (const [date, daySigs] of Object.entries(byDate)) {
+      const { sha } = await ghReadDay(gh, date);
+      const newSha = await ghWriteDay(gh, daySigs, sha, date);
+      if (newSha) {
+        await ghUpdateIndex(gh, date, computeLogStats(daySigs));
+        written++;
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+    localStorage.setItem(migKey, '1');
+    lg(`✅ Migration complete: ${written} day files from ${signals.length} signals`, 'o');
+  } catch (e) { lg('ghMigrateIfNeeded: ' + e.message, 'w'); }
+}
+
+// ── isBullSignal — exact HTML port + legacy CALL/PUT backwards compat ──
+export function isBullSignal(sig) {
+  // Handle legacy React values where BUY CE was stored as 'CALL', BUY PE as 'PUT'
+  if (sig.signal === 'CALL' || sig.signal === 'PUT') return true;
+  return sig.signal !== 'SELL';
 }
 
 // ── logSignals — auto-log after each scan (port from HTML logSignals) ──

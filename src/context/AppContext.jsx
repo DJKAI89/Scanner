@@ -3,7 +3,7 @@ import { DEF, CFG_VERSION } from '../constants/config';
 import { localIsOpen, getMarketStatusLocal, getIST } from '../utils/marketTime';
 import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken } from '../services/api';
 import { interpretFIIDII } from '../services/technical';
-import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays } from '../services/github';
+import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded } from '../services/github';
 
 const AppContext = createContext(null);
 
@@ -306,7 +306,7 @@ export function AppProvider({ children }) {
       // Still load stocks/FII even if profile fails
       setTimeout(() => {
         const g = { token: localStorage.getItem('friday_gh_token') || '', user: localStorage.getItem('friday_gh_user') || '', repo: localStorage.getItem('friday_gh_repo') || '' };
-        if (g.token) { loadStocks(g); loadFIIDII(g); loadConfCalibration(g); }
+        if (g.token) { loadStocks(g); loadFIIDII(g); loadConfCalibration(g); ghMigrateIfNeeded(g, lg); }
       }, 2000);
     });
   }, [booted]); // eslint-disable-line

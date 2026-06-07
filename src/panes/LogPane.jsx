@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, EmptyState, StatCard } from '../components/common.jsx';
-import { ghReadMultipleDays, ghWriteDay, ghUpdateIndex, ghReadDay, ghReadIndex } from '../services/github';
+import { ghReadMultipleDays, ghWriteDay, ghUpdateIndex, ghReadDay, ghReadIndex, isBullSignal } from '../services/github';
 import { fetchQ } from '../services/api';
 import { fmt } from '../utils/formatters';
 import { getIST, getISTDate } from '../utils/marketTime';
@@ -20,7 +20,7 @@ function getSignalFeedKey(sig) {
 
 function SignalRow({ sig, livePrice }) {
   const sc = STATUS_COLORS[sig.status] || STATUS_COLORS.OPEN;
-  const isBuy  = sig.signal !== 'SELL' && sig.signal !== 'SELL_CE' && sig.signal !== 'SELL_PE';
+  const isBuy  = isBullSignal(sig); // uses shared isBullSignal (handles BUY/SELL/CALL/PUT)
   const isOpt  = sig.type === 'OPTION';
   const ltp    = livePrice ?? null;
   const entry  = sig.entry  || 0;
@@ -207,7 +207,7 @@ export default function LogPane() {
       if (!live?.ltp) return { ...sig };
 
       const ltp    = live.ltp;
-      const isBuy  = sig.signal !== 'SELL' && sig.signal !== 'SELL_CE' && sig.signal !== 'SELL_PE';
+      const isBuy  = isBullSignal(sig);
       const slHit  = sig.sl     && (isBuy ? ltp <= sig.sl     : ltp >= sig.sl);
       const tgtHit = sig.target && (isBuy ? ltp >= sig.target : ltp <= sig.target);
 
