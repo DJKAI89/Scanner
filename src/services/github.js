@@ -110,7 +110,14 @@ export async function ghReadDay(gh, date) {
   const cached = _cacheGet(date);
   if (cached) return { signals: cached.signals, sha: cached.sha };
   const d = await _ghFetch(gh, getLogDayPath(date));
-  if (!d) return { signals: [], sha: null };
+  if (!d) {
+    // Cache the "file doesn't exist yet" state briefly (5 s) so concurrent
+    // Stocks + Options scans share the same empty baseline instead of both
+    // hitting GitHub and racing to create the file simultaneously.
+    _cachePut(date, [], null);
+    _ghDayCache[date].loadedAt = Date.now() - 85000; // expire in ~5 s (maxAge=90000)
+    return { signals: [], sha: null };
+  }
   try {
     const content = _decode(d.content);
     const signals = content.signals || [];
@@ -190,15 +197,18 @@ export async function ghReadIndex(gh) {
 }
 
 export async function ghUpdateIndex(gh, date, stats) {
-  const { dates, dailyStats, sha } = await ghReadIndex(gh);
-  const newDates   = dates.includes(date) ? dates : [...dates, date].sort();
-  const pruned     = newDates.slice(-90);
-  const newStats   = { ...dailyStats, [date]: stats };
-  for (const d of Object.keys(newStats)) { if (!pruned.includes(d)) delete newStats[d]; }
-  await _ghPut(gh, getLogIndexPath(), {
-    dates: pruned, dailyStats: newStats,
-    lastUpdated: new Date().toISOString(), upstoxId: _uid(),
-  }, sha, `FRIDAY index · ${_uid()}`);
+  try {
+    const { dates, dailyStats, sha } = await ghReadIndex(gh);
+    const newDates   = dates.includes(date) ? dates : [...dates, date].sort();
+    const pruned     = newDates.slice(-90);
+    const newStats   = { ...dailyStats, [date]: stats };
+    for (const d of Object.keys(newStats)) { if (!pruned.includes(d)) delete newStats[d]; }
+    const r = await _ghPut(gh, getLogIndexPath(), {
+      dates: pruned, dailyStats: newStats,
+      lastUpdated: new Date().toISOString(), upstoxId: _uid(),
+    }, sha, `FRIDAY index · ${_uid()}`);
+    if (r && !r.ok) console.warn(`[FRIDAY] ghUpdateIndex: HTTP ${r.status}`);
+  } catch (e) { console.warn('[FRIDAY] ghUpdateIndex failed:', e.message); }
 }
 
 export async function ghReadMultipleDays(gh, maxDays = 30) {
