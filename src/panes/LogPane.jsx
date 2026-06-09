@@ -173,7 +173,7 @@ export default function LogPane() {
   const [error, setError]             = useState('');
   const [signals, setSignals]         = useState([]);
   const [sigShaMap, setSigShaMap]     = useState({});
-  const [stats, setStats]             = useState(null);
+  // stats derived live from filtered signals — see useMemo below
   const [filter, setFilter]           = useState('all');
   const [typeFilter, setTypeFilter]   = useState('all');
   const [days, setDays]               = useState(1);
@@ -292,10 +292,6 @@ export default function LogPane() {
       setSignals(all);
       setSigShaMap(prev => ({ ...prev, ...shaMap })); // preserve existing SHAs + add new ones
       resolvedRef.current.clear();
-      const closed  = all.filter(s=>s.status==='TARGET_HIT'||s.status==='SL_HIT');
-      const hits    = all.filter(s=>s.status==='TARGET_HIT').length;
-      const winRate = closed.length ? Math.round(hits/closed.length*100) : null;
-      setStats({ total:all.length, open:all.filter(s=>s.status==='OPEN').length, hits, sls:closed.length-hits, winRate, avgConf:all.length?Math.round(all.reduce((s,x)=>s+(x.confidence||0),0)/all.length):0 });
       updateBadge('log', String(all.length));
       lg(`Signal log: ${all.length} signals (${days === 1 ? 'Today' : `${days}d`})`, 'o');
     } catch(e) { setError(e.message); lg('Log error: '+e.message,'e'); }
@@ -350,6 +346,22 @@ export default function LogPane() {
     if (typeFilter!=='all'&&s.type!==typeFilter) return false;
     return true;
   });
+
+  // Derive stats from filtered signals — auto-updates when WS resolves or dropdown changes
+  const stats = useMemo(() => {
+    if (!filtered.length) return null;
+    const closed  = filtered.filter(s => s.status==='TARGET_HIT' || s.status==='SL_HIT');
+    const hits    = filtered.filter(s => s.status==='TARGET_HIT').length;
+    const winRate = closed.length ? Math.round(hits / closed.length * 100) : null;
+    return {
+      total:   filtered.length,
+      open:    filtered.filter(s => s.status==='OPEN').length,
+      hits,
+      sls:     closed.length - hits,
+      winRate,
+      avgConf: Math.round(filtered.reduce((s, x) => s + (x.confidence || 0), 0) / filtered.length),
+    };
+  }, [filtered]);
 
   const stocksOpen  = openSignals.filter(s=>s.type==='STOCK').length;
   const optionsOpen = openSignals.filter(s=>s.type==='OPTION').length;
