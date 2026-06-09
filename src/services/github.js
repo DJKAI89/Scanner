@@ -149,6 +149,11 @@ export async function ghWriteDay(gh, signals, sha, date, retryCount = 0) {
     return newSha;
   }
 
+  if (r && r.status !== 409 && r.status !== 422) {
+    // Unexpected failure — log status for debugging
+    console.warn(`[FRIDAY] ghWriteDay: GitHub PUT returned HTTP ${r.status} for ${getLogDayPath(date)}`);
+  }
+
   if (r && (r.status === 409 || r.status === 422) && retryCount < 2) {
     await new Promise(res => setTimeout(res, 1200 + Math.random() * 800)); // match HTML sleep
     const fresh = await _ghFetch(gh, getLogDayPath(date));
@@ -395,7 +400,9 @@ export async function logSignals(gh, newSignals, vixVal, lg = () => {}) {
       const closed = signals.filter(s => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
       if (closed.length) stats.winRate = Math.round(stats.hits / closed.length * 100);
       ghUpdateIndex(gh, istDate, stats).catch(() => {});
+      lg(`Signal log: ✅ +${added} saved · ${skipped} unchanged`, 'o');
+    } else {
+      lg(`Signal log: ⚠ GitHub write failed — ${added} signals NOT saved. Check repo/token in ⚙ Settings`, 'w');
     }
-    lg(`Signal log: ✅ +${added} · ${skipped} unchanged`, 'o');
   } catch (e) { lg('logSignals: ' + e.message, 'w'); }
 }

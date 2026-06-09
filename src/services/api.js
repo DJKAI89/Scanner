@@ -179,8 +179,24 @@ export async function fetchPortfolio(token, onTokenExpired) {
     withRetry(() => apiGet('/v2/portfolio/short-term-positions', token, onTokenExpired), 'positions'),
     withRetry(() => apiGet('/v2/portfolio/long-term-holdings', token, onTokenExpired), 'holdings'),
   ]);
-  const positions = posRes.status === 'fulfilled' ? posRes.value?.data || [] : [];
-  const holdings  = holdRes.status === 'fulfilled' ? holdRes.value?.data || [] : [];
+
+  // Surface errors — if both fail, throw so the pane shows a visible error banner
+  if (posRes.status === 'rejected' && holdRes.status === 'rejected') {
+    throw new Error(
+      `Portfolio API failed — positions: ${posRes.reason?.message || posRes.reason}; ` +
+      `holdings: ${holdRes.reason?.message || holdRes.reason}`
+    );
+  }
+
+  const positions = posRes.status === 'fulfilled' ? (posRes.value?.data ?? []) : [];
+  const holdings  = holdRes.status === 'fulfilled' ? (holdRes.value?.data ?? []) : [];
+
+  // Warn in console if one of the two calls failed
+  if (posRes.status === 'rejected')
+    console.warn('[FRIDAY] fetchPortfolio positions failed:', posRes.reason?.message || posRes.reason);
+  if (holdRes.status === 'rejected')
+    console.warn('[FRIDAY] fetchPortfolio holdings failed:', holdRes.reason?.message || holdRes.reason);
+
   return { positions, holdings };
 }
 
