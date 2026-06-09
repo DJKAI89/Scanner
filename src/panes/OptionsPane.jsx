@@ -6,7 +6,7 @@ import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST, sleep } from '../utils/marketTime';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK, isWeeklyExpiryDay, getTimeOfDayPenalty } from '../constants/config';
 import { useMarketFeed } from '../hooks/useMarketFeed';
-import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias } from '../services/technical';
+import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias, applyAdaptWeights } from '../services/technical';
 import { useIndexFeed } from '../hooks/useIndexFeed.js';
 import { logSignals, buildOptionSignal } from '../services/github';
 
@@ -295,7 +295,7 @@ function OptionCard({ pick, cfg: cardCfg }) {
 
 export default function OptionsPane() {
   const {
-    token, cfg, marketStatus, lg, onTokenExpired, updateBadge, fiiInterp, fiiData, gh,
+    token, cfg, marketStatus, lg, onTokenExpired, updateBadge, fiiInterp, fiiData, gh, adaptWeights,
     activeTab, setScanning, setStatusDot, setStatusTxt,
   } = useApp();
   const accessToken = resolveAccessToken(token);
@@ -459,12 +459,24 @@ export default function OptionsPane() {
         const picks = scanChain(chain, atm, spot, idx.name, expiry, idx.lot, niftyBull, vixVal, maxPain, pcr, richCtx, cfg);
 
         // Apply FII bias to each pick's confidence
-        const picksWithFII = picks.map(p => ({
-          ...p,
-          confidence: applyFIIBias(p.confidence, p.action === 'BUY', fiiData),
-          _dte: p._dte ?? null,
-          nearMaxPain: maxPain > 0 && Math.abs(p.strike - maxPain) / spot < 0.01,
-        })).filter(p => p.confidence >= cfg.minOptConf && (cfg.maxOptCapital != 0 ? p.amtRequired <= cfg.maxOptCapital : p.amtRequired = p.amtRequired));
+        const picksWithFII = picks.map(p => {
+          const _iSnap = {
+            trendAligned: p.trendAligned||false, emaBull: p.emaTrendBull===true,
+            emaBearish: p.emaTrendBull===false,
+            freshCross: p.emaCross==='bullish_cross'||p.emaCross==='bearish_cross',
+            momentumFresh: p.momentumFresh||false, volSpike: (p.volRatio??0)>=1.5,
+            lowVol: (p.volRatio??1)<0.7,
+            nearPDH: p.priceZone==='PDH_BREAK'||p.priceZone==='NEAR_PDH',
+            nearPDL: p.priceZone==='PDL_BREAK'||p.priceZone==='NEAR_PDL',
+            oiBuildUp: p.oiBuildType==='CE_BUILD'||p.oiBuildType==='PE_BUILD',
+            compositeHigh: Math.abs(p.compositeScore??0)>=2,
+            compositeMed: Math.abs(p.compositeScore??0)>=1,
+            atm: p.atm||false,
+          };
+          let c = applyFIIBias(p.confidence, p.action === 'BUY', fiiData);
+          c = applyAdaptWeights(c, adaptWeights?.option||null, _iSnap);
+          return { ...p, confidence: Math.min(99,Math.max(1,Math.round(c))), _indSnap:_iSnap, _dte: p._dte??null, nearMaxPain: maxPain>0&&Math.abs(p.strike-maxPain)/spot<0.01 };
+        }).filter(p => p.confidence >= cfg.minOptConf && (cfg.maxOptCapital != 0 ? p.amtRequired <= cfg.maxOptCapital : p.amtRequired = p.amtRequired));
 
         lg(`${idx.name}: ${chain.length} strikes → ${picks.length} raw → ${picksWithFII.length} ≥${cfg.minOptConf}% | composite=${richCtx.compositeScore} pcr=${pcr}`, 'o');
         built.push({ name: idx.name, spot, spotChg, picks: picksWithFII, expiry, chain, maxPain, oiWalls, pcr, pcrTrend, ivTrend });
@@ -513,7 +525,12 @@ export default function OptionsPane() {
             const atm2 = Math.round(spot/step2)*step2;
             const stkMaxPain = calcMaxPain(chain);
             const picks2 = scanChain(chain, atm2, spot, inst.s, expiry, inst.lot, niftyBull, vixVal, stkMaxPain, pcr2, stkCtx, cfg);
-            const fPicks2 = picks2.map(p=>({...p, confidence:applyFIIBias(p.confidence, p.action==='BUY', fiiData)})).filter(p=>p.confidence>=cfg.minOptConf&&(cfg.maxOptCapital<=0||p.amtRequired<=cfg.maxOptCapital));
+            const fPicks2 = picks2.map(p => {
+              const _iSnap2 = { trendAligned:p.trendAligned||false, emaBull:p.emaTrendBull===true, emaBearish:p.emaTrendBull===false, freshCross:p.emaCross==='bullish_cross'||p.emaCross==='bearish_cross', momentumFresh:p.momentumFresh||false, volSpike:(p.volRatio??0)>=1.5, lowVol:(p.volRatio??1)<0.7, nearPDH:p.priceZone==='PDH_BREAK'||p.priceZone==='NEAR_PDH', nearPDL:p.priceZone==='PDL_BREAK'||p.priceZone==='NEAR_PDL', oiBuildUp:p.oiBuildType==='CE_BUILD'||p.oiBuildType==='PE_BUILD', compositeHigh:Math.abs(p.compositeScore??0)>=2, compositeMed:Math.abs(p.compositeScore??0)>=1, atm:p.atm||false };
+              let c2 = applyFIIBias(p.confidence, p.action==='BUY', fiiData);
+              c2 = applyAdaptWeights(c2, adaptWeights?.option||null, _iSnap2);
+              return { ...p, confidence:Math.min(99,Math.max(1,Math.round(c2))), _indSnap:_iSnap2 };
+            }).filter(p=>p.confidence>=cfg.minOptConf&&(cfg.maxOptCapital<=0||p.amtRequired<=cfg.maxOptCapital));
             if (fPicks2.length) { built.push({ name:inst.s, spot, spotChg, picks:fPicks2, expiry, chain, maxPain:stkMaxPain, oiWalls:calcOIWalls(chain), pcr:pcr2, pcrTrend:stkCtx.pcrTrend, ivTrend:ivTrend2, type:'stock', fullName:inst.n }); lg(`${inst.s}: ${chain.length} strikes → ${fPicks2.length} signals`, 'o'); }
           } catch(e) { lg(inst.s + ' opts: ' + e.message, 'w'); }
         }
@@ -536,7 +553,9 @@ export default function OptionsPane() {
       setUpdTime('Updated: ' + getIST());
       setStatusDot('live'); setStatusTxt('Live');
       const allPicks = built.flatMap(g => g.picks);
-      if (allPicks.length && gh?.token) logSignals(gh, allPicks.map(p => buildOptionSignal(p, vixVal)), vixVal, lg);
+      // Don't log WATCH options — no direction conviction, contaminates calibration
+      const loggableOpts = allPicks.filter(p => p.action !== 'WATCH');
+      if (loggableOpts.length && gh?.token) logSignals(gh, loggableOpts.map(p => buildOptionSignal(p, vixVal)), vixVal, lg);
       lg(`✅ Options: ${total} signals (${withTrend} with-trend)`, 'o');
     } catch (e) {
       setError(e.message); setStatusDot('err'); setStatusTxt('Error'); lg('Options error: ' + e.message, 'e');

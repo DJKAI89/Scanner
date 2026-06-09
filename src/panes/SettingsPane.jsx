@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { DEF } from '../constants/config';
 import { pushSettingsToGH, pullSettingsFromGH } from '../services/github';
@@ -32,6 +32,221 @@ function ConfBar({ value, color }) {
   );
 }
 
+// ── Adaptive Weights Section ──────────────────────────────────────────────────
+const STOCK_IND_LABELS = {
+  macdBull:       { label: 'MACD Above Signal',     icon: '📈' },
+  macdBullCross:  { label: 'MACD Bull Cross',        icon: '⚡' },
+  macdBearCross:  { label: 'MACD Bear Cross',        icon: '⚠' },
+  bbSqueeze:      { label: 'BB Squeeze',             icon: '🗜' },
+  bbNearLower:    { label: 'Near Lower BB',          icon: '⬇' },
+  adxBull:        { label: 'ADX Bull Trend',         icon: '💪' },
+  adxBear:        { label: 'ADX Bear Trend',         icon: '🐻' },
+  rsiDiv:         { label: 'RSI Bull Divergence',    icon: '🔄' },
+  rsiDivHidden:   { label: 'RSI Hidden Divergence',  icon: '👁' },
+  rsiBearDiv:     { label: 'RSI Bear Divergence',    icon: '🔻' },
+  a50:            { label: 'Above 50 MA',            icon: '📊' },
+  a200:           { label: 'Above 200 MA',           icon: '📊' },
+  nearSupp:       { label: 'Near Support',           icon: '🛡' },
+  aboveVWAP:      { label: 'Above VWAP',             icon: '🔵' },
+  vwapNearLower:  { label: 'Near Lower VWAP',        icon: '⬇' },
+  engulfing:      { label: 'Bullish Engulfing',      icon: '🕯' },
+  hammer:         { label: 'Hammer Candle',          icon: '🔨' },
+  morningStar:    { label: 'Morning Star',           icon: '⭐' },
+  reversalFired:  { label: 'Reversal Signal',        icon: '🔄' },
+  delivHigh:      { label: 'High Delivery (≥60%)',   icon: '📦' },
+  delivLow:       { label: 'Low Delivery (≤25%)',    icon: '📭' },
+};
+
+const OPT_IND_LABELS = {
+  trendAligned:   { label: 'Trend Aligned',          icon: '🎯' },
+  emaBull:        { label: 'EMA 9 > 21 (Bull)',       icon: '📈' },
+  emaBearish:     { label: 'EMA 9 < 21 (Bear)',       icon: '📉' },
+  freshCross:     { label: 'Fresh EMA Cross',         icon: '⚡' },
+  momentumFresh:  { label: 'Fresh Momentum',          icon: '🔄' },
+  volSpike:       { label: 'Volume Spike (≥1.5×)',    icon: '🔥' },
+  lowVol:         { label: 'Low Volume (<0.7×)',       icon: '😴' },
+  nearPDH:        { label: 'Near PDH Zone',           icon: '🚀' },
+  nearPDL:        { label: 'Near PDL Zone',           icon: '⬇' },
+  oiBuildUp:      { label: 'OI Build Up',             icon: '📊' },
+  compositeHigh:  { label: 'Strong Composite (≥2)',   icon: '💥' },
+  compositeMed:   { label: 'Moderate Composite (≥1)', icon: '📐' },
+  atm:            { label: 'At The Money',            icon: '🎯' },
+};
+
+function WeightRow({ indKey, data, labelMap }) {
+  const meta = labelMap[indKey];
+  if (!meta) return null;
+  const adj = data.adj ?? 0;
+  const isPos = adj > 0, isNeg = adj < 0;
+  const adjColor = isPos ? '#16a34a' : isNeg ? '#dc2626' : '#94a3b8';
+  const wrColor = data.wrWith >= 55 ? '#16a34a' : data.wrWith >= 45 ? '#d97706' : '#dc2626';
+  const barW = Math.min(100, data.wrWith);
+
+  return (
+    <div style={{ padding: '9px 12px', borderBottom: '1px solid #f1f5f9', display: 'flex', flexDirection: 'column', gap: 5 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 13 }}>{meta.icon}</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#1e293b' }}>{meta.label}</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 9, color: '#94a3b8', fontWeight: 600 }}>n={data.n}</span>
+          <span style={{
+            fontSize: 11, fontWeight: 800, color: adjColor,
+            background: isPos ? '#f0fdf4' : isNeg ? '#fef2f2' : '#f8fafc',
+            border: `1px solid ${isPos ? '#bbf7d0' : isNeg ? '#fecaca' : '#e2e8f0'}`,
+            borderRadius: 6, padding: '1px 7px', minWidth: 52, textAlign: 'center',
+          }}>
+            {adj > 0 ? '+' : ''}{adj.toFixed(1)} pts
+          </span>
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ flex: 1, height: 5, background: '#e2e8f0', borderRadius: 3, overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: barW + '%', background: wrColor, borderRadius: 3, transition: 'width .4s' }} />
+        </div>
+        <span style={{ fontSize: 9, fontWeight: 700, color: wrColor, minWidth: 36, textAlign: 'right' }}>
+          {data.wrWith}% WR
+        </span>
+        <span style={{ fontSize: 9, color: '#94a3b8', minWidth: 38, textAlign: 'right' }}>
+          base {data.wrBase}%
+        </span>
+        <span style={{
+          fontSize: 9, fontWeight: 700, minWidth: 40, textAlign: 'right',
+          color: data.lift > 0 ? '#16a34a' : data.lift < 0 ? '#dc2626' : '#94a3b8'
+        }}>
+          {data.lift > 0 ? '+' : ''}{data.lift}% lift
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function AdaptWeightsSection({ adaptWeights }) {
+  const [tab, setTab] = useState('stock');
+
+  if (!adaptWeights) {
+    return (
+      <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '14px 16px' }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#92400e', marginBottom: 6 }}>⏳ Accumulating Signal Data</div>
+        <div style={{ fontSize: 10, color: '#b45309', lineHeight: 1.7 }}>
+          Adaptive weights need <strong>15+ closed signals</strong> with indicator snapshots before they can be computed.
+          Once enough signals close (TARGET_HIT or SL_HIT), this section will automatically populate with learned adjustments.
+        </div>
+        <div style={{ marginTop: 10, fontSize: 10, color: '#92400e', fontWeight: 600 }}>
+          GitHub must be configured and signals must be logged first.
+        </div>
+      </div>
+    );
+  }
+
+  const { stock, option, baselineWR, stockBaseWR, optBaseWR, totalSignals, withIndData, computedAt } = adaptWeights;
+  const stockEntries = Object.entries(stock || {}).sort((a, b) => Math.abs(b[1].adj) - Math.abs(a[1].adj));
+  const optEntries   = Object.entries(option || {}).sort((a, b) => Math.abs(b[1].adj) - Math.abs(a[1].adj));
+  const computedDate = computedAt ? new Date(computedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
+  const pendingStockInds = Object.keys(STOCK_IND_LABELS).filter(k => !stock?.[k]);
+  const pendingOptInds   = Object.keys(OPT_IND_LABELS).filter(k => !option?.[k]);
+
+  return (
+    <div>
+      {/* Summary stats */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginBottom: 14 }}>
+        {[
+          { label: 'Total Closed', value: totalSignals, color: '#1d4ed8' },
+          { label: 'With Ind. Data', value: withIndData, color: '#7c3aed' },
+          { label: 'Baseline WR', value: Math.round(baselineWR * 100) + '%', color: baselineWR >= 0.5 ? '#16a34a' : '#dc2626' },
+        ].map(s => (
+          <div key={s.label} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px', textAlign: 'center' }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: s.color }}>{s.value}</div>
+            <div style={{ fontSize: 8, color: '#94a3b8', fontWeight: 600, marginTop: 2 }}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: 9, color: '#94a3b8', marginBottom: 12 }}>Last computed: {computedDate}</div>
+
+      {/* Tab selector */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+        {[
+          { key: 'stock', label: `📊 Stocks (${stockEntries.length})` },
+          { key: 'option', label: `⚡ Options (${optEntries.length})` },
+        ].map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)} style={{
+            flex: 1, padding: '7px 10px', fontSize: 11, fontWeight: 700, borderRadius: 8, cursor: 'pointer', border: 'none',
+            background: tab === t.key ? '#1d4ed8' : '#f1f5f9',
+            color: tab === t.key ? '#fff' : '#64748b',
+          }}>{t.label}</button>
+        ))}
+      </div>
+
+      {/* Stock weights */}
+      {tab === 'stock' && (
+        <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ background: '#f8fafc', padding: '8px 12px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: '#374151' }}>Indicator</span>
+            <span style={{ fontSize: 9, color: '#94a3b8' }}>Base WR: {Math.round(stockBaseWR * 100)}%</span>
+          </div>
+          {stockEntries.length === 0
+            ? <div style={{ padding: 16, fontSize: 11, color: '#94a3b8', textAlign: 'center' }}>No stock indicator data yet</div>
+            : stockEntries.map(([k, d]) => <WeightRow key={k} indKey={k} data={d} labelMap={STOCK_IND_LABELS} />)
+          }
+          {pendingStockInds.length > 0 && (
+            <div style={{ padding: '10px 12px', background: '#fffbeb', borderTop: '1px solid #fde68a' }}>
+              <div style={{ fontSize: 9, color: '#b45309', fontWeight: 600, marginBottom: 5 }}>
+                ⏳ Accumulating ({pendingStockInds.length} indicators need 8+ samples):
+              </div>
+              <div style={{ fontSize: 9, color: '#d97706', lineHeight: 1.8 }}>
+                {pendingStockInds.map(k => STOCK_IND_LABELS[k]?.label).filter(Boolean).join(' · ')}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Option weights */}
+      {tab === 'option' && (
+        <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ background: '#f8fafc', padding: '8px 12px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: '#374151' }}>Indicator</span>
+            <span style={{ fontSize: 9, color: '#94a3b8' }}>Base WR: {Math.round(optBaseWR * 100)}%</span>
+          </div>
+          {optEntries.length === 0
+            ? <div style={{ padding: 16, fontSize: 11, color: '#94a3b8', textAlign: 'center' }}>No option indicator data yet</div>
+            : optEntries.map(([k, d]) => <WeightRow key={k} indKey={k} data={d} labelMap={OPT_IND_LABELS} />)
+          }
+          {pendingOptInds.length > 0 && (
+            <div style={{ padding: '10px 12px', background: '#fffbeb', borderTop: '1px solid #fde68a' }}>
+              <div style={{ fontSize: 9, color: '#b45309', fontWeight: 600, marginBottom: 5 }}>
+                ⏳ Accumulating ({pendingOptInds.length} indicators need 8+ samples):
+              </div>
+              <div style={{ fontSize: 9, color: '#d97706', lineHeight: 1.8 }}>
+                {pendingOptInds.map(k => OPT_IND_LABELS[k]?.label).filter(Boolean).join(' · ')}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Legend */}
+      <div style={{ marginTop: 12, padding: '10px 12px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+        <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', marginBottom: 6 }}>HOW TO READ</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {[
+            { color: '#16a34a', text: '+pts = indicator predicts wins → confidence boosted when it fires' },
+            { color: '#dc2626', text: '−pts = indicator predicts losses → confidence reduced when it fires' },
+            { color: '#94a3b8', text: 'WR = win rate when this indicator was present in a signal' },
+            { color: '#64748b', text: 'Lift = WR improvement vs overall baseline' },
+          ].map((l, i) => (
+            <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: l.color, flexShrink: 0, marginTop: 2 }} />
+              <span style={{ fontSize: 9, color: '#64748b', lineHeight: 1.5 }}>{l.text}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsPane() {
   const {
     cfg, saveCfg, resetCfg,
@@ -40,6 +255,7 @@ export default function SettingsPane() {
     stocksStatus, loadStocks,
     fiiInterp, loadFIIDII,
     ghSettingsPulled,
+    adaptWeights,
   } = useApp();
 
   const [local, setLocal]           = useState({ ...cfg });
@@ -53,7 +269,6 @@ export default function SettingsPane() {
   );
   const [ghTesting, setGhTesting]   = useState(false);
 
-  // Re-sync whenever GitHub settings are pulled on boot
   useEffect(() => {
     setLocal({ ...cfg });
     setGhLocal({ ...gh });
@@ -61,7 +276,6 @@ export default function SettingsPane() {
 
   const set = (k, v) => setLocal(p => ({ ...p, [k]: v }));
 
-  // Sanitise GitHub input (handles pasted URLs)
   function sanitiseGH(raw) {
     let { token: tok, user, repo } = raw;
     repo = (repo || '').trim(); user = (user || '').trim().toLowerCase();
@@ -180,6 +394,17 @@ export default function SettingsPane() {
           <SetRow label="Options SL %"      sub="% below entry = stop loss"><Inp value={local.optSL} onChange={v => set('optSL', v)} min={5} max={60} /></SetRow>
           <SetRow label="Options Target %"  sub="% above entry = target"><Inp value={local.optTgt} onChange={v => set('optTgt', v)} min={10} max={200} /></SetRow>
           <SetRow label="Max Capital ₹"     sub="Hide options above this · 0 = no limit"><Inp value={local.maxOptCapital} onChange={v => set('maxOptCapital', v)} min={0} step={1000} width={90} /></SetRow>
+        </div>
+
+        {/* ── Adaptive Weights ── */}
+        <div className="setting-card" style={{ gridColumn: '1 / -1' }}>
+          <h4>🧠 Adaptive Indicator Weights</h4>
+          <div style={{ fontSize: 10, color: '#64748b', marginBottom: 14, lineHeight: 1.7 }}>
+            Automatically learned from your past signal outcomes. Each indicator's confidence adjustment
+            is calibrated to your actual win/loss history — no manual tuning needed.
+            Updates every time the app boots (reads last 60 days of closed signals).
+          </div>
+          <AdaptWeightsSection adaptWeights={adaptWeights} />
         </div>
 
         {/* ── Stock Universe ── */}
@@ -316,4 +541,3 @@ export default function SettingsPane() {
     </div>
   );
 }
-

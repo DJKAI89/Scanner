@@ -12,7 +12,7 @@ import {
   boSLTarget, getIntradayPhase, detectPatterns, calcRisk, calcPotential, calcSR,
   countIndicatorsEx, getRec, autoSLTarget, calcEntryTrigger, detectReversal,
   calcMACD, isNearSupport, calcRSIDivergence, getSector, calcConfidence, calcVWAP,
-  calcVWAPBands, applyFIIBias, applyCalibration, calcEMA, calcIVPercentile,
+  calcVWAPBands, applyFIIBias, applyCalibration, applyAdaptWeights, calcEMA, calcIVPercentile,
 } from '../services/technical';
 
 // Delivery % from Upstox quote (same as HTML getDeliveryPct)
@@ -351,7 +351,7 @@ function fireBreakoutAlerts(results) {
 export default function StocksPane() {
   const { token, cfg, marketStatus, lg, onTokenExpired, updateBadge, gh,
            setScanning, setStatusDot, setStatusTxt,
-           stocks, fiiInterp, setTickerStats, confCalibration } = useApp();
+           stocks, fiiInterp, setTickerStats, confCalibration, adaptWeights } = useApp();
 
   const [mode, setMode]               = useState('picks');
   const [picksLoading, setPicksLoading] = useState(false);
@@ -615,13 +615,30 @@ export default function StocksPane() {
         conf=Math.min(100,Math.max(0,conf+delivBoost*5));
         conf=applyFIIBias(conf,preRec==='BUY'||preRec==='STRONG BUY',null);
         conf=applyCalibration(conf, confCalibration||null);
+        // Layer 3: per-indicator learned adjustment from past signal outcomes
+        const _indSnap = {
+          macdBull: t.macdBull===true, macdBullCross: t.macd?.bullCross===true,
+          macdBearCross: t.macd?.bearCross===true, bbSqueeze: t.bb?.squeeze===true,
+          bbNearLower: t.bb?.nearLowerBand===true, adxBull: t.adx?.bullTrend===true,
+          adxBear: t.adx?.bearTrend===true, rsiDiv: t.rsiDiv?.bullish===true,
+          rsiDivHidden: t.rsiDiv?.hidden_bullish===true, rsiBearDiv: t.rsiDiv?.bearish===true,
+          a50: t.a50===true, a200: t.a200===true, nearSupp: !!nearSupp,
+          aboveVWAP: aboveVWAP===true, vwapNearLower: vwapBands?.nearLowerBand===true,
+          engulfing: patterns?.bullishEngulfing===true, hammer: patterns?.hammer===true,
+          morningStar: patterns?.morningStar===true,
+          reversalFired: (detectReversal(ltp,t.rsi,patterns,sr,vixVal,pcr,nBull,chgPct,t.atr||0,high,low)?.type||'NONE')!=='NONE',
+          delivHigh: (delivPct??0)>=60, delivLow: (delivPct??100)<=25,
+        };
+        conf=applyAdaptWeights(conf, adaptWeights?.stock||null, _indSnap);
+        conf=Math.min(99,Math.max(1,Math.round(conf)));
 
         const risk2=(ltp-sl); const useS1=sl>0&&sr?.pivotS1>0&&Math.abs(sl-sr.pivotS1)<risk2*0.3;
         const slTargets={consMethod:useS1?'S1 support':'ATR+VIX',modMethod:'2:1 R:R'};
         const pot  = calcPotential(ltp,tgtMod,sl,numInds,preRec);
         const risk = calcRisk(ltp,sl,tgtMod,t.atr||0,vixVal);
         const rec  = getRec(conf,pot.base,risk,pot.rr);
-        const passes = conf>=(cfg.minStockConf||50) && pot.base>=(cfg.pot||3) && risk<(cfg.risk||55) && pot.rr>=(cfg.rr||1.2);
+        // Raised minStockConf default 50→65 and excluded WATCH/AVOID — your data shows <30% WR below 65%
+        const passes = conf>=(cfg.minStockConf||65) && pot.base>=(cfg.pot||3) && risk<(cfg.risk||55) && pot.rr>=(cfg.rr||1.2) && rec!=='WATCH' && rec!=='AVOID';
 
         const entryTrigger=calcEntryTrigger(ltp,high,sr,t.atr||0,rec,vwap,chgPct);
         const reversal=detectReversal(ltp,t.rsi,patterns,sr,vixVal,pcr,nBull,chgPct,t.atr||0,high,low);
@@ -636,6 +653,7 @@ export default function StocksPane() {
           a50, a200, nearSupp:nearSuppF, patterns,
           vwap, aboveVWAP, vwapType:'daily', vwapBands,
           vol, avgVol20, high, low, delivPct,
+          _indSnap,
           entryTrigger, reversal,
           recentCandles:(t.candles||[]).slice(0,20), closes:t.closes||[],
         };
@@ -710,7 +728,9 @@ export default function StocksPane() {
       setStatusDot('live'); setStatusTxt('Live');
       lg(`✅ Picks: ${finalPicks.length} from ${byVol.length} stocks`,'o');
       if (!finalPicks.length) lg(`⚠ 0 picks — lower Conf(${cfg.minStockConf}%)/Pot(${cfg.pot}%)/Risk(${cfg.risk}%) in ⚙ Settings`,'w');
-      if (finalPicks.length&&gh?.token) logSignals(gh,finalPicks.filter(p=>!p._fallback).map(p=>buildStockSignal(p,vixVal)),vixVal,lg);
+      // Don't log WATCH/AVOID — they have <15% WR and pollute calibration data
+      const loggablePicks = finalPicks.filter(p=>!p._fallback && p.rec!=='WATCH' && p.rec!=='AVOID');
+      if (loggablePicks.length&&gh?.token) logSignals(gh,loggablePicks.map(p=>buildStockSignal(p,vixVal)),vixVal,lg);
       checkPickAlerts(nextPicks, cfg);
     } catch(e) {
       setPicksError(e.message); setStatusDot('err'); setStatusTxt('Error');
