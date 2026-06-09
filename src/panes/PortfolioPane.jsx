@@ -40,7 +40,7 @@ export default function PortfolioPane() {
 
   // ── WebSocket live feed ──
   const { connected: wsConnected, lastPrices } = useMarketFeed(
-    accessToken, allKeys, allKeys.length > 0, { pollFallback: false }
+    accessToken, allKeys, allKeys.length > 0, { pollFallback: true, mode: 'ltpc' }
   );
 
   useEffect(() => { if (accessToken) load(); }, [accessToken]); // eslint-disable-line
