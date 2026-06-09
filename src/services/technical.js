@@ -457,12 +457,15 @@ export function getTimeOfDayPenalty() {
   const day = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata', weekday: 'short' });
   if (day === 'Sat' || day === 'Sun') return -8;
   const t = h * 60 + m;
-  if (t < 9 * 60 + 15)  return -8;  // pre-market
-  if (t <= 9 * 60 + 45)  return -8;  // opening volatility
-  if (t <= 10 * 60 + 30) return 0;   // early session
-  if (t <= 14 * 60)       return 3;   // midday — most reliable
-  if (t <= 15 * 60)       return -2;  // pre-close
-  return -8;                          // closing noise
+  if (t < 9 * 60 + 15)   return -20; // pre-market — no trade
+  if (t <= 9 * 60 + 30)   return -18; // first 15 min — extreme noise, fakeouts
+  if (t <= 9 * 60 + 45)   return -12; // 9:30-9:45 — still volatile, wide spreads
+  if (t <= 10 * 60 + 15)  return -5;  // 9:45-10:15 — settling, mild caution
+  if (t <= 10 * 60 + 30)  return 0;   // 10:15-10:30 — early session OK
+  if (t <= 14 * 60)        return 5;   // midday — most reliable window
+  if (t <= 14 * 60 + 45)  return 0;   // 2-2:45 — acceptable
+  if (t <= 15 * 60)        return -8;  // 2:45-3 — pre-close caution
+  return -18;                          // 3-3:30 — closing noise, avoid
 }
 
 export function getIntradayPhase() {
@@ -564,7 +567,8 @@ export function getRec(conf, pot, risk, rr) {
   if (conf >= 80 && pot >= 5  && risk <= 30 && rr >= 2.5) return 'STRONG BUY';
   if (conf >= 70 && pot >= 3  && risk <= 40 && rr >= 2.0) return 'BUY';
   if (conf >= 60 && pot >= 2  && risk <= 50)               return 'MODERATE';
-  if (conf >= 50 || pot >= 3)                               return 'WATCH';
+  // Tightened: WATCH was 13% WR on 734 signals — raise bar to both conf AND pot
+  if (conf >= 55 && pot >= 4)                               return 'WATCH';
   return 'AVOID';
 }
 
@@ -956,6 +960,31 @@ export function applyCalibration(rawConf, calibration) {
   return Math.min(99, Math.max(1, rawConf + cal.adj));
 }
 
+// ── applyAdaptWeights — apply per-indicator learned adjustments ──────────────
+// Called after calcConfidence / calcOptConfidenceFull with indicator snapshot
+// adaptW: the adaptWeights object from AppContext (stock or option sub-object)
+// indicators: boolean map of which indicators fired for this signal
+// Returns adjusted confidence, clamped to 1–99
+export function applyAdaptWeights(conf, adaptW, indicators) {
+  if (!adaptW || !indicators) return conf;
+  let adj = 0;
+  let appliedCount = 0;
+  for (const [ind, data] of Object.entries(adaptW)) {
+    if (!data || typeof data.adj !== 'number') continue;
+    if (indicators[ind] === true) {
+      adj += data.adj;
+      appliedCount++;
+    }
+  }
+  if (!appliedCount) return conf;
+  // Dampen total adjustment: each additional indicator contributes less
+  // to avoid stacking bonuses that push scores to 99 artificially
+  const dampened = adj > 0
+    ? Math.min(18, adj * (1 - appliedCount * 0.04))
+    : Math.max(-18, adj * (1 - appliedCount * 0.04));
+  return Math.min(99, Math.max(1, conf + dampened));
+}
+
 // ── getSignalStrength — EXACT port from HTML ─────────────────
 export function getSignalStrength(numInds, conf, reversal) {
   const revBoost = reversal?.type !== 'NONE' ? 1 : 0;
@@ -1084,14 +1113,16 @@ export function calcOptConfidenceFull(delta, iv, oiChg, theta, signals, spot, st
   let dirMult;
   const cs = marketCtx?.compositeScore ?? (niftyBullish ? 1 : -1);
   const isNeutral = marketCtx?.neutral === true;
-  if (isNeutral || Math.abs(cs) < 1.0) {
-    dirMult = 0.90;
+  // Tightened: neutral market now gets 0.70 (was 0.90) — your data shows 37% WR in neutral
+  // Also raised threshold from 1.0 to 1.2 to catch weak signals
+  if (isNeutral || Math.abs(cs) < 1.2) {
+    dirMult = 0.70;
   } else {
     const aligned = (isCE && cs > 0) || (!isCE && cs < 0);
     const absCs   = Math.abs(cs);
     dirMult = aligned
-      ? (absCs >= 3 ? 1.05 : absCs >= 2 ? 1.0 : absCs >= 1.5 ? 0.90 : 0.78)
-      : (absCs >= 3 ? 0.25 : absCs >= 2 ? 0.35 : 0.45);
+      ? (absCs >= 3 ? 1.05 : absCs >= 2 ? 1.0 : absCs >= 1.5 ? 0.90 : 0.80)
+      : (absCs >= 3 ? 0.20 : absCs >= 2 ? 0.30 : 0.40);
   }
 
   // Momentum bonus
@@ -1326,9 +1357,10 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       confidence = Math.round(Math.min(100, Math.max(0, confidence + zoneAdj + dirFlipPenalty + oiBuildBonus)));
 
       // Direction
-      const effectiveNeutral = isNeutral || Math.abs(compositeScore) < 1.0;
+      // Raised from 1.0 to 1.5 — weak direction signals generated too many WATCH/low-conf picks
+      const effectiveNeutral = isNeutral || Math.abs(compositeScore) < 1.5;
       const isCE = optType === 'CE';
-      const trendAligned = effectiveNeutral ? true : (isCE ? compositeScore > 0 : compositeScore < 0);
+      const trendAligned = effectiveNeutral ? false : (isCE ? compositeScore > 0 : compositeScore < 0);
       const momentumDir  = isNeutral ? 'NEUTRAL' : compositeScore > 2 ? 'STRONGLY BULLISH' : compositeScore > 0 ? 'BULLISH' : compositeScore < -2 ? 'STRONGLY BEARISH' : 'BEARISH';
 
       // Action
