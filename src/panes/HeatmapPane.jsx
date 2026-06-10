@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { resolveAccessToken } from '../services/api';
+import { resolveAccessToken, fetchQ } from '../services/api';
+import { localIsOpen } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 
 const fmt  = v => v >= 1000 ? v.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : v.toFixed(2);
@@ -118,14 +119,51 @@ export default function HeatmapPane() {
   // All instrument keys from stocks list
   const allKeys = useMemo(() => stocks.map(s => s.instrKey).filter(Boolean), [stocks]);
 
-  // ── Single persistent WS — same as Portfolio/Stocks pages ──
-  // 'ltpc' mode: gets ltp + cp (prev close) for every key, continuous ticks
+  // Market open → use persistent WS (same as Portfolio/Stocks pages)
+  // Market closed → skip WS entirely, go straight to REST poll for last close prices
+  const marketOpen = localIsOpen();
   const { connected, lastPrices, wsMode } = useMarketFeed(
     accessToken,
     allKeys,
-    allKeys.length > 0,
+    allKeys.length > 0 && marketOpen,   // disable WS when market closed
     { mode: 'ltpc', pollFallback: true }
   );
+
+  // When market closed — do a one-time REST fetch for last close prices
+  const [restPrices, setRestPrices] = React.useState({});
+  const [restLoading, setRestLoading] = React.useState(false);
+  const [restDone, setRestDone] = React.useState(false);
+
+  React.useEffect(() => {
+    if (marketOpen || !accessToken || !allKeys.length || restDone) return;
+    setRestLoading(true);
+    const BATCH = 50;
+    const results = {};
+    const batches = [];
+    for (let i = 0; i < allKeys.length; i += BATCH) batches.push(allKeys.slice(i, i + BATCH));
+    Promise.allSettled(
+      batches.map(batch =>
+        fetchQ(batch.join(','), accessToken).then(raw => {
+          for (const [k, q] of Object.entries(raw)) {
+            const ltp = q.last_price || 0;
+            const cp  = q.ohlc?.close || ltp;
+            if (ltp > 0) results[k] = {
+              ltp, cp,
+              chgPct: cp > 0 ? +((ltp - cp) / cp * 100).toFixed(2) : 0,
+              changeAmt: (ltp - cp).toFixed(2),
+            };
+          }
+        })
+      )
+    ).then(() => {
+      setRestPrices(results);
+      setRestLoading(false);
+      setRestDone(true);
+    });
+  }, [marketOpen, accessToken, allKeys.join(',')]); // eslint-disable-line
+
+  // Merge: WS prices when live, REST prices when market closed
+  const prices = marketOpen ? lastPrices : restPrices;
 
   // Sectors
   const sectors = useMemo(() =>
@@ -142,8 +180,8 @@ export default function HeatmapPane() {
   // Sort
   const sorted = useMemo(() => {
     return [...filtered].sort((a, b) => {
-      const pa = lastPrices[a.instrKey];
-      const pb = lastPrices[b.instrKey];
+      const pa = prices[a.instrKey];
+      const pb = prices[b.instrKey];
       if (sortBy === 'chg')     return (pb?.chgPct ?? -99) - (pa?.chgPct ?? -99);
       if (sortBy === 'chg_asc') return (pa?.chgPct ?? 99)  - (pb?.chgPct ?? 99);
       if (sortBy === 'price')   return (pb?.ltp    ?? 0)   - (pa?.ltp    ?? 0);
@@ -151,11 +189,13 @@ export default function HeatmapPane() {
     });
   }, [filtered, lastPrices, sortBy]);
 
-  // WS status indicator
-  const wsLabel = wsMode === 'ws' ? '🟢 Live WS'
+  // Status indicator
+  const wsLabel = !marketOpen
+    ? (restLoading ? '⏳ Loading…' : restDone ? '📴 Market Closed' : '⏳ Loading…')
+    : wsMode === 'ws' ? '🟢 Live WS'
     : wsMode === 'poll' ? '🟡 Polling'
     : connected ? '🟢 Live'
-    : '🔴 Connecting…';
+    : '⏳ Connecting…';
 
   if (!stocks.length) {
     return (
@@ -167,14 +207,14 @@ export default function HeatmapPane() {
     );
   }
 
-  const loadedCount = allKeys.filter(k => lastPrices[k]?.ltp > 0).length;
+  const loadedCount = allKeys.filter(k => prices[k]?.ltp > 0).length;
 
   return (
     <div>
       {/* Breadth bar */}
       {loadedCount > 0 && (
         <div style={{ marginBottom: 10 }}>
-          <BreadthBar items={filtered} lastPrices={lastPrices} />
+          <BreadthBar items={filtered} lastPrices={prices} />
         </div>
       )}
 
@@ -219,7 +259,7 @@ export default function HeatmapPane() {
       {/* Loading state */}
       {loadedCount === 0 && (
         <div style={{ padding: '20px 0', textAlign: 'center', color: '#94a3b8', fontSize: 11 }}>
-          ⏳ Connecting to market feed…
+          {marketOpen ? '⏳ Connecting to market feed…' : restLoading ? '⏳ Loading last close prices…' : '📴 Market closed — no data available'}
         </div>
       )}
 
@@ -229,7 +269,7 @@ export default function HeatmapPane() {
           <HeatTile
             key={stock.instrKey || stock.s}
             stock={stock}
-            price={lastPrices[stock.instrKey] ?? null}
+            price={prices[stock.instrKey] ?? null}
           />
         ))}
       </div>
