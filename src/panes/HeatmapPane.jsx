@@ -1,7 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { resolveAccessToken, fetchQ } from '../services/api';
-import { localIsOpen } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 
 const fmt  = v => v >= 1000 ? v.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : v.toFixed(2);
@@ -109,7 +108,7 @@ function BreadthBar({ items, lastPrices }) {
 
 // ── Main ──────────────────────────────────────────────────────
 export default function HeatmapPane() {
-  const { token, stocks } = useApp();
+  const { token, stocks, marketStatus } = useApp();
 
   const [sector, setSector] = useState('ALL');
   const [sortBy, setSortBy] = useState('chg');
@@ -121,7 +120,7 @@ export default function HeatmapPane() {
 
   // Market open → use persistent WS (same as Portfolio/Stocks pages)
   // Market closed → skip WS entirely, go straight to REST poll for last close prices
-  const marketOpen = localIsOpen();
+  const marketOpen = marketStatus.open;
   const { connected, lastPrices, wsMode } = useMarketFeed(
     accessToken,
     allKeys,
