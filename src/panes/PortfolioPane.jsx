@@ -126,7 +126,7 @@ export default function PortfolioPane() {
           <div style={{ fontWeight: 700, fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}>
             {item.tradingsymbol || item.symbol}
             {item.isLive && marketStatus.open && (
-              <span style={{ fontSize: 7, background: '#dcfce7', color: '#16a34a', borderRadius: 4, padding: '1px 4px', fontWeight: 800 }}>⚡ LIVE</span>
+              <span style={{ fontSize: 7, background: '#dcfce7', color: '#16a34a', borderRadius: 4, padding: '1px 4px', fontWeight: 800 }}>⚡</span>
             )}
           </div>
           <div style={{ fontSize: 9, color: '#94a3b8' }}>{item.exchange || 'NSE'}</div>
