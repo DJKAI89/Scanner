@@ -496,7 +496,7 @@ export default function AnalysisPane() {
   useEffect(() => { if (gh.token) load(); }, [gh.token, days]); // eslint-disable-line
 
   return (
-    <div style={{ background: '#ffffff', minHeight: '100vh' }}>
+    <div style={{ background: '#ffffff' }}>
       {/* Toolbar */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' }}>
         <select value={days} onChange={e => setDays(+e.target.value)}
