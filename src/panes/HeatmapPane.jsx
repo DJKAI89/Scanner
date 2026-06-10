@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useApp } from '../context/AppContext';
-import { resolveAccessToken } from '../services/api';
+import { resolveAccessToken, fetchQ } from '../services/api';
 import { fetchScanQuotesViaWS } from '../hooks/useMarketFeed';
 
 const fmt  = v => v >= 1000 ? v.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : v.toFixed(2);
@@ -33,7 +33,7 @@ function boxSize(price) {
   return 'xs';
 }
 
-const SIZE_H = { xl: 110, lg: 96, md: 88, sm: 80, xs: 72 };
+const SIZE_H = { xl: 80, lg: 76, md: 72, sm: 68, xs: 64 };
 
 // ── Individual heatmap tile ───────────────────────────────────
 function HeatTile({ stock, quote, size }) {
@@ -47,7 +47,7 @@ function HeatTile({ stock, quote, size }) {
     <div style={{
       background: colors.bg,
       borderRadius: 6,
-      padding: '8px 7px 6px',
+      padding: '6px 7px 5px',
       display: 'flex',
       flexDirection: 'column',
       justifyContent: 'space-between',
@@ -58,45 +58,30 @@ function HeatTile({ stock, quote, size }) {
       overflow: 'hidden',
       border: '1px solid rgba(255,255,255,0.08)',
     }}
-      onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.03)'; e.currentTarget.style.zIndex = 10; e.currentTarget.style.boxShadow = '0 4px 20px rgba(0,0,0,0.35)'; }}
+      onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.02)'; e.currentTarget.style.zIndex = 10; e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.3)'; }}
       onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)';    e.currentTarget.style.zIndex = 1;  e.currentTarget.style.boxShadow = 'none'; }}
     >
       {/* Stock name */}
       <div style={{
-        fontSize: h >= 96 ? 13 : 11,
-        fontWeight: 800,
-        color: colors.text,
-        lineHeight: 1.1,
-        letterSpacing: -0.3,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
+        fontSize: 11, fontWeight: 800, color: colors.text,
+        lineHeight: 1.1, letterSpacing: -0.2,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>{stock.s}</div>
 
       {/* Price */}
-      {ltp > 0 && (
-        <div style={{
-          fontSize: h >= 96 ? 13 : 11,
-          fontWeight: 700,
-          color: colors.sub,
-          lineHeight: 1.2,
-        }}>₹{fmt(ltp)}</div>
-      )}
+      <div style={{
+        fontSize: 10, fontWeight: 700, color: colors.sub, lineHeight: 1.2,
+      }}>{ltp > 0 ? `₹${fmt(ltp)}` : '—'}</div>
 
-      {/* Change */}
-      <div>
-        {ltp > 0 && chgPt !== 0 && (
-          <div style={{ fontSize: 9, color: colors.sub, fontWeight: 600, lineHeight: 1.2 }}>
+      {/* Change pt + pct */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+        {ltp > 0 && (
+          <div style={{ fontSize: 8, color: colors.sub, fontWeight: 600, lineHeight: 1.2 }}>
             {fmtC(chgPt)}
           </div>
         )}
-        <div style={{
-          fontSize: h >= 88 ? 13 : 12,
-          fontWeight: 900,
-          color: colors.text,
-          lineHeight: 1,
-        }}>
-          {ltp > 0 ? fmtP(chg) : '—'}
+        <div style={{ fontSize: 12, fontWeight: 900, color: colors.text, lineHeight: 1 }}>
+          {ltp > 0 ? fmtP(chg) : ''}
         </div>
       </div>
     </div>
@@ -156,7 +141,32 @@ export default function HeatmapPane() {
     return a.s.localeCompare(b.s);
   });
 
-  // Fetch quotes via WS
+  // Parse raw quote (works for both WS and REST response shapes)
+  function parseQuote(q) {
+    const ltp  = q.last_price || 0;
+    const prev = q.ohlc?.close || 0;
+    const chgPct = (ltp > 0 && prev > 0) ? ((ltp - prev) / prev) * 100 : 0;
+    const chgPt  = (ltp > 0 && prev > 0) ? ltp - prev : 0;
+    return { ltp, chgPct, chgPt };
+  }
+
+  // Fetch via REST in batches of 50 (Upstox limit per call)
+  async function fetchViaREST(accessToken, keys) {
+    const BATCH = 50;
+    const map = {};
+    for (let i = 0; i < keys.length; i += BATCH) {
+      const batch = keys.slice(i, i + BATCH);
+      try {
+        const raw = await fetchQ(batch.join(','), accessToken);
+        for (const [k, v] of Object.entries(raw)) {
+          map[k] = parseQuote(v);
+        }
+      } catch (_) {}
+    }
+    return map;
+  }
+
+  // Fetch quotes — WS first, REST fallback if WS returns <50% coverage
   const fetchAll = useCallback(async () => {
     if (!stocks.length) return;
     const accessToken = resolveAccessToken(token);
@@ -164,24 +174,39 @@ export default function HeatmapPane() {
     setLoading(true); setError('');
     try {
       const keys = stocks.map(s => s.instrKey).filter(Boolean);
-      const raw  = await fetchScanQuotesViaWS(accessToken, keys, 12000);
-      const map  = {};
-      for (const [key, q] of Object.entries(raw)) {
-        const ltp  = q.last_price || 0;
-        const prev = q.ohlc?.close || ltp;
-        const chgPct = prev > 0 ? ((ltp - prev) / prev) * 100 : 0;
-        const chgPt  = ltp - prev;
-        map[key] = { ltp, chgPct, chgPt };
+      let map = {};
+      let source = 'WS';
+
+      // Try WebSocket first
+      try {
+        const raw = await fetchScanQuotesViaWS(accessToken, keys, 10000);
+        for (const [key, q] of Object.entries(raw)) {
+          const p = parseQuote(q);
+          if (p.ltp > 0) map[key] = p;
+        }
+      } catch (_) {}
+
+      // Fall back to REST if WS got < 50% coverage (market closed / WS auth failed)
+      if (Object.keys(map).length < keys.length * 0.5) {
+        lg('Heatmap: WS got partial data, falling back to REST', 'w');
+        source = 'REST';
+        map = await fetchViaREST(accessToken, keys);
       }
+
+      if (Object.keys(map).length === 0) {
+        setError('No quote data returned — market may be closed or token expired');
+        return;
+      }
+
       setQuotes(map);
-      setLastUpdate(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      setLastUpdate(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ` (${source})`);
       updateBadge('heatmap', String(Object.keys(map).length));
-      lg(`Heatmap: ${Object.keys(map).length} quotes fetched`, 'o');
+      lg(`Heatmap: ${Object.keys(map).length} quotes via ${source}`, 'o');
     } catch (e) {
       setError('Quote fetch failed: ' + e.message);
       lg('Heatmap error: ' + e.message, 'e');
     } finally { setLoading(false); }
-  }, [stocks, token, updateBadge, lg]);
+  }, [stocks, token, updateBadge, lg]); // eslint-disable-line
 
   // Auto-refresh every 30s
   useEffect(() => {
