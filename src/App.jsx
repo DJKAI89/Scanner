@@ -13,6 +13,7 @@ import PortfolioPane from './panes/PortfolioPane';
 import LookupPane   from './panes/LookupPane';
 import LogPane      from './panes/LogPane';
 import AnalysisPane from './panes/AnalysisPane';
+import HeatmapPane  from './panes/HeatmapPane';
 import SettingsPane from './panes/SettingsPane';
 
 // ── Pane registry ──
@@ -23,6 +24,7 @@ const PANES = {
   lookup:    LookupPane,
   log:       LogPane,
   analysis:  AnalysisPane,
+  heatmap:   HeatmapPane,
   settings:  SettingsPane,
 };
 
