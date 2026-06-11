@@ -104,7 +104,7 @@ export default function HeatmapPane() {
 
   // All keys — always pass to useMarketFeed regardless of market status
   // Same as Portfolio: no marketStatus.open gate on useMarketFeed
-  const allKeys = useMemo(() => stocks.map(s => s.instrKey).filter(Boolean), [stocks]);
+  const allKeys = useMemo(() => stocks.map(s => s.key).filter(Boolean), [stocks]);
 
   // ── Persistent WebSocket — always on, pollFallback handles closed market ──
   // Exact same call signature as PortfolioPane
@@ -114,7 +114,10 @@ export default function HeatmapPane() {
 
   // ── REST base load — runs on mount like Portfolio's load() ──
   const loadBase = useCallback(async () => {
-    if (!accessToken || !allKeys.length) return;
+    if (!accessToken || !allKeys.length) 
+    { 
+      return;
+    }
     setLoading(true); setError('');
     lg(`Heatmap: loading ${allKeys.length} quotes…`, 'o');
     try {
@@ -150,7 +153,10 @@ export default function HeatmapPane() {
   }, [accessToken, allKeys, lg, updateBadge]); // eslint-disable-line
 
   // Mount — same as Portfolio's useEffect
-  useEffect(() => { if (accessToken) loadBase(); }, [accessToken]); // eslint-disable-line
+  useEffect(() => { 
+    if (accessToken)
+    loadBase(); 
+  }, [accessToken]); // eslint-disable-line
 
   // Update timestamp when WS ticks arrive — same as Portfolio
   useEffect(() => {
@@ -163,7 +169,7 @@ export default function HeatmapPane() {
   // REST base gives ltp+cp, WS lastPrices overrides ltp when live
   const enriched = useMemo(() => {
     return stocks.map(stock => {
-      const key    = stock.instrKey;
+      const key    = stock.key;
       const base   = basePrices[key];
       const live   = lastPrices[key];
       const ltp    = live?.ltp || base?.ltp || 0;
