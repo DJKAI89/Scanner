@@ -25,37 +25,37 @@ function heatColor(chg) {
 }
 
 // ── Tile ──────────────────────────────────────────────────────
-function HeatTile({ stock, ltp, chgPct, chgPt, isLive }) {
+function HeatTile({ stock, ltp, chgPct, chgPt }) {
   const colors  = heatColor(chgPct);
   const hasData = ltp > 0;
   return (
     <div style={{
       background: hasData ? colors.bg : '#e2e8f0',
-      borderRadius: 6, padding: '6px 7px 5px',
+      borderRadius: 4, padding: '4px 5px 3px',
       display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
-      height: 72, boxSizing: 'border-box', overflow: 'hidden',
-      border: '1px solid rgba(0,0,0,0.06)', transition: 'background .4s',
+      height: 52, boxSizing: 'border-box', overflow: 'hidden',
+      border: '1px solid rgba(0,0,0,0.06)', transition: 'background .3s',
     }}>
       <div style={{
-        fontSize: 11, fontWeight: 800,
+        fontSize: 10, fontWeight: 800,
         color: hasData ? colors.text : '#94a3b8',
-        lineHeight: 1.1, letterSpacing: -0.2,
+        lineHeight: 1.1, letterSpacing: -0.3,
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>{stock.s}</div>
 
-      <div style={{ fontSize: 10, fontWeight: 700, color: hasData ? colors.sub : '#cbd5e1', lineHeight: 1.2 }}>
+      <div style={{ fontSize: 9, fontWeight: 600, color: hasData ? colors.sub : '#cbd5e1', lineHeight: 1.1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {hasData ? `₹${fmt(ltp)}` : '—'}
       </div>
 
-      <div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 3 }}>
+        <div style={{ fontSize: 10, fontWeight: 900, color: hasData ? colors.text : '#94a3b8', lineHeight: 1 }}>
+          {hasData ? fmtP(chgPct) : '—'}
+        </div>
         {hasData && chgPt !== 0 && (
-          <div style={{ fontSize: 8, fontWeight: 600, color: colors.sub, lineHeight: 1.2 }}>
+          <div style={{ fontSize: 7, fontWeight: 600, color: colors.sub, lineHeight: 1 }}>
             {fmtC(chgPt)}
           </div>
         )}
-        <div style={{ fontSize: 12, fontWeight: 900, color: hasData ? colors.text : '#94a3b8', lineHeight: 1 }}>
-          {hasData ? fmtP(chgPct) : '—'}
-        </div>
       </div>
     </div>
   );
@@ -114,10 +114,7 @@ export default function HeatmapPane() {
 
   // ── REST base load — runs on mount like Portfolio's load() ──
   const loadBase = useCallback(async () => {
-    if (!accessToken || !allKeys.length) 
-    { 
-      return;
-    }
+    if (!accessToken || !allKeys.length) return;
     setLoading(true); setError('');
     lg(`Heatmap: loading ${allKeys.length} quotes…`, 'o');
     try {
@@ -153,10 +150,7 @@ export default function HeatmapPane() {
   }, [accessToken, allKeys, lg, updateBadge]); // eslint-disable-line
 
   // Mount — same as Portfolio's useEffect
-  useEffect(() => { 
-    if (accessToken)
-    loadBase(); 
-  }, [accessToken]); // eslint-disable-line
+  useEffect(() => { if (accessToken) loadBase(); }, [accessToken]); // eslint-disable-line
 
   // Update timestamp when WS ticks arrive — same as Portfolio
   useEffect(() => {
@@ -286,8 +280,8 @@ export default function HeatmapPane() {
         </div>
       )}
 
-      {/* Heatmap grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 3 }}>
+      {/* Heatmap grid — responsive: 3 cols mobile, 4 tablet, 5 desktop */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: 2 }}>
         {sorted.map(stock => (
           <HeatTile
             key={stock.instrKey || stock.s}

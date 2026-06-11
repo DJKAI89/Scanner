@@ -164,12 +164,12 @@ export default function PortfolioPane() {
 
           {/* Summary */}
           <div className="stats-g">
-            <StatCard label="INVESTED"    value={`₹${fmt(invested)}`}    valClass="bl" />
-            <StatCard label="VALUE"       value={`₹${fmt(totalValue)}`}  valClass="pu" />
-            <StatCard label="TODAY P&L"   value={(todayPnl >= 0 ? '+₹' : '-₹') + fmt(Math.abs(todayPnl))} valClass={todayPnl >= 0 ? 'up' : 'dn'} />
-            <StatCard label="TOTAL P&L"   value={(totalPnl >= 0 ? '+₹' : '-₹') + fmt(Math.abs(totalPnl))} valClass={totalPnl >= 0 ? 'up' : 'dn'} />
-            <StatCard label="POSITIONS"   value={positions.length} valClass="am" />
-            <StatCard label="HOLDINGS"    value={holdings.length}  valClass="pu" />
+            <StatCard label="Invested"    value={`₹${fmt(invested)}`}    valClass="bl" />
+            <StatCard label="Current"       value={`₹${fmt(totalValue)}`}  valClass="pu" />
+            <StatCard label="Today P&L"   value={(todayPnl >= 0 ? '+₹' : '-₹') + fmt(Math.abs(todayPnl))} valClass={todayPnl >= 0 ? 'up' : 'dn'} />
+            <StatCard label="Total P&L"   value={(totalPnl >= 0 ? '+₹' : '-₹') + fmt(Math.abs(totalPnl))} valClass={totalPnl >= 0 ? 'up' : 'dn'} />
+            <StatCard label="Positions"   value={positions.length} valClass="am" />
+            <StatCard label="Holdings"    value={holdings.length}  valClass="pu" />
           </div>
 
           {/* Correlation warnings */}
