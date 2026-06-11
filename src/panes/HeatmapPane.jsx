@@ -48,14 +48,14 @@ function HeatTile({ stock, ltp, chgPct, chgPt }) {
       </div>
 
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 3 }}>
-        <div style={{ fontSize: 10, fontWeight: 900, color: hasData ? colors.text : '#94a3b8', lineHeight: 1 }}>
-          {hasData ? fmtP(chgPct) : '—'}
-        </div>
-        {hasData && chgPt !== 0 && (
-          <div style={{ fontSize: 7, fontWeight: 600, color: colors.sub, lineHeight: 1 }}>
+       {hasData && chgPt !== 0 && (
+          <div style={{ fontSize: 10, fontWeight: 900, color: colors.sub, lineHeight: 1 }}>
             {fmtC(chgPt)}
           </div>
         )}
+        <div style={{ fontSize: 10, fontWeight: 600, color: hasData ? colors.text : '#94a3b8', lineHeight: 1 }}>
+          ({hasData ? fmtP(chgPct) : ''})
+        </div>
       </div>
     </div>
   );
