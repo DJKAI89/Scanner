@@ -1,7 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { resolveAccessToken, fetchQ } from '../services/api';
 import { useMarketFeed } from '../hooks/useMarketFeed';
+import { getIST } from '../utils/marketTime';
 
 const fmt  = v => v >= 1000 ? v.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : v.toFixed(2);
 const fmtP = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
@@ -24,28 +25,17 @@ function heatColor(chg) {
 }
 
 // ── Tile ──────────────────────────────────────────────────────
-function HeatTile({ stock, price }) {
-  const ltp    = price?.ltp    ?? 0;
-  const chgPct = price?.chgPct ?? 0;
-  const chgPt  = ltp > 0 ? (ltp - (price?.cp || ltp)) : 0;
-  const colors = heatColor(chgPct);
+function HeatTile({ stock, ltp, chgPct, chgPt, isLive }) {
+  const colors  = heatColor(chgPct);
   const hasData = ltp > 0;
-
   return (
     <div style={{
       background: hasData ? colors.bg : '#e2e8f0',
-      borderRadius: 6,
-      padding: '6px 7px 5px',
-      display: 'flex',
-      flexDirection: 'column',
-      justifyContent: 'space-between',
-      height: 72,
-      boxSizing: 'border-box',
-      overflow: 'hidden',
-      border: '1px solid rgba(0,0,0,0.06)',
-      transition: 'background .4s',
+      borderRadius: 6, padding: '6px 7px 5px',
+      display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+      height: 72, boxSizing: 'border-box', overflow: 'hidden',
+      border: '1px solid rgba(0,0,0,0.06)', transition: 'background .4s',
     }}>
-      {/* Name */}
       <div style={{
         fontSize: 11, fontWeight: 800,
         color: hasData ? colors.text : '#94a3b8',
@@ -53,18 +43,12 @@ function HeatTile({ stock, price }) {
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>{stock.s}</div>
 
-      {/* LTP */}
-      <div style={{
-        fontSize: 10, fontWeight: 700,
-        color: hasData ? colors.sub : '#cbd5e1',
-        lineHeight: 1.2,
-      }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: hasData ? colors.sub : '#cbd5e1', lineHeight: 1.2 }}>
         {hasData ? `₹${fmt(ltp)}` : '—'}
       </div>
 
-      {/* Change pt + pct */}
       <div>
-        {hasData && (
+        {hasData && chgPt !== 0 && (
           <div style={{ fontSize: 8, fontWeight: 600, color: colors.sub, lineHeight: 1.2 }}>
             {fmtC(chgPt)}
           </div>
@@ -78,14 +62,12 @@ function HeatTile({ stock, price }) {
 }
 
 // ── Breadth bar ───────────────────────────────────────────────
-function BreadthBar({ items, lastPrices }) {
+function BreadthBar({ enriched }) {
   let adv = 0, dec = 0, flat = 0;
-  for (const s of items) {
-    const p = lastPrices[s.instrKey];
-    if (!p?.ltp) continue;
-    const c = p.chgPct || 0;
-    if (c >  0.1) adv++;
-    else if (c < -0.1) dec++;
+  for (const s of enriched) {
+    if (!s.ltp) continue;
+    if (s.chgPct >  0.1) adv++;
+    else if (s.chgPct < -0.1) dec++;
     else flat++;
   }
   const total = adv + dec + flat || 1;
@@ -100,7 +82,7 @@ function BreadthBar({ items, lastPrices }) {
         <span style={{ color: '#16a34a' }}>▲ {adv}</span>
         <span style={{ color: '#94a3b8' }}>— {flat}</span>
         <span style={{ color: '#dc2626' }}>▼ {dec}</span>
-        <span style={{ color: '#64748b', marginLeft: 'auto' }}>{adv+dec+flat} live</span>
+        <span style={{ color: '#64748b', marginLeft: 'auto' }}>{adv+dec+flat} loaded</span>
       </div>
     </div>
   );
@@ -108,61 +90,89 @@ function BreadthBar({ items, lastPrices }) {
 
 // ── Main ──────────────────────────────────────────────────────
 export default function HeatmapPane() {
-  const { token, stocks, marketStatus } = useApp();
+  const { token, stocks, marketStatus, lg, updateBadge } = useApp();
 
-  const [sector, setSector] = useState('ALL');
-  const [sortBy, setSortBy] = useState('chg');
+  const [sector,   setSector]   = useState('ALL');
+  const [sortBy,   setSortBy]   = useState('chg');
+  // REST base prices — loaded on mount, same as Portfolio's load()
+  const [basePrices, setBasePrices] = useState({}); // { instrKey: { ltp, cp } }
+  const [loading,    setLoading]    = useState(false);
+  const [updTime,    setUpdTime]    = useState('');
+  const [error,      setError]      = useState('');
 
   const accessToken = resolveAccessToken(token);
 
-  // All instrument keys from stocks list
+  // All keys — always pass to useMarketFeed regardless of market status
+  // Same as Portfolio: no marketStatus.open gate on useMarketFeed
   const allKeys = useMemo(() => stocks.map(s => s.instrKey).filter(Boolean), [stocks]);
 
-  // Market open → use persistent WS (same as Portfolio/Stocks pages)
-  // Market closed → skip WS entirely, go straight to REST poll for last close prices
-  const marketOpen = marketStatus.open;
-  const { connected, lastPrices, wsMode } = useMarketFeed(
-    accessToken,
-    allKeys,
-    allKeys.length > 0 && marketOpen,   // disable WS when market closed
-    { mode: 'ltpc', pollFallback: true }
+  // ── Persistent WebSocket — always on, pollFallback handles closed market ──
+  // Exact same call signature as PortfolioPane
+  const { connected: wsConnected, lastPrices } = useMarketFeed(
+    accessToken, allKeys, allKeys.length > 0, { pollFallback: true, mode: 'ltpc' }
   );
 
-  // When market closed — do a one-time REST fetch for last close prices
-  const [restPrices, setRestPrices] = React.useState({});
-  const [restLoading, setRestLoading] = React.useState(false);
-  const [restDone, setRestDone] = React.useState(false);
+  // ── REST base load — runs on mount like Portfolio's load() ──
+  const loadBase = useCallback(async () => {
+    if (!accessToken || !allKeys.length) return;
+    setLoading(true); setError('');
+    lg(`Heatmap: loading ${allKeys.length} quotes…`, 'o');
+    try {
+      const BATCH = 50;
+      const results = {};
+      const batches = [];
+      for (let i = 0; i < allKeys.length; i += BATCH)
+        batches.push(allKeys.slice(i, i + BATCH));
 
-  React.useEffect(() => {
-    if (marketOpen || !accessToken || !allKeys.length || restDone) return;
-    setRestLoading(true);
-    const BATCH = 50;
-    const results = {};
-    const batches = [];
-    for (let i = 0; i < allKeys.length; i += BATCH) batches.push(allKeys.slice(i, i + BATCH));
-    Promise.allSettled(
-      batches.map(batch =>
-        fetchQ(batch.join(','), accessToken).then(raw => {
-          for (const [k, q] of Object.entries(raw)) {
-            const ltp = q.last_price || 0;
-            const cp  = q.ohlc?.close || ltp;
-            if (ltp > 0) results[k] = {
-              ltp, cp,
-              chgPct: cp > 0 ? +((ltp - cp) / cp * 100).toFixed(2) : 0,
-              changeAmt: (ltp - cp).toFixed(2),
-            };
-          }
-        })
-      )
-    ).then(() => {
-      setRestPrices(results);
-      setRestLoading(false);
-      setRestDone(true);
+      await Promise.allSettled(
+        batches.map(batch =>
+          fetchQ(batch.join(','), accessToken).then(raw => {
+            for (const [k, q] of Object.entries(raw)) {
+              const ltp = q.last_price || 0;
+              const cp  = q.ohlc?.close || 0;
+              if (ltp > 0) results[k] = { ltp, cp };
+            }
+          })
+        )
+      );
+
+      const count = Object.keys(results).length;
+      setBasePrices(results);
+      setUpdTime('Updated: ' + getIST());
+      updateBadge('heatmap', String(count));
+      lg(`Heatmap: ${count} base quotes loaded`, 'o');
+    } catch (e) {
+      setError(e.message);
+      lg('Heatmap error: ' + e.message, 'e');
+    } finally {
+      setLoading(false);
+    }
+  }, [accessToken, allKeys, lg, updateBadge]); // eslint-disable-line
+
+  // Mount — same as Portfolio's useEffect
+  useEffect(() => { if (accessToken) loadBase(); }, [accessToken]); // eslint-disable-line
+
+  // Update timestamp when WS ticks arrive — same as Portfolio
+  useEffect(() => {
+    if (Object.keys(lastPrices).length > 0) {
+      setUpdTime('Live: ' + getIST());
+    }
+  }, [lastPrices]);
+
+  // ── Enrich — same pattern as Portfolio's enrich() ──
+  // REST base gives ltp+cp, WS lastPrices overrides ltp when live
+  const enriched = useMemo(() => {
+    return stocks.map(stock => {
+      const key    = stock.instrKey;
+      const base   = basePrices[key];
+      const live   = lastPrices[key];
+      const ltp    = live?.ltp || base?.ltp || 0;
+      const cp     = live?.cp  || base?.cp  || 0;
+      const chgPct = (ltp > 0 && cp > 0) ? +((ltp - cp) / cp * 100).toFixed(2) : 0;
+      const chgPt  = (ltp > 0 && cp > 0) ? +(ltp - cp).toFixed(2) : 0;
+      return { ...stock, ltp, cp, chgPct, chgPt, isLive: !!live?.ltp };
     });
-  }, [marketOpen, accessToken, allKeys.join(',')]); // eslint-disable-line
-
-  // Merge: WS prices when live, REST prices when market closed
-  const prices = marketOpen ? lastPrices : restPrices;
+  }, [stocks, basePrices, lastPrices]);
 
   // Sectors
   const sectors = useMemo(() =>
@@ -170,31 +180,22 @@ export default function HeatmapPane() {
     [stocks]
   );
 
-  // Filter by sector
+  // Filtered + sorted
   const filtered = useMemo(() =>
-    sector === 'ALL' ? stocks : stocks.filter(s => s.sec === sector),
-    [stocks, sector]
+    sector === 'ALL' ? enriched : enriched.filter(s => s.sec === sector),
+    [enriched, sector]
   );
 
-  // Sort
   const sorted = useMemo(() => {
     return [...filtered].sort((a, b) => {
-      const pa = prices[a.instrKey];
-      const pb = prices[b.instrKey];
-      if (sortBy === 'chg')     return (pb?.chgPct ?? -99) - (pa?.chgPct ?? -99);
-      if (sortBy === 'chg_asc') return (pa?.chgPct ?? 99)  - (pb?.chgPct ?? 99);
-      if (sortBy === 'price')   return (pb?.ltp    ?? 0)   - (pa?.ltp    ?? 0);
+      if (sortBy === 'chg')     return b.chgPct - a.chgPct;
+      if (sortBy === 'chg_asc') return a.chgPct - b.chgPct;
+      if (sortBy === 'price')   return b.ltp    - a.ltp;
       return a.s.localeCompare(b.s);
     });
-  }, [filtered, lastPrices, sortBy]);
+  }, [filtered, sortBy]);
 
-  // Status indicator
-  const wsLabel = !marketOpen
-    ? (restLoading ? '⏳ Loading…' : restDone ? '📴 Market Closed' : '⏳ Loading…')
-    : wsMode === 'ws' ? '🟢 Live WS'
-    : wsMode === 'poll' ? '🟡 Polling'
-    : connected ? '🟢 Live'
-    : '⏳ Connecting…';
+  const loadedCount = enriched.filter(s => s.ltp > 0).length;
 
   if (!stocks.length) {
     return (
@@ -206,14 +207,31 @@ export default function HeatmapPane() {
     );
   }
 
-  const loadedCount = allKeys.filter(k => prices[k]?.ltp > 0).length;
-
   return (
     <div>
+      {/* WS status — same as Portfolio */}
+      {allKeys.length > 0 && (
+        <div style={{ fontSize: 9, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 5 }}>
+          <div style={{ width: 6, height: 6, borderRadius: '50%', background: wsConnected ? '#16a34a' : '#94a3b8', flexShrink: 0 }} />
+          <span style={{ color: '#94a3b8' }}>
+            {wsConnected
+              ? `⚡ Live — ${loadedCount}/${allKeys.length} streaming`
+              : loading ? 'Loading base prices…' : 'WebSocket connecting…'}
+          </span>
+          {updTime && <span style={{ marginLeft: 'auto', color: '#94a3b8' }}>{updTime}</span>}
+        </div>
+      )}
+
+      {error && (
+        <div style={{ padding: '8px 12px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, fontSize: 10, color: '#991b1b', marginBottom: 8 }}>
+          ⚠ {error}
+        </div>
+      )}
+
       {/* Breadth bar */}
       {loadedCount > 0 && (
         <div style={{ marginBottom: 10 }}>
-          <BreadthBar items={filtered} lastPrices={prices} />
+          <BreadthBar enriched={filtered} />
         </div>
       )}
 
@@ -230,7 +248,7 @@ export default function HeatmapPane() {
         ))}
       </div>
 
-      {/* Sort + status */}
+      {/* Sort + refresh */}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
         <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{
           flex: 1, background: '#fff', border: '1px solid #e2e8f0',
@@ -242,33 +260,36 @@ export default function HeatmapPane() {
           <option value="price">↓ Price high→low</option>
           <option value="name">A–Z Name</option>
         </select>
-        <div style={{
-          padding: '6px 12px', fontSize: 10, fontWeight: 700, borderRadius: 8,
-          background: '#f8fafc', border: '1px solid #e2e8f0', whiteSpace: 'nowrap',
-          color: wsMode === 'ws' ? '#16a34a' : wsMode === 'poll' ? '#d97706' : '#94a3b8',
-        }}>{wsLabel}</div>
+        <button onClick={loadBase} disabled={loading} style={{
+          padding: '6px 16px', fontSize: 11, fontWeight: 800, borderRadius: 8,
+          border: 'none', cursor: loading ? 'default' : 'pointer',
+          background: loading ? '#e2e8f0' : 'linear-gradient(135deg,#0f172a,#1e293b)',
+          color: loading ? '#94a3b8' : '#fff',
+        }}>{loading ? '⏳' : '↻'}</button>
       </div>
 
-      {/* Info line */}
+      {/* Info */}
       <div style={{ fontSize: 9, color: '#94a3b8', marginBottom: 8, display: 'flex', justifyContent: 'space-between' }}>
-        <span>{filtered.length} stocks · {sector !== 'ALL' ? sector : 'all sectors'}</span>
+        <span>{filtered.length} stocks{sector !== 'ALL' ? ` · ${sector}` : ''}</span>
         <span>{loadedCount}/{allKeys.length} prices loaded</span>
       </div>
 
-      {/* Loading state */}
-      {loadedCount === 0 && (
+      {loading && loadedCount === 0 && (
         <div style={{ padding: '20px 0', textAlign: 'center', color: '#94a3b8', fontSize: 11 }}>
-          {marketOpen ? '⏳ Connecting to market feed…' : restLoading ? '⏳ Loading last close prices…' : '📴 Market closed — no data available'}
+          ⏳ Loading prices…
         </div>
       )}
 
-      {/* Grid */}
+      {/* Heatmap grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 3 }}>
         {sorted.map(stock => (
           <HeatTile
             key={stock.instrKey || stock.s}
             stock={stock}
-            price={prices[stock.instrKey] ?? null}
+            ltp={stock.ltp}
+            chgPct={stock.chgPct}
+            chgPt={stock.chgPt}
+            isLive={stock.isLive}
           />
         ))}
       </div>
