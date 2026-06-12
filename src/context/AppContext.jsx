@@ -3,7 +3,8 @@ import { DEF, CFG_VERSION } from '../constants/config';
 import { localIsOpen, getMarketStatusLocal, getIST } from '../utils/marketTime';
 import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken } from '../services/api';
 import { interpretFIIDII } from '../services/technical';
-import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded } from '../services/github';
+import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded, ghReadIndex, ghReadDay, ghWriteDay } from '../services/github';
+import { fetchQ, resolveAccessToken } from '../services/api';
 
 const AppContext = createContext(null);
 
@@ -61,6 +62,8 @@ export function AppProvider({ children }) {
   const [tickerStats, setTickerStats] = useState({ vix:0, pcr:null, sentiment:'—', sentSc:5, topSec:'—' });
   const [confCalibration, setConfCalibration] = useState(null);
   const [adaptWeights,    setAdaptWeights]    = useState(null); // per-indicator win-rate adjustments
+  const [openSignalCount, setOpenSignalCount] = useState(0);   // live OPEN signal count (global monitor)
+  const signalMonitorRef = useRef(null); // interval ref for global signal monitor
 
   // ── Settings-pulled-from-GH callback ref (so SettingsPane can react) ──
   const [ghSettingsPulled, setGhSettingsPulled] = useState(0);
@@ -345,6 +348,110 @@ export function AppProvider({ children }) {
     } catch(e) { lg('loadConfCalibration: ' + e.message, 'w'); }
   }, [gh, lg]);
 
+  // ── Global Signal Monitor — runs every 60s regardless of active page ──
+  // Checks ALL open signals against live prices and resolves TARGET_HIT / SL_HIT
+  const runSignalMonitor = useCallback(async (ghCfg) => {
+    const g = ghCfg || gh;
+    if (!g?.token || !g?.user || !g?.repo) return;
+    const accessToken = resolveAccessToken(token);
+    if (!accessToken) return;
+    try {
+      // Read index to find dates with open signals
+      const { dates, dailyStats } = await ghReadIndex(g);
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      // Include today + any past dates that still have open signals
+      const datesWithOpen = [...new Set([
+        ...dates.filter(d => (dailyStats[d]?.open || 0) > 0),
+        today,
+      ])];
+
+      if (!datesWithOpen.length) { setOpenSignalCount(0); return; }
+
+      // Read all day files in parallel
+      const reads = await Promise.allSettled(
+        datesWithOpen.map(d => ghReadDay(g, d))
+      );
+      const dayMap = {};
+      reads.forEach((res, i) => {
+        if (res.status === 'fulfilled' && res.value?.signals?.length) {
+          dayMap[datesWithOpen[i]] = { signals: res.value.signals, sha: res.value.sha };
+        }
+      });
+
+      // Collect all open signals across all days
+      const allOpenSigs = [];
+      for (const [date, { signals }] of Object.entries(dayMap)) {
+        signals.filter(s => s.status === 'OPEN').forEach(s => allOpenSigs.push({ ...s, _date: date }));
+      }
+
+      setOpenSignalCount(allOpenSigs.length);
+      if (!allOpenSigs.length) return;
+
+      // Fetch live prices for all open signal instrument keys (batch of 50)
+      const keys = [...new Set(allOpenSigs.map(s => s.instrKey || s.key).filter(Boolean))];
+      if (!keys.length) return;
+
+      const quotes = {};
+      const BATCH = 50;
+      await Promise.allSettled(
+        Array.from({ length: Math.ceil(keys.length / BATCH) }, (_, i) =>
+          fetchQ(keys.slice(i * BATCH, (i + 1) * BATCH).join(','), accessToken)
+            .then(raw => Object.assign(quotes, raw))
+            .catch(() => {})
+        )
+      );
+
+      if (!Object.keys(quotes).length) return;
+
+      // Resolve each date's signals
+      const now = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
+      let totalResolved = 0;
+
+      for (const [date, { signals: daySigs, sha }] of Object.entries(dayMap)) {
+        let changed = false;
+        const updated = daySigs.map(s => {
+          if (s.status !== 'OPEN') return s;
+          const instrK = s.instrKey || s.key;
+          if (!instrK) return s;
+          const q = quotes[instrK];
+          if (!q?.last_price) return s;
+          const ltp = q.last_price;
+          if (s.target > 0 && ltp >= s.target) {
+            const pnlPct = s.entry > 0 ? +((ltp - s.entry) / s.entry * 100).toFixed(2) : null;
+            lg(`🎯 TARGET HIT: ${s.stock || s.sym} @ ₹${ltp} (target ₹${s.target})`, 'o');
+            showToast(`🎯 Target hit: ${s.stock || s.sym} +${pnlPct || ''}%`, '#16a34a', 8000);
+            changed = true; totalResolved++;
+            return { ...s, status: 'TARGET_HIT', exitPrice: ltp, exitTime: now, pnlPct };
+          }
+          if (s.sl > 0 && ltp <= s.sl) {
+            const pnlPct = s.entry > 0 ? +((ltp - s.entry) / s.entry * 100).toFixed(2) : null;
+            lg(`❌ SL HIT: ${s.stock || s.sym} @ ₹${ltp} (SL ₹${s.sl})`, 'w');
+            showToast(`❌ SL hit: ${s.stock || s.sym} ${pnlPct || ''}%`, '#dc2626', 8000);
+            changed = true; totalResolved++;
+            return { ...s, status: 'SL_HIT', exitPrice: ltp, exitTime: now, pnlPct };
+          }
+          return s;
+        });
+        if (changed) {
+          await ghWriteDay(g, updated, sha, date).catch(() => {});
+        }
+      }
+
+      if (totalResolved > 0) {
+        lg(`Signal monitor: ${totalResolved} signal(s) resolved, ${allOpenSigs.length - totalResolved} still open`, 'o');
+        // Refresh calibration after resolutions
+        loadConfCalibration(g);
+      }
+
+      // Update open count after resolution
+      const remainingOpen = allOpenSigs.length - totalResolved;
+      setOpenSignalCount(remainingOpen);
+
+    } catch (e) {
+      lg('Signal monitor error: ' + e.message, 'w');
+    }
+  }, [gh, token, lg, showToast]); // eslint-disable-line
+
   // ── pullGHSettings — pull settings from GitHub (same as HTML: on boot after profile fetch) ──
   const pullGHSettings = useCallback(async (ghCfg) => {
     const g = ghCfg || gh;
@@ -412,7 +519,11 @@ export function AppProvider({ children }) {
       // Still load stocks/FII even if profile fails
       setTimeout(() => {
         const g = { token: localStorage.getItem('friday_gh_token') || '', user: localStorage.getItem('friday_gh_user') || '', repo: localStorage.getItem('friday_gh_repo') || '' };
-        if (g.token) { loadStocks(g); loadFIIDII(g); loadConfCalibration(g); ghMigrateIfNeeded(g, lg); }
+        if (g.token) {
+          loadStocks(g); loadFIIDII(g); loadConfCalibration(g); ghMigrateIfNeeded(g, lg);
+          // Start global signal monitor after 10s (give market feed time to settle)
+          setTimeout(() => runSignalMonitor(g), 10000);
+        }
       }, 2000);
     });
   }, [booted]); // eslint-disable-line
@@ -430,6 +541,23 @@ export function AppProvider({ children }) {
     const id = setInterval(refreshMarketStatus, 60000);
     return () => clearInterval(id);
   }, [booted, refreshMarketStatus]);
+
+  // ── Global signal monitor — runs every 60s during market hours ──
+  // Resolves open signals to TARGET_HIT/SL_HIT regardless of which page is active
+  useEffect(() => {
+    if (!booted || !gh.token || !gh.user || !gh.repo) return;
+    // Clear any existing interval
+    if (signalMonitorRef.current) clearInterval(signalMonitorRef.current);
+    // Run immediately on boot (after short delay for WS to settle)
+    const bootTimer = setTimeout(() => runSignalMonitor(gh), 8000);
+    // Then every 60s during market hours, every 5min outside
+    const interval = marketStatus.open ? 60000 : 300000;
+    signalMonitorRef.current = setInterval(() => runSignalMonitor(gh), interval);
+    return () => {
+      clearTimeout(bootTimer);
+      clearInterval(signalMonitorRef.current);
+    };
+  }, [booted, gh.token, gh.user, gh.repo, marketStatus.open]); // eslint-disable-line
 
   const value = {
     // auth
@@ -458,6 +586,7 @@ export function AppProvider({ children }) {
     userName, userId, adaptWeights,
     tickerStats, setTickerStats,
     confCalibration, setConfCalibration, loadConfCalibration,
+    openSignalCount, runSignalMonitor,
     // helpers
     lg, showToast, refreshMarketStatus,
   };
