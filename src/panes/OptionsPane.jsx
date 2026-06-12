@@ -618,7 +618,7 @@ export default function OptionsPane() {
           )}
 
           {/* Index stats */}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(205px,1fr))', gap:12, marginBottom:12 }}>
+          <div className="opt-idx-grid">
             {liveGroups.map(g => {
               const idx = INDEX_OPTS.find((item) => item.name === g.name);
               return (

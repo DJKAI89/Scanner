@@ -393,7 +393,7 @@ export default function LogPane() {
       )}
 
       {/* Controls */}
-      <div style={{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap', alignItems:'center' }}>
+      <div className="log-controls">
         <select value={days} onChange={e=>setDays(+e.target.value)} className="log-filter-select">
           <option value={1}>Today</option>
           {[7,14,30,60].map(d=><option key={d} value={d}>Last {d} days</option>)}

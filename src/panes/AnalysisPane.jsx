@@ -540,11 +540,11 @@ export default function AnalysisPane() {
             )}
 
             {/* Hero panel */}
-            <div style={{
+            <div className="analysis-hero" style={{
               background: 'linear-gradient(135deg,#f0fdf4,#f8fafc)',
               border: '1px solid #10b98144',
               borderRadius: 16, padding: '16px 14px',
-              display: 'flex', alignItems: 'center', gap: 16, marginBottom: 12,
+              gap: 16, marginBottom: 12,
               boxShadow: '0 1px 4px #0000000a',
             }}>
               <RingGauge value={d.overall.r} color={clr(d.overall.r)} label="WIN RATE" sub={`${d.overall.h}W · ${d.total - d.overall.h}L`} />

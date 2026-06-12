@@ -236,14 +236,11 @@ export default function HeatmapPane() {
       )}
 
       {/* Sector pills */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 8, overflowX: 'auto', paddingBottom: 2 }}>
+      <div className="sector-pills">
         {sectors.map(sec => (
-          <button key={sec} onClick={() => setSector(sec)} style={{
-            padding: '5px 11px', fontSize: 10, fontWeight: 700, borderRadius: 20,
-            border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+          <button key={sec} onClick={() => setSector(sec)} className="sector-pill" style={{
             background: sector === sec ? '#0f172a' : '#f1f5f9',
             color:      sector === sec ? '#ffffff' : '#64748b',
-            transition: 'all .15s',
           }}>{sec === 'ALL' ? '🌐 All' : sec}</button>
         ))}
       </div>
@@ -281,7 +278,7 @@ export default function HeatmapPane() {
       )}
 
       {/* Heatmap grid — responsive: 3 cols mobile, 4 tablet, 5 desktop */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: 2 }}>
+      <div className="heatmap-grid">
         {sorted.map(stock => (
           <HeatTile
             key={stock.instrKey || stock.s}

@@ -379,7 +379,7 @@ export default function LookupPane() {
 
   return (
     <div>
-      <div style={{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap' }}>
+      <div className="lookup-search-row">
         <div className="lkp-wrap">
           <input
             type="text"
@@ -408,7 +408,7 @@ export default function LookupPane() {
         </button>
       </div>
 
-      <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:14 }}>
+      <div className="lookup-quick-stocks">
         {QUICK_STOCKS.map((s) => <button key={s} className="lkp-q" onClick={() => lookup(s)}>{s}</button>)}
       </div>
 
