@@ -204,7 +204,8 @@ export default function LogPane() {
       if (sig.status !== 'OPEN' || !feedKey) return sig;
       if (resolvedRef.current.has(sig.id)) return sig;
       const live = lastPrices[feedKey];
-      if (!live?.ltp) return { ...sig };
+      // If signal was resolved this session by global monitor, strip live fields and return clean
+      if (!live?.ltp) return sig.status !== 'OPEN' ? (({ livePrice: _, livePnlPct: __, ...clean }) => clean)(sig) : { ...sig };
 
       const ltp    = live.ltp;
       const isBuy  = isBullSignal(sig);
@@ -216,7 +217,7 @@ export default function LogPane() {
         changed = true;
         setWsResolved(n => n + 1);
         const pnlPct = +((ltp - sig.entry) / sig.entry * 100).toFixed(2);
-        return { ...sig, status: tgtHit ? 'TARGET_HIT' : 'SL_HIT', exitPrice:+ltp.toFixed(2), exitTime:istTime, exitDate:istDate, pnlPct, livePrice:null };
+        return { ...sig, status: tgtHit ? 'TARGET_HIT' : 'SL_HIT', exitPrice:+ltp.toFixed(2), exitTime:istTime, exitDate:istDate, pnlPct, livePrice:null, livePnlPct:null };
       }
 
       // Update live fields
@@ -443,7 +444,7 @@ export default function LogPane() {
               <SignalRow
                 key={sig.id||i}
                 sig={sig}
-                livePrice={lastPrices[getSignalFeedKey(sig)]?.ltp ?? null}
+                livePrice={sig.status === 'OPEN' ? (lastPrices[getSignalFeedKey(sig)]?.ltp ?? null) : null}
               />
             ))
           }
