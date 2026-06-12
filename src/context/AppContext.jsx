@@ -63,7 +63,8 @@ export function AppProvider({ children }) {
   const [confCalibration, setConfCalibration] = useState(null);
   const [adaptWeights,    setAdaptWeights]    = useState(null); // per-indicator win-rate adjustments
   const [openSignalCount, setOpenSignalCount] = useState(0);   // live OPEN signal count (global monitor)
-  const signalMonitorRef = useRef(null); // interval ref for global signal monitor
+  const signalMonitorRef  = useRef(null);  // interval ref for global signal monitor
+  const resolvedSigIds    = useRef(new Set()); // in-memory set of already-resolved signal IDs — never re-checked
 
   // ── Settings-pulled-from-GH callback ref (so SettingsPane can react) ──
   const [ghSettingsPulled, setGhSettingsPulled] = useState(0);
@@ -356,41 +357,55 @@ export function AppProvider({ children }) {
     const accessToken = resolveAccessToken(token);
     if (!accessToken) return;
     try {
-      // Read index to find dates with open signals
+      // Read index — only dates that index reports as having open > 0
       const { dates, dailyStats } = await ghReadIndex(g);
       const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-      // Include today + any past dates that still have open signals
       const datesWithOpen = [...new Set([
         ...dates.filter(d => (dailyStats[d]?.open || 0) > 0),
         today,
       ])];
-
       if (!datesWithOpen.length) { setOpenSignalCount(0); return; }
 
-      // Read all day files in parallel
-      const reads = await Promise.allSettled(
-        datesWithOpen.map(d => ghReadDay(g, d))
-      );
+      // Read day files in parallel
+      const reads = await Promise.allSettled(datesWithOpen.map(d => ghReadDay(g, d)));
       const dayMap = {};
       reads.forEach((res, i) => {
-        if (res.status === 'fulfilled' && res.value?.signals?.length) {
+        if (res.status === 'fulfilled' && res.value?.signals?.length)
           dayMap[datesWithOpen[i]] = { signals: res.value.signals, sha: res.value.sha };
-        }
       });
 
-      // Collect all open signals across all days
-      const allOpenSigs = [];
-      for (const [date, { signals }] of Object.entries(dayMap)) {
-        signals.filter(s => s.status === 'OPEN').forEach(s => allOpenSigs.push({ ...s, _date: date }));
+      // Seed resolvedSigIds from already-resolved signals on first pass
+      // so we never accidentally re-process them even if index is stale
+      for (const { signals } of Object.values(dayMap)) {
+        for (const s of signals) {
+          if (s.status !== 'OPEN') {
+            const id = s.id || s.instrKey + '_' + s.date + '_' + s.time;
+            resolvedSigIds.current.add(id);
+          }
+        }
       }
 
-      setOpenSignalCount(allOpenSigs.length);
-      if (!allOpenSigs.length) return;
+      // Collect ONLY open signals that haven't been resolved yet
+      const pendingSigs = [];
+      for (const [date, { signals }] of Object.entries(dayMap)) {
+        for (const s of signals) {
+          if (s.status !== 'OPEN') continue;
+          const id = s.id || (s.instrKey || s.key) + '_' + s.date + '_' + s.time;
+          if (resolvedSigIds.current.has(id)) continue; // already resolved this session
+          pendingSigs.push({ ...s, _date: date, _id: id });
+        }
+      }
 
-      // Fetch live prices for all open signal instrument keys (batch of 50)
-      const keys = [...new Set(allOpenSigs.map(s => s.instrKey || s.key).filter(Boolean))];
-      if (!keys.length) return;
+      setOpenSignalCount(pendingSigs.length);
+      if (!pendingSigs.length) {
+        lg('Signal monitor: no pending open signals to check', 'o');
+        return;
+      }
 
+      lg(`Signal monitor: checking ${pendingSigs.length} open signal(s)…`, 'o');
+
+      // Fetch live prices only for pending signals
+      const keys = [...new Set(pendingSigs.map(s => s.instrKey || s.key).filter(Boolean))];
       const quotes = {};
       const BATCH = 50;
       await Promise.allSettled(
@@ -400,52 +415,68 @@ export function AppProvider({ children }) {
             .catch(() => {})
         )
       );
-
       if (!Object.keys(quotes).length) return;
 
-      // Resolve each date's signals
       const now = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
       let totalResolved = 0;
 
-      for (const [date, { signals: daySigs, sha }] of Object.entries(dayMap)) {
+      // Group pending sigs by date for efficient file writes
+      const pendingByDate = {};
+      for (const s of pendingSigs) {
+        if (!pendingByDate[s._date]) pendingByDate[s._date] = [];
+        pendingByDate[s._date].push(s);
+      }
+
+      for (const [date, pending] of Object.entries(pendingByDate)) {
+        const { signals: daySigs, sha } = dayMap[date];
         let changed = false;
+
         const updated = daySigs.map(s => {
+          // Already closed — skip entirely, no lookup needed
           if (s.status !== 'OPEN') return s;
+
           const instrK = s.instrKey || s.key;
-          if (!instrK) return s;
+          const sigId  = s.id || instrK + '_' + s.date + '_' + s.time;
+
+          // Already resolved this session — leave as-is in file (will be written on next full check)
+          if (resolvedSigIds.current.has(sigId)) return s;
+
           const q = quotes[instrK];
           if (!q?.last_price) return s;
           const ltp = q.last_price;
+
           if (s.target > 0 && ltp >= s.target) {
             const pnlPct = s.entry > 0 ? +((ltp - s.entry) / s.entry * 100).toFixed(2) : null;
-            lg(`🎯 TARGET HIT: ${s.stock || s.sym} @ ₹${ltp} (target ₹${s.target})`, 'o');
-            showToast(`🎯 Target hit: ${s.stock || s.sym} +${pnlPct || ''}%`, '#16a34a', 8000);
+            lg(`🎯 TARGET HIT: ${s.stock || s.sym} @ ₹${ltp} (tgt ₹${s.target})`, 'o');
+            showToast(`🎯 ${s.stock || s.sym} target hit! ${pnlPct !== null ? '+' + pnlPct + '%' : ''}`, '#16a34a', 8000);
+            resolvedSigIds.current.add(sigId); // mark so we never re-check this signal
             changed = true; totalResolved++;
             return { ...s, status: 'TARGET_HIT', exitPrice: ltp, exitTime: now, pnlPct };
           }
+
           if (s.sl > 0 && ltp <= s.sl) {
             const pnlPct = s.entry > 0 ? +((ltp - s.entry) / s.entry * 100).toFixed(2) : null;
             lg(`❌ SL HIT: ${s.stock || s.sym} @ ₹${ltp} (SL ₹${s.sl})`, 'w');
-            showToast(`❌ SL hit: ${s.stock || s.sym} ${pnlPct || ''}%`, '#dc2626', 8000);
+            showToast(`❌ ${s.stock || s.sym} SL hit ${pnlPct !== null ? pnlPct + '%' : ''}`, '#dc2626', 8000);
+            resolvedSigIds.current.add(sigId); // mark so we never re-check this signal
             changed = true; totalResolved++;
             return { ...s, status: 'SL_HIT', exitPrice: ltp, exitTime: now, pnlPct };
           }
-          return s;
+
+          return s; // still open, will be re-checked next cycle
         });
-        if (changed) {
-          await ghWriteDay(g, updated, sha, date).catch(() => {});
-        }
+
+        if (changed) await ghWriteDay(g, updated, sha, date).catch(() => {});
       }
 
+      const remaining = pendingSigs.length - totalResolved;
       if (totalResolved > 0) {
-        lg(`Signal monitor: ${totalResolved} signal(s) resolved, ${allOpenSigs.length - totalResolved} still open`, 'o');
-        // Refresh calibration after resolutions
+        lg(`Signal monitor: ✅ ${totalResolved} resolved · ${remaining} still tracking`, 'o');
         loadConfCalibration(g);
+      } else {
+        lg(`Signal monitor: ${remaining} signal(s) still open, none resolved this cycle`, 'o');
       }
-
-      // Update open count after resolution
-      const remainingOpen = allOpenSigs.length - totalResolved;
-      setOpenSignalCount(remainingOpen);
+      setOpenSignalCount(remaining);
 
     } catch (e) {
       lg('Signal monitor error: ' + e.message, 'w');
