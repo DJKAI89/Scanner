@@ -17,7 +17,7 @@ function getChgPct(q) {
     const pc = q.last_price - q.net_change;
     return pc > 0 ? (q.net_change / pc) * 100 : 0;
   }
-  if (q.ohlc?.open && q.ohlc.open > 0) return ((q.last_price - q.ohlc.open) / q.ohlc.open) * 100;
+  if (q.ohlc?.close && q.ohlc.close > 0) return ((q.last_price - q.ohlc.close) / q.ohlc.close) * 100;
   return 0;
 }
 
@@ -312,7 +312,7 @@ export default function OptionsPane() {
   const prevAvgIVCache = useRef({}), prevPCRCache = useRef({});
   const liveKeys = useMemo(() => [...INDEX_OPTS.map((idx) => idx.key), VIX_KEY], []);
   const { lastPrices: liveIndexPrices } = useMarketFeed(
-    accessToken, liveKeys, liveKeys.length > 0, { pollFallback: false }
+    accessToken, liveKeys, liveKeys.length > 0, { pollFallback: true }
   );
   const optionLiveKeys = useMemo(() => {
     const keys = [];
@@ -335,7 +335,7 @@ export default function OptionsPane() {
     return { ...g, chain, ...calcStructure(chain) };
   }), [groups, liveOptionPrices]);
 
-  useEffect(() => { if (accessToken && marketStatus.open) loadOptions(); }, [accessToken]); // eslint-disable-line
+  useEffect(() => { if (accessToken && marketStatus.open) loadOptions(); }, [accessToken, marketStatus.open]); // eslint-disable-line
   useEffect(() => {
     const onScan = () => {
       if (activeTab === 'options') loadOptions(true);
@@ -500,13 +500,16 @@ export default function OptionsPane() {
             const q = foSpots2[inst.key]; const spot = q?.last_price || 0;
             if (spot < 1) { lg(inst.s + ': no spot', 'w'); continue; }
             const spotChg = getChgPct(q);
+            // Fetch 5-min intraday candles for this stock so compositeScore has real data
+            let stkCandles = [];
+            try { stkCandles = await fetchIntraday(inst.key, '5minute', accessToken, onTokenExpired); } catch(_) {}
             const ctxKey = SECTOR_CTX_MAP[inst.s] || 'NIFTY';
-            const baseCtx = ctxMap[ctxKey] || ctxMap['NIFTY'] || computeCtxFromCandles([], spot, spotChg, vixVal, null);
-            const dayScore = spotChg > 1 ? 2 : spotChg > 0.3 ? 1 : spotChg < -1 ? -2 : spotChg < -0.3 ? -1 : 0;
-            const stkCtx = { ...baseCtx, spot, dayChange: spotChg, dayScore };
-            stkCtx.compositeScore = +((stkCtx.momentumScore||0)*1.0 + dayScore*0.3 + (stkCtx.vwapScore||0)*1.5 + ((stkCtx.emaScore||0))*2.0).toFixed(2);
+            const baseCtx = ctxMap[ctxKey] || ctxMap['NIFTY'] || {};
+            // Compute full context with real candles instead of empty array
+            const stkCtx = { ...(computeCtxFromCandles(stkCandles, spot, spotChg, vixVal, null) || baseCtx) };
+            stkCtx.spot = spot; stkCtx.dayChange = spotChg;
             stkCtx.bullish = stkCtx.compositeScore > 0;
-            stkCtx.neutral = Math.abs(stkCtx.compositeScore) < 0.5;
+            stkCtx.neutral = Math.abs(stkCtx.compositeScore || 0) < 0.5;
             let expiry = '';
             try { const cd = await fetch(`https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent(inst.key)}`, { headers:{ Authorization:'Bearer '+accessToken, Accept:'application/json' } }).then(r=>r.json()); expiry = (cd?.data?.map(e=>e.expiry).sort()||[])[0]||''; } catch(e) {}
             if (!expiry) continue;

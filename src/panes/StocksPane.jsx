@@ -801,11 +801,14 @@ export default function StocksPane() {
         const rs=calcRelativeStrength(t.closes,niftyCloses), wick=calcWickRejection(t.candles);
         const dir=boDirection(ema,pdhl,st), isBull=dir==='BULL';
         const mom=calcMomentumConfluence(t.closes,isBull), wMTF=calcWeeklyMTF(t.weekly,ltp,isBull);
-        // sector score: +1 strong sector, -1 weak, 0 neutral (from secMap built during picks scan)
+        // sector score: use secMap from picks scan if available, else fallback to stock's own day change
         const sec=item.sec||item.s;
-        const secEntry=Object.entries({}).find(()=>false); // placeholder
-        const secChgPct=item._q?((item._q.last_price-(item._q.ohlc?.close||item._q.last_price))/(item._q.ohlc?.close||item._q.last_price)*100):0;
-        const sectorScore=secChgPct>1?1:secChgPct<-1?-1:0;
+        const secChgPct=item._q && item._q.ohlc?.close > 0
+          ? ((item._q.last_price - item._q.ohlc.close) / item._q.ohlc.close * 100) : 0;
+        const secMapEntry = scanStats?.secMap?.[item.sec];
+        const sectorScore = secMapEntry != null
+          ? (secMapEntry > 0.5 ? 1 : secMapEntry < -0.5 ? -1 : 0)
+          : (secChgPct > 1 ? 1 : secChgPct < -1 ? -1 : 0);
         const {score}=boScore(ema,pdhl,st,vol,wk52,mom,nr7,bb,wMTF,gap,adx,rs,wick,sectorScore,phase);
         const minScore=(phase==='holiday'||phase==='closed'||phase==='pre')?1:2;
         if (score<minScore) continue;
@@ -895,7 +898,13 @@ export default function StocksPane() {
       {/* Mode tabs */}
       <div style={{display:'flex',gap:0,marginBottom:14,background:'#f1f5f9',borderRadius:10,padding:3}}>
         {[{id:'picks',label:'📊 Picks',color:'#1d4ed8'},{id:'breakout',label:'🚀 Breakout',color:'#7c3aed'}].map(m=>(
-          <button key={m.id} onClick={()=>{setMode(m.id);if(m.id==='breakout'&&!boTime)runBreakoutScan();}}
+          <button key={m.id} onClick={()=>{
+              setMode(m.id);
+              if(m.id==='breakout'){
+                const ageMs = boTime ? Date.now()-new Date(boTime.replace('Scanned: ','')).getTime() : Infinity;
+                if(!boTime || ageMs > 15*60*1000) runBreakoutScan();
+              }
+            }}
             style={{flex:1,padding:'8px 0',borderRadius:8,border:'none',fontSize:12,fontWeight:700,cursor:'pointer',
               background:mode===m.id?'#fff':'transparent',color:mode===m.id?m.color:'#64748b',
               boxShadow:mode===m.id?'0 1px 4px rgba(0,0,0,.1)':'none'}}>
