@@ -166,7 +166,7 @@ function computeDayStats(sigs) {
 }
 
 export default function LogPane() {
-  const { gh, token, onTokenExpired, updateBadge, lg, marketStatus } = useApp();
+  const { gh, token, onTokenExpired, updateBadge, lg, marketStatus, openSignalCount, runSignalMonitor } = useApp();
 
   const [loading, setLoading]         = useState(false);
   const [checking, setChecking]       = useState(false);
@@ -413,13 +413,21 @@ export default function LogPane() {
         <button className="btn btn-g" onClick={load} disabled={loading} style={{ padding:'7px 14px', fontSize:11 }}>
           {loading?'⏳':'🔄 Refresh'}
         </button>
-        <button className="btn btn-g" onClick={checkAllOutcomes} disabled={loading||checking} title="Auto-check all OPEN signals against current prices — marks TARGET_HIT or SL_HIT" style={{ padding:'7px 14px', fontSize:11, background:'#eff6ff', color:'#1d4ed8' }}>
-          {checking?'⏳ Checking...':'✅ Check Outcomes'}
+        <button className="btn btn-g" onClick={() => runSignalMonitor()} disabled={checking} title="Check all OPEN signals against live prices now" style={{ padding:'7px 14px', fontSize:11, background:'#eff6ff', color:'#1d4ed8' }}>
+          {checking ? '⏳ Checking…' : `✅ Check Now${openSignalCount > 0 ? ' (' + openSignalCount + ')' : ''}`}
         </button>
       </div>
 
       {loading ? <Spinner label="Loading signal log..." sub="Reading from GitHub..." /> : (
         <div>
+          {openSignalCount > 0 && (
+            <div style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 11px', background:'#f0fdf4', border:'1px solid #bbf7d0', borderRadius:8, marginBottom:10, fontSize:10 }}>
+              <div style={{ width:7, height:7, borderRadius:'50%', background:'#16a34a', flexShrink:0 }} />
+              <span style={{ color:'#15803d', fontWeight:700 }}>
+                🔍 Monitoring {openSignalCount} open signal{openSignalCount !== 1 ? 's' : ''} live — auto-checking every 60s
+              </span>
+            </div>
+          )}
           {stats && (
             <div className="stats-g" style={{ marginBottom:12 }}>
               <StatCard label="TOTAL"    value={stats.total}   valClass="bl" />
