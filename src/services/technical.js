@@ -786,7 +786,9 @@ export function boDirection(ema, pdhl, st) {
 }
 
 export function boSLTarget(ltp, atr, isBull, pdh, pdl, ema200) {
-  const a = atr || ltp * 0.018;
+  // Cap ATR to 3% of LTP — prevents oversized SL on high-price stocks (₹5000+)
+  const rawAtr = atr || ltp * 0.018;
+  const a = Math.min(rawAtr, ltp * 0.03);
   let sl, target;
   if (isBull) {
     sl = +(ltp - a * 1.5).toFixed(2);
