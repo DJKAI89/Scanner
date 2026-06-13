@@ -327,25 +327,51 @@ function SignalFeed({ signals }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
       {signals.map((s, i) => {
-        const hit  = s.status === 'TARGET_HIT';
-        const pnl  = s.pnlPct != null ? (s.pnlPct >= 0 ? '+' : '') + s.pnlPct.toFixed(1) + '%' : '—';
-        const c    = hit ? '#10b981' : '#ef4444';
+        const hit = s.status === 'TARGET_HIT';
+        const pnl = s.pnlPct != null ? (s.pnlPct >= 0 ? '+' : '') + s.pnlPct.toFixed(1) + '%' : '—';
+        const c   = hit ? '#10b981' : '#ef4444';
+        const entryTime = [s.date, (s.time||'').slice(0,5)].filter(Boolean).join(' · ');
+        const exitTime  = s.exitDate
+          ? [s.exitDate, (s.exitTime||'').slice(0,5)].filter(Boolean).join(' · ')
+          : null;
         return (
           <div key={i} style={{
             display: 'flex', alignItems: 'center', gap: 10,
-            padding: '8px 0', borderBottom: '1px solid #f1f5f9',
+            padding: '9px 0', borderBottom: '1px solid #f1f5f9',
           }}>
             <div style={{
-              width: 22, height: 22, borderRadius: 6,
+              width: 24, height: 24, borderRadius: 7, flexShrink: 0,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: hit ? '#f0fdf4' : '#fef2f2', fontSize: 11,
-              color: c, fontWeight: 900,
+              background: hit ? '#f0fdf4' : '#fef2f2',
+              fontSize: 12, color: c, fontWeight: 900,
             }}>{hit ? '✓' : '✕'}</div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: '#0f172a' }}>{s.name || s.stock}</div>
-              <div style={{ fontSize: 8, color: '#94a3b8' }}>{s.date} · {(s.time || '').slice(0, 5)}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {s.name || s.stock}
+                {s.optType && <span style={{ fontSize: 8, marginLeft: 5, background: s.optType==='CE'?'#eff6ff':'#fdf4ff', color: s.optType==='CE'?'#1d4ed8':'#7c3aed', borderRadius: 4, padding: '1px 4px', fontWeight: 800 }}>{s.optType}</span>}
+              </div>
+              {/* Entry date/time */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                <span style={{ fontSize: 7, color: '#94a3b8', background: '#f1f5f9', borderRadius: 3, padding: '1px 4px', fontWeight: 700 }}>ENTRY</span>
+                <span style={{ fontSize: 8, color: '#94a3b8' }}>{entryTime}</span>
+              </div>
+              {/* Exit date/time — shown if resolved */}
+              {exitTime && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 1 }}>
+                  <span style={{ fontSize: 7, color: c, background: hit?'#f0fdf4':'#fef2f2', borderRadius: 3, padding: '1px 4px', fontWeight: 700 }}>{hit?'TARGET':'SL'}</span>
+                  <span style={{ fontSize: 8, color: '#64748b' }}>{exitTime}</span>
+                  {s.exitPrice && <span style={{ fontSize: 8, color: c, fontWeight: 700 }}>@ ₹{(+s.exitPrice).toFixed(2)}</span>}
+                </div>
+              )}
             </div>
-            <div style={{ fontSize: 12, fontWeight: 900, color: c }}>{pnl}</div>
+            <div style={{ textAlign: 'right', flexShrink: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 900, color: c }}>{pnl}</div>
+              {s.entry > 0 && s.exitPrice > 0 && (
+                <div style={{ fontSize: 8, color: '#94a3b8' }}>
+                  ₹{(+s.entry).toFixed(2)} → ₹{(+s.exitPrice).toFixed(2)}
+                </div>
+              )}
+            </div>
           </div>
         );
       })}
@@ -443,13 +469,16 @@ export default function AnalysisPane() {
 
       // Daily rows
       const byDate = {};
+      const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
       closed.forEach(s => {
-        const cd = s.exitDate || s.date;
+        // Use exitDate as the "closed on" date — prefer it over entry date
+        // For signals without exitDate, only use entry date if it's today (just resolved)
+        const cd = s.exitDate || (s.date === todayIST ? todayIST : s.date);
         if (!byDate[cd]) byDate[cd] = { hits: 0, sls: 0, pnl: 0 };
         byDate[cd][s.status === 'TARGET_HIT' ? 'hits' : 'sls']++;
         byDate[cd].pnl += (s.pnlPct || 0);
       });
-      const dailyRows = Object.entries(byDate).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 8);
+      const dailyRows = Object.entries(byDate).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 10);
 
       // CS buckets
       const scoredSignals = closed.filter(s => s.compositeScore != null);
@@ -647,7 +676,15 @@ export default function AnalysisPane() {
 
             {/* Recent signals */}
             <Section title="Recent Closed Signals" accent="#6366f1">
-              <SignalFeed signals={d.closed.slice(-12).reverse()} />
+              <SignalFeed signals={[...d.closed]
+                .sort((a, b) => {
+                  // Sort by exit date+time descending (most recently closed first)
+                  const aKey = (a.exitDate || a.date) + (a.exitTime || a.time || '');
+                  const bKey = (b.exitDate || b.date) + (b.exitTime || b.time || '');
+                  return bKey.localeCompare(aKey);
+                })
+                .slice(0, 15)
+              } />
             </Section>
           </div>
         );
