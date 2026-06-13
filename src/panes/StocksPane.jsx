@@ -126,8 +126,188 @@ function drawMiniChart(candles, closes, opts = {}) {
   return { svgStr, ema50Val, ema200Val };
 }
 
+
+// ── BoChartPopup — full-screen popup with live chart + all values ──────────
+function BoChartPopup({ r, onClose }) {
+  if (!r) return null;
+  const fmtV = v => v != null ? (+v).toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—';
+  const isBull = r.dir === 'BULL';
+  const t = r.trade || {};
+  const dirColor = isBull ? '#16a34a' : '#dc2626';
+  const chgColor = (r.chgPct || 0) >= 0 ? '#16a34a' : '#dc2626';
+
+  const chart = r.recentCandles?.length >= 3
+    ? drawMiniChart(r.recentCandles, r.closes || [], {
+        entry: r.ltp, target: t.target, sl: t.sl,
+        width: 320, height: 160,
+      })
+    : null;
+
+  // Metrics grid rows
+  const metrics = [
+    { label: 'LTP',         value: `₹${fmtV(r.ltp)}`,                     color: '#0f172a' },
+    { label: 'Change',      value: `${(r.chgPct||0)>=0?'+':''}${(r.chgPct||0).toFixed(2)}%`, color: chgColor },
+    { label: 'Entry',       value: `₹${fmtV(t.entry||r.ltp)}`,             color: '#1d4ed8' },
+    { label: 'Stop Loss',   value: `₹${fmtV(t.sl)}`,                       color: '#dc2626' },
+    { label: 'Target',      value: `₹${fmtV(t.target)}`,                   color: '#16a34a' },
+    { label: 'R:R',         value: `${t.rr||0}:1`,                         color: '#7c3aed' },
+    { label: 'SL %',        value: t.sl > 0 && r.ltp > 0 ? `${Math.abs(((t.sl-r.ltp)/r.ltp)*100).toFixed(1)}%` : '—', color: '#dc2626' },
+    { label: 'Tgt %',       value: t.target > 0 && r.ltp > 0 ? `+${(((t.target-r.ltp)/r.ltp)*100).toFixed(1)}%` : '—', color: '#16a34a' },
+    { label: 'Score',       value: `${r.score||0}/10`,                     color: r.score>=7?'#16a34a':r.score>=4?'#d97706':'#64748b' },
+    { label: 'ATR',         value: r.atr ? `₹${fmtV(r.atr)}` : '—',       color: '#64748b' },
+    { label: 'Vol Ratio',   value: r.vol?.ratio ? `${r.vol.ratio}×` : '—', color: r.vol?.strong?'#7c3aed':r.vol?.confirmed?'#1d4ed8':'#64748b' },
+    { label: 'RS vs Nifty', value: r.rs?.rs != null ? `${r.rs.rs>0?'+':''}${r.rs.rs}%` : '—', color: r.rs?.outperforming?'#16a34a':r.rs?.underperforming?'#dc2626':'#64748b' },
+  ];
+
+  // EMA values
+  const emaRows = [
+    r.ema?.ema50  != null && { label: 'EMA 50',  value: `₹${fmtV(r.ema.ema50)}`,  color: '#2563eb' },
+    r.ema?.ema200 != null && { label: 'EMA 200', value: `₹${fmtV(r.ema.ema200)}`, color: '#9333ea' },
+    r.ema?.ema9   != null && { label: 'EMA 9',   value: `₹${fmtV(r.ema.ema9)}`,   color: '#0d9488' },
+    r.ema?.ema21  != null && { label: 'EMA 21',  value: `₹${fmtV(r.ema.ema21)}`,  color: '#0ea5e9' },
+  ].filter(Boolean);
+
+  // 52-week range bar
+  const rangePos = r.wk52?.rangePos || 0;
+
+  return (
+    <div
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+        zIndex: 1000, display: 'flex', alignItems: 'flex-end',
+        backdropFilter: 'blur(2px)',
+      }}
+    >
+      <div style={{
+        background: '#fff', width: '100%', maxHeight: '92dvh',
+        borderRadius: '18px 18px 0 0', overflowY: 'auto',
+        padding: '0 0 24px', boxShadow: '0 -8px 32px rgba(0,0,0,0.2)',
+        animation: 'slideUp .22s ease',
+      }}>
+        {/* Drag handle */}
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 4px' }}>
+          <div style={{ width: 36, height: 4, borderRadius: 2, background: '#e2e8f0' }} />
+        </div>
+
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '6px 16px 12px' }}>
+          <div>
+            <div style={{ fontSize: 20, fontWeight: 900, color: '#0f172a', lineHeight: 1.1 }}>{r.s}</div>
+            <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{r.n || r.s} · {r.sec || 'NSE'}</div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 22, fontWeight: 900, color: '#0f172a' }}>₹{fmtV(r.ltp)}</div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: chgColor }}>{(r.chgPct||0)>=0?'+':''}{(r.chgPct||0).toFixed(2)}%</div>
+            <div style={{ fontSize: 10, fontWeight: 800, color: dirColor }}>{isBull ? '▲ BULLISH' : '▼ BEARISH'} · {r.score||0}/10</div>
+          </div>
+        </div>
+
+        {/* Chart */}
+        {chart ? (
+          <div style={{ padding: '0 12px', marginBottom: 12 }}>
+            <div style={{ fontSize: 9, fontWeight: 700, color: '#94a3b8', marginBottom: 4, letterSpacing: '.5px' }}>
+              20-DAY CHART
+              {chart.ema50Val  ? ` · EMA50 ₹${fmtV(chart.ema50Val)}`  : ''}
+              {chart.ema200Val ? ` · EMA200 ₹${fmtV(chart.ema200Val)}` : ''}
+            </div>
+            <div dangerouslySetInnerHTML={{ __html: chart.svgStr.replace('height="92"', 'height="160"') }} />
+          </div>
+        ) : (
+          <div style={{ padding: '0 12px', marginBottom: 12, fontSize: 11, color: '#94a3b8', textAlign: 'center' }}>
+            No chart data available
+          </div>
+        )}
+
+        {/* Trade setup */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 1, background: '#e2e8f0', margin: '0 12px 12px', borderRadius: 10, overflow: 'hidden' }}>
+          {[
+            { l: 'ENTRY',     v: `₹${fmtV(t.entry||r.ltp)}`, c: '#1d4ed8', bg: '#eff6ff' },
+            { l: 'STOP LOSS', v: `₹${fmtV(t.sl)}`,           c: '#dc2626', bg: '#fef2f2' },
+            { l: 'TARGET',    v: `₹${fmtV(t.target)}`,        c: '#16a34a', bg: '#f0fdf4' },
+          ].map(x => (
+            <div key={x.l} style={{ background: x.bg, padding: '10px 8px', textAlign: 'center' }}>
+              <div style={{ fontSize: 8, color: '#64748b', marginBottom: 3 }}>{x.l}</div>
+              <div style={{ fontSize: 15, fontWeight: 900, color: x.c }}>{x.v}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Metrics grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 6, padding: '0 12px', marginBottom: 12 }}>
+          {metrics.map(m => (
+            <div key={m.label} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '7px 9px' }}>
+              <div style={{ fontSize: 8, color: '#94a3b8', fontWeight: 700, marginBottom: 2 }}>{m.label}</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: m.color }}>{m.value}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* EMA values */}
+        {emaRows.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, padding: '0 12px', marginBottom: 12, flexWrap: 'wrap' }}>
+            {emaRows.map(e => (
+              <div key={e.label} style={{ background: '#f8fafc', border: `1px solid ${e.color}44`, borderRadius: 8, padding: '6px 10px', flex: 1 }}>
+                <div style={{ fontSize: 8, color: '#94a3b8', fontWeight: 700 }}>{e.label}</div>
+                <div style={{ fontSize: 13, fontWeight: 800, color: e.color }}>{e.value}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* 52-week range */}
+        {r.wk52 && (
+          <div style={{ padding: '0 12px', marginBottom: 12 }}>
+            <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', marginBottom: 6 }}>52-WEEK RANGE</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 9, color: '#dc2626', fontWeight: 700 }}>₹{fmtV(r.wk52.lo52)}</span>
+              <div style={{ flex: 1, position: 'relative', height: 8, background: '#e2e8f0', borderRadius: 4, overflow: 'visible' }}>
+                <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: `${rangePos}%`, background: `linear-gradient(90deg, #dc2626, #16a34a)`, borderRadius: 4 }} />
+                <div style={{ position: 'absolute', left: `${rangePos}%`, top: -3, width: 14, height: 14, borderRadius: '50%', background: '#1d4ed8', border: '2px solid #fff', boxShadow: '0 1px 4px rgba(0,0,0,.2)', transform: 'translateX(-50%)' }} />
+              </div>
+              <span style={{ fontSize: 9, color: '#16a34a', fontWeight: 700 }}>₹{fmtV(r.wk52.hi52)}</span>
+            </div>
+            <div style={{ textAlign: 'center', fontSize: 9, color: '#64748b', marginTop: 4 }}>At {rangePos}% of 52-week range</div>
+          </div>
+        )}
+
+        {/* Strength bar */}
+        <div style={{ padding: '0 12px', marginBottom: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+            <span style={{ fontSize: 9, fontWeight: 700, color: '#64748b' }}>SIGNAL STRENGTH</span>
+            <span style={{ fontSize: 11, fontWeight: 900, color: r.score>=7?'#16a34a':r.score>=4?'#d97706':'#0ea5e9' }}>{r.score||0}/10</span>
+          </div>
+          <div style={{ height: 8, background: '#e2e8f0', borderRadius: 4, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${Math.min(100,(r.score||0)*10)}%`, background: r.score>=7?'#16a34a':r.score>=4?'#d97706':'#0ea5e9', borderRadius: 4, transition: 'width .5s' }} />
+          </div>
+        </div>
+
+        {/* Why */}
+        {r._whyLines?.length > 0 && (
+          <div style={{ margin: '0 12px', padding: '10px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, marginBottom: 12 }}>
+            <div style={{ fontSize: 9, fontWeight: 800, color: '#64748b', marginBottom: 6 }}>SIGNAL ANALYSIS</div>
+            {r._whyLines.map((w, i) => (
+              <div key={i} style={{ fontSize: 10, color: '#475569', lineHeight: 1.7 }}>→ {w}</div>
+            ))}
+          </div>
+        )}
+
+        {/* Close button */}
+        <div style={{ padding: '0 12px' }}>
+          <button
+            onClick={onClose}
+            style={{ width: '100%', padding: '13px', background: '#0f172a', color: '#fff', border: 'none', borderRadius: 12, fontSize: 14, fontWeight: 800, cursor: 'pointer' }}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── BoCard — dedicated breakout card (port from index.html) ──
-function BoCard({ r, rank }) {
+function BoCard({ r, rank, onPopup }) {
   const fmtV = v => v != null ? (+v).toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—';
   const isBull = r.dir === 'BULL';
   const cardBg = isBull ? '#f0fdf4' : '#fef2f2';
@@ -241,15 +421,14 @@ function BoCard({ r, rank }) {
   if (r.sectorScore>0)  why.push(`${r.sec||'NSE'} sector outperforming market — tailwind for this signal`);
   else if (r.sectorScore<0) why.push(`${r.sec||'NSE'} sector underperforming market — headwind for this signal`);
 
-  const chart = r.recentCandles?.length >= 3
-    ? drawMiniChart(r.recentCandles, r.closes||[], {entry:r.ltp, target:t.target, sl:t.sl})
-    : null;
-
   return (
     <div style={{background:cardBg,border:`2px solid ${cardBorder}`,borderRadius:11,padding:13,boxShadow:'0 2px 8px rgba(0,0,0,.05)',minWidth:0,overflow:'hidden',animation:'fadeIn .3s ease both'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:8}}>
-        <div>
-          <div style={{fontSize:16,fontWeight:800,color:'#0f172a'}}>{r.s}</div>
+        <div style={{cursor:'pointer'}} onClick={onPopup}>
+          <div style={{fontSize:16,fontWeight:800,color:'#0f172a',display:'flex',alignItems:'center',gap:5}}>
+            {r.s}
+            <span style={{fontSize:9,color:'#1d4ed8',fontWeight:700,background:'#eff6ff',padding:'1px 5px',borderRadius:8}}>📊 View</span>
+          </div>
           <div style={{fontSize:10,color:'#64748b'}}>{r.n||r.s} · {r.sec||'NSE'}</div>
         </div>
         <div style={{textAlign:'right'}}>
@@ -282,14 +461,7 @@ function BoCard({ r, rank }) {
         </div>
         <span style={{fontSize:8,fontWeight:800,color:(r.score||0)>=7?'#16a34a':(r.score||0)>=4?'#d97706':'#0ea5e9'}}>{r.score||0}/10</span>
       </div>
-      {chart&&(
-        <div style={{marginBottom:6}}>
-          <div style={{fontSize:8,fontWeight:700,color:'#94a3b8',marginBottom:2,letterSpacing:'.5px'}}>
-            20-DAY CHART{chart.ema50Val?` · EMA50 ₹${fmtV(chart.ema50Val)}`:''}{chart.ema200Val?` · EMA200 ₹${fmtV(chart.ema200Val)}`:''}
-          </div>
-          <div dangerouslySetInnerHTML={{__html:chart.svgStr}}/>
-        </div>
-      )}
+      {/* chart moved to popup — click stock name to open */}
       {why.length>0&&(
         <div style={{marginTop:8,paddingTop:7,borderTop:`1px solid ${isBull?'#bbf7d0':'#fecaca'}`,fontSize:10,color:'#475569',lineHeight:1.6}}>
           {why.map((w,i)=><div key={i}>→ {w}</div>)}
@@ -368,6 +540,7 @@ export default function StocksPane() {
   const [boTime, setBoTime]           = useState('');
   const [boProgress, setBoProgress]   = useState('');
   const [boFilter, setBoFilter]       = useState('all');
+  const [popupStock, setPopupStock]   = useState(null); // breakout chart popup
   const scanInProgress = useRef(false);
 
   // ── Index WebSocket ──────────────────────────────────────────
@@ -849,7 +1022,40 @@ export default function StocksPane() {
       const stCrossed =results.filter(r=>r.st?.crossed).length;
       const wk52Hi    =results.filter(r=>r.wk52?.breakHigh||r.wk52?.atHigh).length;
       const volSurge  =results.filter(r=>r.vol?.confirmed||r.vol?.strong).length;
-      setBoCards(results);
+      // Attach _whyLines for popup signal analysis
+      const resultsWithWhy = results.map(r => ({
+        ...r,
+        _whyLines: [
+          r.pdhl?.bullBreakout   && 'PDH breakout — price breaking previous day high',
+          r.pdhl?.bearBreakout   && 'PDL breakdown — price breaking previous day low',
+          r.pdhl?.nearPDH        && 'Near PDH — approaching resistance zone',
+          r.pdhl?.nearPDL        && 'Near PDL — approaching support zone',
+          r.ema?.goldenCross     && 'Golden cross — EMA 50 crossed above EMA 200',
+          r.ema?.deathCross      && 'Death cross — EMA 50 crossed below EMA 200',
+          r.ema?.nearCross       && 'Near EMA cross — convergence in progress',
+          r.ema?.aboveAll        && 'Price above EMA 9, 21, 50, 200 — strong trend',
+          r.ema?.belowAll        && 'Price below all EMAs — strong downtrend',
+          r.st?.crossed          && `Supertrend ${r.st.bull ? 'bullish' : 'bearish'} crossover`,
+          r.vol?.strong          && `Strong volume surge ${r.vol.ratio}× above average`,
+          r.vol?.confirmed       && `Volume confirmed breakout ${r.vol.ratio}× average`,
+          r.wk52?.breakHigh      && '52-week high breakout — multi-year resistance cleared',
+          r.wk52?.breakLow       && '52-week low breakdown — multi-year support broken',
+          r.wk52?.atHigh         && 'At 52-week high — momentum peak zone',
+          r.nr7?.isNR7           && 'NR7 — narrowest range in 7 days, volatility expansion expected',
+          r.nr7?.isNR4           && 'NR4 — narrowest range in 4 days',
+          r.bb?.extremeSqueeze   && 'Extreme Bollinger Band squeeze — major move imminent',
+          r.bb?.squeeze          && 'Bollinger Band squeeze — range compression',
+          r.gap?.gapUp           && `Gap up ${r.gap.pct?.toFixed(1)}% — bullish opening strength`,
+          r.gap?.gapDown         && `Gap down ${r.gap.pct?.toFixed(1)}% — bearish opening weakness`,
+          r.rs?.outperforming    && `Relative strength +${r.rs.rs}% vs Nifty — sector leader`,
+          r.rs?.underperforming  && `Relative weakness ${r.rs.rs}% vs Nifty`,
+          r.wick?.strongBull     && 'Strong wick rejection — buyers defending support',
+          r.wick?.strongBear     && 'Strong bearish wick — sellers rejecting rally',
+          r.mom?.accelerating    && 'Momentum accelerating — trend strengthening',
+          r.adx?.strong          && `ADX ${r.adx.adx?.toFixed(0)} — strong trending market`,
+        ].filter(Boolean),
+      }));
+      setBoCards(resultsWithWhy);
       setBoStats({
         total:results.length,
         bullCount:results.filter(r=>r.dir==='BULL').length,
@@ -1012,13 +1218,15 @@ export default function StocksPane() {
               </div>
               {filteredCards.length===0
                 ?<EmptyState>{!stocks?.length?'⚙ Configure stocks.json in GitHub Settings':'🔄 Click Re-scan to run breakout scanner'}</EmptyState>
-                :<div className="cards-g">{filteredCards.map((c,i)=><BoCard key={c.s||i} r={c} rank={i+1}/>)}</div>
+                :<div className="cards-g">{filteredCards.map((c,i)=><BoCard key={c.s||i} r={c} rank={i+1} onPopup={()=>setPopupStock(c)}/>)}</div>
               }
               <div className="disc">⚠ Not SEBI advice. Always DYODD.</div>
             </div>
           )}
         </div>
       )}
+      {/* Breakout stock popup */}
+      {popupStock && <BoChartPopup r={popupStock} onClose={() => setPopupStock(null)} />}
     </div>
   );
 }
