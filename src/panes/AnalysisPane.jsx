@@ -201,8 +201,101 @@ function Leaderboard({ items }) {
   );
 }
 
+
+// ── DayDetailPopup ───────────────────────────────────────────────────────────
+function DayDetailPopup({ date, signals, onClose }) {
+  if (!date) return null;
+  const hits   = signals.filter(s => s.status === 'TARGET_HIT');
+  const losses = signals.filter(s => s.status === 'SL_HIT');
+  const total  = hits.length + losses.length;
+  const wr2    = total ? Math.round(hits.length / total * 100) : 0;
+  const wrColor = wr2 >= 55 ? '#10b981' : wr2 >= 35 ? '#f59e0b' : '#ef4444';
+  const avgWin  = hits.length   ? (hits.reduce((s,x)=>s+(x.pnlPct||0),0)/hits.length).toFixed(1)   : null;
+  const avgLoss = losses.length ? (losses.reduce((s,x)=>s+(x.pnlPct||0),0)/losses.length).toFixed(1) : null;
+  const totalPnl = signals.reduce((s,x)=>s+(x.pnlPct||0),0).toFixed(1);
+  const stocks  = signals.filter(s => s.type==='STOCK');
+  const options = signals.filter(s => s.type==='OPTION');
+  const others  = signals.filter(s => s.type!=='STOCK' && s.type!=='OPTION');
+  const fmtT = t => (t||'').slice(0,5);
+
+  function SigRow({ s }) {
+    const hit = s.status==='TARGET_HIT';
+    const c   = hit ? '#10b981' : '#ef4444';
+    const p   = s.pnlPct!=null ? (s.pnlPct>=0?'+':'')+Number(s.pnlPct).toFixed(1)+'%' : '—';
+    return (
+      <div style={{ display:'flex', alignItems:'center', gap:9, padding:'9px 0', borderBottom:'1px solid #f1f5f9' }}>
+        <div style={{ width:26, height:26, borderRadius:8, flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center', background:hit?'#f0fdf4':'#fef2f2', color:c, fontSize:13, fontWeight:900 }}>
+          {hit?'✓':'✕'}
+        </div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:4, flexWrap:'wrap' }}>
+            <span style={{ fontSize:12, fontWeight:800, color:'#0f172a', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:160 }}>{s.stock||s.name}</span>
+            {s.optType && <span style={{ fontSize:8, fontWeight:800, borderRadius:4, padding:'1px 5px', background:s.optType==='CE'?'#eff6ff':'#fdf4ff', color:s.optType==='CE'?'#1d4ed8':'#7c3aed' }}>{s.strike} {s.optType}</span>}
+            {s.signal  && <span style={{ fontSize:8, fontWeight:700, borderRadius:4, padding:'1px 5px', background:s.signal==='BUY'?'#f0fdf4':'#fef2f2', color:s.signal==='BUY'?'#16a34a':'#dc2626' }}>{s.signal}</span>}
+          </div>
+          <div style={{ display:'flex', gap:8, marginTop:2, flexWrap:'wrap' }}>
+            <span style={{ fontSize:8, color:'#94a3b8' }}>📅 {s.date} {fmtT(s.time) && `· ${fmtT(s.time)}`}</span>
+            {fmtT(s.exitTime) && <span style={{ fontSize:8, color:c }}>{hit?'🎯':'❌'} {s.exitDate||s.date} · {fmtT(s.exitTime)}</span>}
+          </div>
+          {s.entry>0 && (
+            <div style={{ fontSize:8, color:'#64748b', marginTop:1 }}>
+              ₹{Number(s.entry).toFixed(2)}{s.exitPrice ? ` → ₹${Number(s.exitPrice).toFixed(2)}` : ` · SL ₹${Number(s.sl||0).toFixed(2)} · Tgt ₹${Number(s.target||0).toFixed(2)}`}
+            </div>
+          )}
+        </div>
+        <div style={{ textAlign:'right', flexShrink:0 }}>
+          <div style={{ fontSize:14, fontWeight:900, color:c }}>{p}</div>
+          {s.confidence>0 && <div style={{ fontSize:8, color:'#94a3b8' }}>{s.confidence}% conf</div>}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}
+      style={{ position:'fixed', inset:0, background:'rgba(0,0,0,.5)', zIndex:1000, display:'flex', alignItems:'flex-end', backdropFilter:'blur(2px)' }}>
+      <div style={{ background:'#fff', width:'100%', maxHeight:'90dvh', borderRadius:'18px 18px 0 0', overflowY:'auto', padding:'0 0 28px', boxShadow:'0 -8px 32px rgba(0,0,0,.18)', animation:'slideUp .22s ease' }}>
+        <div style={{ display:'flex', justifyContent:'center', padding:'10px 0 4px' }}>
+          <div style={{ width:36, height:4, borderRadius:2, background:'#e2e8f0' }} />
+        </div>
+        {/* Header */}
+        <div style={{ padding:'6px 16px 14px', borderBottom:'1px solid #f1f5f9' }}>
+          <div style={{ fontSize:18, fontWeight:900, color:'#0f172a', marginBottom:8 }}>📅 {date}</div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:8, marginBottom:10 }}>
+            {[{l:'WIN RATE',v:pct(wr2),c:wrColor},{l:'TOTAL',v:total,c:'#0f172a'},{l:'AVG WIN',v:avgWin?`+${avgWin}%`:'—',c:'#10b981'},{l:'AVG LOSS',v:avgLoss?`${avgLoss}%`:'—',c:'#ef4444'}]
+              .map(st=>(
+                <div key={st.l} style={{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:9, padding:'8px 6px', textAlign:'center' }}>
+                  <div style={{ fontSize:7, color:'#94a3b8', fontWeight:700, marginBottom:3, letterSpacing:.5 }}>{st.l}</div>
+                  <div style={{ fontSize:15, fontWeight:900, color:st.c }}>{st.v}</div>
+                </div>
+              ))}
+          </div>
+          <div style={{ display:'flex', borderRadius:6, overflow:'hidden', height:8, marginBottom:5 }}>
+            <div style={{ width:`${total?hits.length/total*100:0}%`, background:'#10b981', transition:'width .5s' }} />
+            <div style={{ width:`${total?losses.length/total*100:0}%`, background:'#ef4444', transition:'width .5s' }} />
+          </div>
+          <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, fontWeight:700 }}>
+            <span style={{ color:'#10b981' }}>✓ {hits.length} Targets</span>
+            <span style={{ color:'#64748b' }}>Net {(+totalPnl)>=0?'+':''}{totalPnl}%</span>
+            <span style={{ color:'#ef4444' }}>✕ {losses.length} SL hits</span>
+          </div>
+        </div>
+        {/* Signal rows */}
+        <div style={{ padding:'0 16px' }}>
+          {stocks.length>0 && <><div style={{ fontSize:10, fontWeight:800, color:'#64748b', margin:'12px 0 6px', letterSpacing:.5 }}>📈 STOCKS ({stocks.length})</div>{stocks.map((s,i)=><SigRow key={i} s={s}/>)}</>}
+          {options.length>0 && <><div style={{ fontSize:10, fontWeight:800, color:'#64748b', margin:'12px 0 6px', letterSpacing:.5 }}>⚡ OPTIONS ({options.length})</div>{options.map((s,i)=><SigRow key={i} s={s}/>)}</>}
+          {others.length>0 && others.map((s,i)=><SigRow key={i} s={s}/>)}
+        </div>
+        <div style={{ padding:'16px 16px 0' }}>
+          <button onClick={onClose} style={{ width:'100%', padding:'13px', background:'#0f172a', color:'#fff', border:'none', borderRadius:12, fontSize:14, fontWeight:800, cursor:'pointer' }}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Daily timeline ────────────────────────────────────────────
-function DailyTimeline({ rows }) {
+function DailyTimeline({ rows, onDayClick }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
       {rows.map(([date, dd], i) => {
@@ -211,12 +304,17 @@ function DailyTimeline({ rows }) {
         const c     = wr2 >= 55 ? '#10b981' : wr2 >= 35 ? '#f59e0b' : '#ef4444';
         const isPos = dd.pnl >= 0;
         return (
-          <div key={date} style={{
-            display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px',
-            background: i % 2 === 0 ? '#f8fafc' : '#ffffff',
-            borderBottom: '1px solid #e2e8f0',
-          }}>
-            <div style={{ fontSize: 9, color: '#64748b', fontWeight: 700, minWidth: 68 }}>{date}</div>
+          <div key={date}
+            onClick={() => onDayClick && onDayClick(date)}
+            style={{ display:'flex', alignItems:'center', gap:10, padding:'9px 12px',
+              background: i%2===0 ? '#f8fafc' : '#ffffff',
+              borderBottom:'1px solid #e2e8f0',
+              cursor: onDayClick ? 'pointer' : 'default',
+            }}>
+            <div style={{ fontSize:9, color:'#64748b', fontWeight:700, minWidth:68 }}>
+              {date}
+              <div style={{ fontSize:7, color:'#94a3b8' }}>tap ›</div>
+            </div>
             <div style={{ width: 6, height: 6, borderRadius: '50%', background: c, flexShrink: 0 }} />
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -386,6 +484,7 @@ export default function AnalysisPane() {
   const [error,   setError]   = useState('');
   const [data,    setData]    = useState(null);
   const [days,    setDays]    = useState(30);
+  const [dayPopup, setDayPopup] = useState(null);
 
   const load = useCallback(async () => {
     if (!gh.token || !gh.user || !gh.repo) { setError('GitHub not configured — go to ⚙ Settings.'); return; }
@@ -474,9 +573,10 @@ export default function AnalysisPane() {
         // Use exitDate as the "closed on" date — prefer it over entry date
         // For signals without exitDate, only use entry date if it's today (just resolved)
         const cd = s.exitDate || (s.date === todayIST ? todayIST : s.date);
-        if (!byDate[cd]) byDate[cd] = { hits: 0, sls: 0, pnl: 0 };
-        byDate[cd][s.status === 'TARGET_HIT' ? 'hits' : 'sls']++;
-        byDate[cd].pnl += (s.pnlPct || 0);
+        if (!byDate[cd]) byDate[cd] = { hits:0, sls:0, pnl:0, signals:[] };
+        byDate[cd][s.status==='TARGET_HIT'?'hits':'sls']++;
+        byDate[cd].pnl += (s.pnlPct||0);
+        byDate[cd].signals.push(s);
       });
       const dailyRows = Object.entries(byDate).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 10);
 
@@ -670,8 +770,21 @@ export default function AnalysisPane() {
             {/* Daily timeline */}
             {d.dailyRows.length >= 3 && (
               <Section title="Daily Performance" accent="#10b981">
-                <DailyTimeline rows={d.dailyRows} />
+                <DailyTimeline
+                  rows={d.dailyRows}
+                  onDayClick={date => {
+                    const entry = d.dailyRows.find(([d]) => d === date);
+                    setDayPopup(entry ? { date, signals: entry[1].signals || [] } : null);
+                  }}
+                />
               </Section>
+            )}
+            {dayPopup && (
+              <DayDetailPopup
+                date={dayPopup.date}
+                signals={dayPopup.signals}
+                onClose={() => setDayPopup(null)}
+              />
             )}
 
             {/* Recent signals */}
