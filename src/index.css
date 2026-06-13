@@ -258,6 +258,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#0f172
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
 @keyframes flash-up{0%{background:#dcfce7}100%{background:transparent}}
+@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
 @keyframes flash-dn{0%{background:#fee2e2}100%{background:transparent}}
 .flash-up{animation:flash-up .7s ease}.flash-dn{animation:flash-dn .7s ease}
 .ind-pill{display:inline-block;font-size:8px;font-weight:700;padding:2px 6px;border-radius:8px}
