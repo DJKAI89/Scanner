@@ -1,6 +1,7 @@
 import React from 'react';
 import { fmt, fmtVol } from '../utils/formatters';
 import { getSignalStrength, calcEMA } from '../services/technical';
+import LiveChart from './LiveChart';
 
 // Inline mini chart (shared logic with StocksPane)
 function drawMiniChart(candles, closes, opts = {}) {
@@ -290,6 +291,21 @@ export default function StockCard({ pick: p, rank, cfg = {} }) {
         {p.reversal?.type!=='NONE'?` · ${p.reversal?.type==='BULLISH_REVERSAL'?'🔄 Reversal UP':'🔄 Reversal DOWN'}`:''}
         {et?.alreadyTriggered?' · ✅ Trigger hit':` · ⏳ Wait for trigger at ₹${fmt(et?.trigger||ltp)}`}
       </div>
+
+      {/* Live chart */}
+      {p.key && (
+        <div style={{ marginTop:10, borderTop:'1px solid #e2e8f0', paddingTop:10 }}>
+          <LiveChart
+            instrKey={p.key}
+            candles={p.recentCandles || []}
+            closes={p.closes || []}
+            entry={et?.trigger || p.ltp}
+            sl={p.sl}
+            target={p.target}
+            symbol={p.s}
+          />
+        </div>
+      )}
     </div>
   );
 }
