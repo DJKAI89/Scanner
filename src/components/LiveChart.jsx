@@ -18,7 +18,7 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
-import { resolveAccessToken, fetchIntraday } from '../services/api';
+import { resolveAccessToken, fetchIntraday, fetchCandles } from '../services/api';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 
 // ── EMA ───────────────────────────────────────────────────────
@@ -94,11 +94,12 @@ function renderChart({ candles, liveCandle, ltp, entry, sl, target, width, heigh
   const display = [...candles];
   if (liveCandle && ltp > 0) {
     const last = display[display.length - 1];
-    if (last && Math.abs(liveCandle[0] - last[0]) < 60000) {
+    if (last) {
+      // Replace last candle with live-updated version
       display[display.length - 1] = [
         last[0], last[1],
-        Math.max(last[2], ltp),
-        Math.min(last[3], ltp),
+        Math.max(+last[2], ltp),
+        Math.min(+last[3], ltp),
         ltp, last[5],
       ];
     }
@@ -256,22 +257,51 @@ export default function LiveChart({
     return () => obs.disconnect();
   }, []);
 
-  // Fetch intraday candles when interval is intraday
-  useEffect(() => {
-    if (!instrKey || !accessToken || !marketStatus.open) return;
-    if (selectedInterval === 'day') { setCandles(initCandles); return; }
-    setFetchedIntraday(false);
-    fetchIntraday(instrKey, selectedInterval, accessToken)
-      .then(raw => {
-        if (raw?.length) { setCandles(raw); setFetchedIntraday(true); }
-      })
-      .catch(() => {});
-  }, [instrKey, selectedInterval, accessToken, marketStatus.open]); // eslint-disable-line
+  // Loading state for interval changes
+  const [loadingCandles, setLoadingCandles] = useState(false);
 
-  // Keep daily candles in sync with prop
+  // Fetch candles when interval or instrKey changes
+  // Works during market hours (intraday API) AND after hours (historical API)
   useEffect(() => {
-    if (selectedInterval === 'day') setCandles(initCandles);
-  }, [initCandles, selectedInterval]);
+    if (!instrKey || !accessToken) return;
+
+    async function load() {
+      setLoadingCandles(true);
+      try {
+        if (selectedInterval === 'day') {
+          // Daily candles: fetch last 100 days of history
+          const to   = new Date().toISOString().split('T')[0];
+          const from = new Date(Date.now() - 100 * 86400000).toISOString().split('T')[0];
+          const raw  = await fetchCandles(instrKey, from, to, 'day', accessToken);
+          if (raw?.length) setCandles(raw);
+          else if (initCandles?.length) setCandles(initCandles); // fallback to prop
+        } else {
+          // Intraday: try live endpoint first, fallback to historical for today
+          const today = new Date().toISOString().split('T')[0];
+          let raw = [];
+          // Try intraday endpoint (works during market hours)
+          try { raw = await fetchIntraday(instrKey, selectedInterval, accessToken); } catch(_) {}
+          // If empty (market closed or outside hours), try historical for today
+          if (!raw?.length) {
+            try { raw = await fetchCandles(instrKey, today, today, selectedInterval, accessToken); } catch(_) {}
+          }
+          // If still empty, try last 2 days
+          if (!raw?.length) {
+            const twoDaysAgo = new Date(Date.now() - 2*86400000).toISOString().split('T')[0];
+            try { raw = await fetchCandles(instrKey, twoDaysAgo, today, selectedInterval, accessToken); } catch(_) {}
+          }
+          if (raw?.length) { setCandles(raw); setFetchedIntraday(true); }
+        }
+      } catch(e) {
+        console.warn('LiveChart fetch error:', e.message);
+      } finally {
+        setLoadingCandles(false);
+      }
+    }
+
+    setLiveCandle(null); // clear stale live candle on interval change
+    load();
+  }, [instrKey, selectedInterval, accessToken]); // eslint-disable-line
 
   // Live WS tick — updates last candle price
   const wsKeys = useMemo(() => instrKey ? [instrKey] : [], [instrKey]);
@@ -286,18 +316,30 @@ export default function LiveChart({
   useEffect(() => {
     if (!liveTick?.ltp) return;
     setLastTickTime(new Date().toLocaleTimeString('en-IN', { hour12: false }));
-    // Update the last candle with live price
-    setLiveCandle(candles[candles.length - 1]
-      ? [
-          candles[candles.length - 1][0],
-          candles[candles.length - 1][1],
-          Math.max(candles[candles.length - 1][2], liveTick.ltp),
-          Math.min(candles[candles.length - 1][3], liveTick.ltp),
-          liveTick.ltp,
-          candles[candles.length - 1][5],
-        ]
-      : null);
-  }, [liveTick?.ltp]); // eslint-disable-line
+    const last = candles[candles.length - 1];
+    if (!last) return;
+    // Interval in ms for bucket check
+    const bucketMs = {
+      'day': 86400000, '1minute': 60000, '5minute': 300000,
+      '15minute': 900000, '30minute': 1800000, '60minute': 3600000,
+    }[selectedInterval] || 86400000;
+    const now = Date.now();
+    const lastTs = +last[0];
+    // Only update if tick falls within the current candle's time bucket
+    if (now - lastTs <= bucketMs + 5000) {
+      setLiveCandle([
+        lastTs,
+        +last[1],
+        Math.max(+last[2], liveTick.ltp),
+        Math.min(+last[3], liveTick.ltp),
+        liveTick.ltp,
+        +last[5],
+      ]);
+    } else {
+      // New candle bucket — add a new candle for the current tick
+      setLiveCandle([now, liveTick.ltp, liveTick.ltp, liveTick.ltp, liveTick.ltp, 0]);
+    }
+  }, [liveTick?.ltp, selectedInterval]); // eslint-disable-line
 
   // Render
   const chart = useMemo(() => renderChart({
@@ -305,10 +347,21 @@ export default function LiveChart({
     width: size.w, height: size.h,
   }), [candles, liveCandle, ltp, entry, sl, target, size]);
 
-  if (!chart) {
+  if (!chart || loadingCandles) {
     return (
-      <div ref={containerRef} style={{ width: '100%', height: 200, background: '#f8fafc', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', fontSize: 12, ...style }}>
-        No candle data
+      <div ref={containerRef} style={{ width: '100%', ...style }}>
+        {/* Keep interval selector visible while loading */}
+        <div style={{ display:'flex', gap:4, marginBottom:8, overflowX:'auto', paddingBottom:2 }}>
+          {[{key:'day',label:'1D'},{key:'1minute',label:'1m'},{key:'5minute',label:'5m'},{key:'15minute',label:'15m'},{key:'30minute',label:'30m'},{key:'60minute',label:'1H'}].map(({key,label})=>(
+            <button key={key} onClick={()=>setSelectedInterval(key)} style={{padding:'3px 10px',fontSize:10,fontWeight:700,borderRadius:16,border:'none',cursor:'pointer',flexShrink:0,background:selectedInterval===key?'#0f172a':'#f1f5f9',color:selectedInterval===key?'#fff':'#64748b'}}>{label}</button>
+          ))}
+        </div>
+        <div style={{width:'100%',height:260,background:'#f8fafc',borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:8}}>
+          {loadingCandles
+            ? <><div style={{width:28,height:28,border:'3px solid #e2e8f0',borderTopColor:'#16a34a',borderRadius:'50%',animation:'spin .7s linear infinite'}}/><span style={{fontSize:11,color:'#94a3b8'}}>Loading {selectedInterval} candles…</span></>
+            : <span style={{fontSize:12,color:'#94a3b8'}}>No candle data</span>
+          }
+        </div>
       </div>
     );
   }
