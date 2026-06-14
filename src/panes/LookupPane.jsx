@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, StatCard, EmptyState } from '../components/common.jsx';
+import LiveChart from '../components/LiveChart';
 import { fetchQ, fetchCandles, fetchIntraday, fetchOptions, fetchOptionContracts } from '../services/api';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import {
@@ -467,6 +468,18 @@ export default function LookupPane() {
             <StatCard label="MA200" value={r.tech.ema?.e200 ? `Rs ${fmt(r.tech.ema.e200)}` : '—'} sub={r.tech.a200 ? 'Above' : r.tech.a200 === false ? 'Below' : 'Need 200d'} valClass={r.tech.a200 ? 'up' : 'dn'} />
             <StatCard label="SUPPORT" value={r.tech.sr?.pivotS1 ? `Rs ${fmt(r.tech.sr.pivotS1)}` : '—'} sub="Pivot S1" valClass="up" />
             <StatCard label="RESISTANCE" value={r.tech.sr?.pivotR1 ? `Rs ${fmt(r.tech.sr.pivotR1)}` : '—'} sub="Pivot R1" valClass="dn" />
+          </div>
+
+          {/* Live chart */}
+          <div style={{ marginBottom:14 }}>
+            <LiveChart
+              instrKey={r.inst?.key || ''}
+              candles={[]}
+              entry={r.tech.entry?.trigger || r.ltp}
+              sl={r.tech.sl}
+              target={r.tech.target}
+              symbol={r.inst?.s || ''}
+            />
           </div>
 
           {r.tech.sl && (
