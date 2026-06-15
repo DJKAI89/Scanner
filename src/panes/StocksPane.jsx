@@ -212,6 +212,37 @@ function BoChartPopup({ r, onClose }) {
           />
         </div>
 
+        {/* Intraday confirmation badges */}
+        {(r.intraConfirm || r.intraVolRatio >= 1.5 || r.intraMomentum || r.stockVWAP) && (
+          <div style={{ display:'flex', gap:5, flexWrap:'wrap', padding:'0 12px', marginBottom:10 }}>
+            {r.intraConfirm && (
+              <span style={{ fontSize:9, fontWeight:800, background:'#f0fdf4', color:'#16a34a', border:'1px solid #86efac', borderRadius:6, padding:'3px 8px' }}>
+                ✅ {r.intraConfirm === 'PDH_CONFIRMED' ? 'PDH Confirmed 5m' : 'PDL Confirmed 5m'}
+              </span>
+            )}
+            {r.intraVolRatio >= 1.5 && (
+              <span style={{ fontSize:9, fontWeight:800, background:'#fdf4ff', color:'#7c3aed', border:'1px solid #ddd6fe', borderRadius:6, padding:'3px 8px' }}>
+                🔥 Intraday Vol {r.intraVolRatio}×
+              </span>
+            )}
+            {r.intraMomentum?.bullish && r.isBull && (
+              <span style={{ fontSize:9, fontWeight:700, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:6, padding:'3px 8px' }}>
+                ⚡ 5m EMA Bullish
+              </span>
+            )}
+            {r.intraMomentum?.accelerating && (
+              <span style={{ fontSize:9, fontWeight:700, background:'#fff7ed', color:'#c2410c', border:'1px solid #fed7aa', borderRadius:6, padding:'3px 8px' }}>
+                🚀 Momentum Accelerating
+              </span>
+            )}
+            {r.stockVWAP && (
+              <span style={{ fontSize:9, fontWeight:700, background: r.stockVWAP.aboveVWAP?'#f0fdf4':'#fef2f2', color: r.stockVWAP.aboveVWAP?'#16a34a':'#ef4444', border:`1px solid ${r.stockVWAP.aboveVWAP?'#86efac':'#fca5a5'}`, borderRadius:6, padding:'3px 8px' }}>
+                {r.stockVWAP.aboveVWAP ? '↑ Above' : '↓ Below'} VWAP ₹{r.stockVWAP.vwap?.toFixed(1)}
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Trade setup */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 1, background: '#e2e8f0', margin: '0 12px 12px', borderRadius: 10, overflow: 'hidden' }}>
           {[
@@ -1057,22 +1088,83 @@ export default function StocksPane() {
         volSurge,
       });
 
-      // ── Background: fetch intraday VWAP for top 20 breakout stocks ──
-      // Mirrors HTML's fetchStockIntradayVWAP background step
+      // ── Background: fetch intraday data for top breakout stocks ──
+      // Fetches 5-min candles to get intraday VWAP, intraday momentum,
+      // current-candle volume vs average, and intraday breakout confirmation
       const todayI = getISTDate();
-      const top20bo = results.slice(0, 20);
-      Promise.allSettled(top20bo.map(async (r, idx) => {
-        await sleep(idx * 200);
-        try {
-          const c1 = await fetchCandles(r.key, todayI, todayI, '1minute', token, onTokenExpired);
-          if (!c1 || c1.length < 5) return;
-          const vwap1 = calcVWAP(c1);
-          if (!vwap1) return;
-          r.stockVWAP = calcStockVWAPSignal(r.ltp, vwap1);
-          // Trigger re-render by replacing the array shallowly
-          setBoCards(prev => prev.map(x => x.s === r.s ? { ...x, stockVWAP: r.stockVWAP } : x));
-        } catch (_) { /* intraday VWAP is optional — silently skip on error */ }
-      }));
+      const top20bo = resultsWithWhy.slice(0, 20);
+      if (marketStatus.open) {
+        lg(`BO: fetching intraday data for top ${top20bo.length} stocks…`, 'o');
+        Promise.allSettled(top20bo.map(async (r, idx) => {
+          await sleep(idx * 300);
+          try {
+            // 5-min candles give better signals than 1-min (less noise)
+            const c5 = await fetchIntraday(r.key, '5minute', token, onTokenExpired);
+            if (!c5 || c5.length < 5) return;
+
+            // 1. Intraday VWAP
+            const vwap5 = calcVWAP(c5);
+            const vwapSignal = vwap5 ? calcStockVWAPSignal(r.ltp, vwap5) : null;
+
+            // 2. Intraday volume surge — current candle vol vs avg of prior candles
+            const intraCurVol  = c5[0]?.[5] || 0; // most recent candle (newest first)
+            const intraAvgVol  = c5.length > 5
+              ? c5.slice(1, Math.min(21, c5.length)).reduce((s, c) => s + (+c[5] || 0), 0) / Math.min(20, c5.length - 1)
+              : 0;
+            const intraVolRatio = intraAvgVol > 0 ? +(intraCurVol / intraAvgVol).toFixed(2) : null;
+
+            // 3. Intraday momentum — is price accelerating in the breakout direction?
+            const intraCloses = c5.map(c => +c[4]).reverse(); // chronological
+            const intraEma5  = calcEMA(intraCloses, 5);
+            const intraEma13 = calcEMA(intraCloses, 13);
+            const intraMomentum = intraCloses.length >= 13 ? {
+              bullish: intraEma5[intraEma5.length-1] > intraEma13[intraEma13.length-1],
+              accelerating: intraEma5[intraEma5.length-1] > intraEma5[intraEma5.length-2],
+            } : null;
+
+            // 4. Intraday breakout confirmation — did price break key level intraday?
+            const intraHigh = Math.max(...c5.map(c => +c[2]));
+            const intraLow  = Math.min(...c5.map(c => +c[3]));
+            const intraConfirm = r.pdhl?.pdh > 0 && intraHigh > r.pdhl.pdh ? 'PDH_CONFIRMED'
+              : r.pdhl?.pdl > 0 && intraLow < r.pdhl.pdl ? 'PDL_CONFIRMED' : null;
+
+            // 5. Intraday score boost — add to existing score
+            let intraBoost = 0;
+            if (intraConfirm) intraBoost += 2; // breakout confirmed intraday
+            if (intraVolRatio >= 2) intraBoost += 2;      // volume surge intraday
+            else if (intraVolRatio >= 1.5) intraBoost += 1;
+            if (intraMomentum?.bullish && r.isBull)  intraBoost += 1;
+            if (intraMomentum?.accelerating) intraBoost += 1;
+
+            const newScore = Math.min(10, r.score + (intraBoost > 0 ? Math.floor(intraBoost / 2) : 0));
+            const newConf  = Math.min(95, r.conf + intraBoost * 3);
+
+            // 6. Build intraday _whyLines additions
+            const intraWhy = [
+              intraConfirm === 'PDH_CONFIRMED' && '✅ PDH breakout CONFIRMED on 5-min chart',
+              intraConfirm === 'PDL_CONFIRMED' && '✅ PDL breakdown CONFIRMED on 5-min chart',
+              intraVolRatio >= 2   && `🔥 Intraday volume surge ${intraVolRatio}× above average`,
+              intraVolRatio >= 1.5 && intraVolRatio < 2 && `📊 Intraday volume elevated ${intraVolRatio}×`,
+              intraMomentum?.bullish && r.isBull && '⚡ 5-min EMA bullish — intraday trend aligned',
+              intraMomentum?.accelerating && '🚀 Intraday momentum accelerating',
+              vwapSignal?.aboveVWAP && r.isBull && `📈 Above intraday VWAP ₹${vwapSignal.vwap?.toFixed(1)}`,
+              vwapSignal?.aboveVWAP === false && !r.isBull && `📉 Below intraday VWAP ₹${vwapSignal.vwap?.toFixed(1)}`,
+            ].filter(Boolean);
+
+            setBoCards(prev => prev.map(x => x.s === r.s ? {
+              ...x,
+              stockVWAP:   vwapSignal,
+              intraVolRatio,
+              intraMomentum,
+              intraConfirm,
+              score:  newScore,
+              conf:   newConf,
+              _whyLines: [...(x._whyLines || []), ...intraWhy],
+              rec: r.isBull ? (newScore >= 7 ? 'STRONG BUY' : 'BUY') : (newScore >= 7 ? 'SELL' : 'WATCH'),
+            } : x));
+          } catch (_) { /* intraday enrichment is optional */ }
+        }));
+      }
       setBoTime('Scanned: ' + getIST());
       updateBadge('stocks',results.length+' 🚀');
       lg(`✅ Breakout: ${results.length} signals`,'o');
