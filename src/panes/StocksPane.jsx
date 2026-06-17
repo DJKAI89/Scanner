@@ -60,8 +60,7 @@ const BO_FILTERS = [
   {id:'squeeze',label:'🗜 Squeeze'},{id:'rs',label:'🚀 RS'},
 ];
 
-// ── Mini candlestick SVG chart (port from index.html) ────────
-function drawMiniChart(candles, closes, opts = {}) {
+) {
   if (!candles || candles.length < 3) return null;
   const W = opts.width || 320, H = opts.height || 92;
   const PAD = { top: 6, right: 4, bottom: 14, left: 2 };
@@ -210,6 +209,8 @@ function BoChartPopup({ r, onClose }) {
             sl={t.sl}
             target={t.target}
             symbol={r.s}
+            livePrice={r.ltp}
+            liveChgPct={r.chgPct}
           />
         </div>
 

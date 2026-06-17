@@ -282,6 +282,7 @@ function OptionCard({ pick, cfg: cardCfg }) {
             target={pick.tgt}
             symbol={`${pick.und} ${pick.strike} ${pick.type}`}
             interval="5minute"
+            livePrice={pick.entry}
           />
         </div>
       )}
