@@ -977,16 +977,51 @@ export function calcSmartOptionSLTarget(entry, spot, strike, iv, delta, theta, e
 export function interpretFIIDII(d) {
   if (!d) return { bias: 0, label: 'No Data', color: '#94a3b8', detail: '' };
   const fiiNet = d.fii_net || 0, diiNet = d.dii_net || 0, netFlow = fiiNet + diiNet;
+
+  // Cash bias still drives the overall strength score (net market flow)
   let cashBias = netFlow > 5000 ? 10 : netFlow > 2000 ? 7 : netFlow > 500 ? 4 : netFlow > -500 ? 0 : netFlow > -2000 ? -4 : netFlow > -5000 ? -7 : -10;
-  if (fiiNet > 1000) cashBias = Math.min(cashBias + 2, 10); if (fiiNet < -1000) cashBias = Math.max(cashBias - 2, -10);
+  if (fiiNet > 1000) cashBias = Math.min(cashBias + 2, 10);
+  if (fiiNet < -1000) cashBias = Math.max(cashBias - 2, -10);
+
   let futBias = 0;
   const futLong = d.fii_idx_fut_long || 0, futShort = d.fii_idx_fut_short || 0;
   if (futLong + futShort > 0) { const lp = futLong / (futLong + futShort) * 100; futBias = lp > 65 ? 5 : lp > 55 ? 3 : lp > 45 ? 0 : lp > 35 ? -3 : -5; }
   const totalBias = cashBias + futBias;
-  const label = totalBias >= 8 ? 'STRONG BUY' : totalBias >= 3 ? 'FII BUYING' : totalBias >= -2 ? 'NEUTRAL' : totalBias >= -7 ? 'FII SELLING' : 'HEAVY SELL';
-  const color = totalBias >= 8 ? '#16a34a' : totalBias >= 3 ? '#22c55e' : totalBias >= -2 ? '#d97706' : totalBias >= -7 ? '#f97316' : '#dc2626';
+
+  // ── Label now reflects WHO is actually buying/selling, not just net flow ──
+  // This prevents misleading labels like "FII BUYING" when FII is actually net selling
+  // but DII bought enough to make the combined net positive.
+  const fiiBuying = fiiNet > 200;   // small threshold to ignore noise
+  const fiiSelling = fiiNet < -200;
+  const diiBuying = diiNet > 200;
+  const diiSelling = diiNet < -200;
+
+  let label, color;
+  if (fiiBuying && diiBuying) {
+    label = totalBias >= 8 ? 'STRONG BUY — BOTH BUYING' : 'BOTH BUYING';
+    color = totalBias >= 8 ? '#16a34a' : '#22c55e';
+  } else if (fiiSelling && diiSelling) {
+    label = totalBias <= -7 ? 'HEAVY SELL — BOTH SELLING' : 'BOTH SELLING';
+    color = totalBias <= -7 ? '#dc2626' : '#f97316';
+  } else if (fiiSelling && diiBuying) {
+    // This is the AEGISLOG-style case: FII selling, DII absorbing/buying more
+    label = netFlow > 0 ? 'DII BUYING (FII SELLING)' : 'FII SELLING (DII PARTIAL)';
+    color = netFlow > 0 ? '#0ea5e9' : '#f97316'; // blue = DII-led, not pure bullish green
+  } else if (fiiBuying && diiSelling) {
+    label = netFlow > 0 ? 'FII BUYING (DII SELLING)' : 'DII SELLING (FII PARTIAL)';
+    color = netFlow > 0 ? '#0ea5e9' : '#f97316';
+  } else {
+    label = 'NEUTRAL';
+    color = '#d97706';
+  }
+
   const crFmt = (v) => (v >= 0 ? '+₹' : '-₹') + Math.abs(v).toFixed(0) + ' Cr';
-  return { bias: totalBias, label, color, detail: `FII ${crFmt(fiiNet)} · DII ${crFmt(diiNet)} · Net ${crFmt(netFlow)}`, fiiNet, diiNet, netFlow };
+  return {
+    bias: totalBias, label, color,
+    detail: `FII ${crFmt(fiiNet)} · DII ${crFmt(diiNet)} · Net ${crFmt(netFlow)}`,
+    fiiNet, diiNet, netFlow,
+    fiiBuying, fiiSelling, diiBuying, diiSelling,
+  };
 }
 
 // ── getChgPct helper ──────────────────────────────────────────
