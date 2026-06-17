@@ -709,54 +709,132 @@ export function calcPotential(ltp, target, sl, numInds, rec) {
 // ── Breakout Scoring — EXACT port from HTML boScore ───────────
 export function boScore(ema, pdhl, st, vol, wk52, mom, nr7, bb, weeklyMTF, gap, adx, rs, wick, sectorScore, phase) {
   let bull = 0, bear = 0;
+
+  // ── Tier 1: Primary breakout triggers (weight 5) ──────
+  // These alone are enough to make a tradeable signal
   if (ema) {
-    if (ema.goldenCross) bull += 4; else if (ema.deathCross) bear += 4;
-    else if (ema.nearCross) { bull += 2; bear += 2; }
-    else if (ema.uptrend) bull += 1; else bear += 1;
-  }
-  if (pdhl) {
-    if (pdhl.bullBreakout) bull += 3; else if (pdhl.bearBreakout) bear += 3;
-    else if (pdhl.nearPDH) bull += 1; else if (pdhl.nearPDL) bear += 1;
-  }
-  if (st) { if (st.crossed) { st.trend === 'UP' ? (bull += 3) : (bear += 3); } else { st.trend === 'UP' ? (bull += 1) : (bear += 1); } }
-  if (vol) {
-    const vPts = vol.strong ? 3 : vol.confirmed ? 2 : vol.weak ? 1 : 0;
-    bull += vPts; bear += vPts;
-    if (vol.dry) { bull = Math.max(0, bull - 1); bear = Math.max(0, bear - 1); }
+    if      (ema.goldenCross) bull += 5;        // EMA 50 crossed above 200 — strongest trend signal
+    else if (ema.deathCross)  bear += 5;
+    else if (ema.nearCross)   { bull += 2; bear += 2; } // approaching cross
+    else if (ema.uptrend)     bull += 1;
+    else                      bear += 1;
   }
   if (wk52) {
-    if (wk52.breakHigh) bull += 3; else if (wk52.atHigh) bull += 2;
-    if (wk52.breakLow)  bear += 3; else if (wk52.atLow)  bear += 2;
+    if (wk52.breakHigh) bull += 5;              // 52-week high breakout = major momentum
+    else if (wk52.atHigh) bull += 2;
+    if (wk52.breakLow)  bear += 5;
+    else if (wk52.atLow)  bear += 2;
   }
-  if (mom) {
-    if (mom.bullConf) bull += 2; else if (mom.rsiBull || mom.macdBull) bull += 1;
-    if (mom.bearConf) bear += 2; else if (mom.rsiBear || mom.macdBear) bear += 1;
+
+  // ── Tier 2: Breakout confirmation (weight 4) ──────────
+  // Strong signals that validate the breakout
+  if (pdhl) {
+    if (pdhl.bullBreakout) bull += 4;           // PDH break = proven intraday level broken
+    else if (pdhl.bearBreakout) bear += 4;
+    else if (pdhl.nearPDH) bull += 1;
+    else if (pdhl.nearPDL) bear += 1;
   }
-  if (nr7 && (nr7.isNR7 || nr7.isNR4)) { bull += 2; bear += 2; }
-  if (bb  && (bb.squeeze || bb.extremeSqueeze)) { bull += 2; bear += 2; }
-  if (weeklyMTF) { if (weeklyMTF.confirms) { bull += 2; bear += 2; } else if (weeklyMTF.aligned) { weeklyMTF.wBullish ? (bull += 1) : (bear += 1); } }
+  if (st) {
+    if (st.crossed) {
+      st.trend === 'UP' ? (bull += 4) : (bear += 4); // SuperTrend crossover = strong signal
+    } else {
+      st.trend === 'UP' ? (bull += 1) : (bear += 1);
+    }
+  }
   if (gap) {
-    if (gap.bigGapUp)   bull += 2; else if (gap.gapUp)   bull += 1;
-    if (gap.bigGapDown) bear += 2; else if (gap.gapDown) bear += 1;
+    if (gap.bigGapUp)   bull += 4;              // Big gap = major institutional move
+    else if (gap.gapUp)   bull += 2;
+    if (gap.bigGapDown) bear += 4;
+    else if (gap.gapDown) bear += 2;
   }
-  if (adx) { if (adx.strong) { bull += 1; bear += 1; } if (adx.adx < 20) { bull = Math.max(0, bull - 2); bear = Math.max(0, bear - 2); } }
+
+  // ── Tier 3: Trend strength (weight 3) ─────────────────
+  if (weeklyMTF) {
+    if (weeklyMTF.confirms) { bull += 3; bear += 3; } // weekly + daily aligned = high conviction
+    else if (weeklyMTF.aligned) { weeklyMTF.wBullish ? (bull += 2) : (bear += 2); }
+  }
+  if (adx) {
+    if (adx.strong) { bull += 2; bear += 2; }  // ADX > 25 = trending market
+    if (adx.veryStrong) { bull += 1; bear += 1; } // ADX > 35 = very strong trend
+    if (adx.adx < 20) { bull = Math.max(0, bull - 2); bear = Math.max(0, bear - 2); } // choppy market penalty
+  }
   if (rs) {
-    if (rs.outperforming  && rs.strongly) bull += 1;
-    if (rs.underperforming && rs.strongly) bear += 1;
+    if (rs.outperforming && rs.strongly)   bull += 3;  // strongly outperforming Nifty
+    else if (rs.outperforming)             bull += 1;
+    if (rs.underperforming && rs.strongly) bear += 3;
+    else if (rs.underperforming)           bear += 1;
   }
+
+  // ── Tier 4: Volume confirmation (weight 3) ────────────
+  // Volume breakout alone is not a signal but confirms everything else
+  if (vol) {
+    if (vol.strong)     { bull += 3; bear += 3; }  // 2× average = strong confirmation
+    else if (vol.confirmed) { bull += 2; bear += 2; }
+    else if (vol.weak)  { bull += 1; bear += 1; }
+    if (vol.dry) { bull = Math.max(0, bull - 2); bear = Math.max(0, bear - 2); } // very low volume = fake move
+  }
+
+  // ── Tier 5: Setup quality (weight 2) ──────────────────
+  // These improve quality but shouldn't drive the signal alone
+  if (mom) {
+    if (mom.bullConf)                   bull += 2;
+    else if (mom.rsiBull || mom.macdBull) bull += 1;
+    if (mom.bearConf)                   bear += 2;
+    else if (mom.rsiBear || mom.macdBear) bear += 1;
+  }
+  if (nr7)  { if (nr7.isNR7) { bull += 2; bear += 2; } else if (nr7.isNR4) { bull += 1; bear += 1; } }
+  if (bb)   { if (bb.extremeSqueeze) { bull += 2; bear += 2; } else if (bb.squeeze) { bull += 1; bear += 1; } }
+  if (sectorScore > 0) { bull += 2; } else if (sectorScore < 0) { bear += 2; } // sector momentum
+
+  // ── Tier 6: Wick rejection (weight 1) ─────────────────
   if (wick) {
-    if (wick.bearRejected) bull = Math.max(0, bull - 3);
-    if (wick.bullRejected) bear = Math.max(0, bear - 3);
-    if (wick.bullStrong)   { bull += 1; bear += 1; }
+    if (wick.bearRejected) { bull = Math.max(0, bull - 3); } // strong bearish wick kills bull signal
+    if (wick.bullRejected) { bear = Math.max(0, bear - 3); }
+    if (wick.bullStrong)   { bull += 1; }
+    if (wick.bearStrong)   { bear += 1; }
   }
-  if (sectorScore > 0) bull += 1; else if (sectorScore < 0) bear += 1;
+
+  // ── Cross-signal conflicts (penalty) ──────────────────
+  // Bull breakout but bearish wick = questionable
+  if (pdhl?.bullBreakout && wick?.bearRejected) bull  = Math.max(0, bull - 2);
+  if (pdhl?.bearBreakout && wick?.bullRejected) bear  = Math.max(0, bear - 2);
+  // EMA below all but trying to breakout bull = trend fight
+  if (ema?.belowAll && pdhl?.bullBreakout) bull = Math.max(0, bull - 3);
+  if (ema?.aboveAll && pdhl?.bearBreakout) bear = Math.max(0, bear - 3);
+
+  // ── Time-of-day penalty ────────────────────────────────
   const dominant = Math.max(bull, bear);
   const conflict = Math.min(bull, bear);
-  let raw = (dominant - conflict * 0.5) / 2.8;
-  if (phase === 'opening') raw -= 1.5;
-  else if (phase === 'closing') raw -= 0.5;
+  // Max possible raw ≈ 5+5+4+4+4+3+3+3+3+2+2+2+2+1 = 43
+  // Normalise with conflict reduction, divide by 4.3 → 10
+  let raw = (dominant - conflict * 0.4) / 4.3;
+  if (phase === 'opening') raw -= 1.0;  // first 15 min — volatile
+  else if (phase === 'closing') raw -= 0.5; // last 30 min
   const score = Math.min(10, Math.max(1, Math.round(raw)));
   return { bullScore: bull, bearScore: bear, score };
+}
+
+// ── applyIntradayBoost — add intraday signals to boScore result ──────────
+// Called after main boScore when 5-min candles are available
+export function applyIntradayBoost(scoreResult, intraData) {
+  if (!intraData) return scoreResult;
+  const { bullScore, bearScore, score } = scoreResult;
+  let boost = 0;
+  const isBull = bullScore >= bearScore;
+
+  if (intraData.confirm)           boost += 2; // PDH/PDL confirmed on 5m
+  if (intraData.volRatio >= 2)     boost += 2; // strong intraday volume surge
+  else if (intraData.volRatio >= 1.5) boost += 1;
+  if (intraData.emaBull && isBull) boost += 1; // 5m EMA aligned with direction
+  if (intraData.accelerating)      boost += 1; // momentum building intraday
+  if (intraData.aboveVWAP && isBull) boost += 1; // above VWAP = bullish
+  if (!intraData.aboveVWAP && !isBull) boost += 1; // below VWAP = bearish
+
+  // Negative: breakout WITHOUT volume is suspect
+  if (intraData.confirm && intraData.volRatio < 1) boost -= 2;
+
+  const newScore = Math.min(10, Math.max(1, Math.round(score + boost / 2)));
+  return { ...scoreResult, score: newScore, intraBoost: boost };
 }
 
 export function boDirection(ema, pdhl, st) {
