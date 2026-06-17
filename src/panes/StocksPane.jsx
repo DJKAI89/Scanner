@@ -13,6 +13,7 @@ import {
   countIndicatorsEx, getRec, autoSLTarget, calcEntryTrigger, detectReversal,
   calcMACD, isNearSupport, calcRSIDivergence, getSector, calcConfidence, calcVWAP,
   calcVWAPBands, applyFIIBias, applyCalibration, applyAdaptWeights, calcEMA, calcIVPercentile,
+  applyIntradayBoost,
 } from '../services/technical';
 
 // Delivery % from Upstox quote (same as HTML getDeliveryPct)
@@ -929,6 +930,49 @@ export default function StocksPane() {
       const loggablePicks = finalPicks.filter(p=>!p._fallback && p.rec!=='WATCH' && p.rec!=='AVOID');
       if (loggablePicks.length&&gh?.token) logSignals(gh,loggablePicks.map(p=>buildStockSignal(p,vixVal)),vixVal,lg);
       checkPickAlerts(nextPicks, cfg);
+
+      // ── Background intraday enrichment for picks ───────
+      // Fetch 5-min candles for each pick → VWAP, intraday momentum, volume confirmation
+      if (marketStatus.open && nextPicks.length > 0) {
+        const topPicks = nextPicks.filter(p => !p._fallback).slice(0, 15);
+        Promise.allSettled(topPicks.map(async (pick, idx) => {
+          await sleep(idx * 250);
+          try {
+            const c5 = await fetchIntraday(pick.key, '5minute', resolvedToken, onTokenExpired);
+            if (!c5 || c5.length < 5) return;
+            const vwap5       = calcVWAP(c5);
+            const vwapSig     = vwap5 ? calcStockVWAPSignal(pick.ltp, vwap5) : null;
+            const closes5     = c5.map(c => +c[4]).reverse();
+            const ema5v       = calcEMA(closes5, 5);
+            const ema13v      = calcEMA(closes5, 13);
+            const intraVolCur = +(c5[0]?.[5] || 0);
+            const intraVolAvg = c5.length > 5
+              ? c5.slice(1, Math.min(21,c5.length)).reduce((s,c)=>s+(+c[5]||0),0) / Math.min(20,c5.length-1)
+              : 0;
+            const intraVolRatio = intraVolAvg > 0 ? +(intraVolCur/intraVolAvg).toFixed(2) : null;
+            const intraBull   = ema5v[ema5v.length-1] != null && ema13v[ema13v.length-1] != null
+              ? ema5v[ema5v.length-1] > ema13v[ema13v.length-1] : null;
+            const intraAccel  = ema5v.length >= 2 && ema5v[ema5v.length-1] > ema5v[ema5v.length-2];
+            // Adjust confidence based on intraday signals
+            let confBoost = 0;
+            if (vwapSig?.aboveVWAP && (pick.rec==='BUY'||pick.rec==='STRONG BUY')) confBoost += 4;
+            if (vwapSig?.aboveVWAP === false && pick.rec?.includes('SELL'))         confBoost += 4;
+            if (intraVolRatio >= 2)   confBoost += 5;
+            else if (intraVolRatio >= 1.5) confBoost += 3;
+            else if (intraVolRatio < 0.5)  confBoost -= 4; // very low intraday volume
+            if (intraBull !== null && intraBull === (pick.rec==='BUY'||pick.rec==='STRONG BUY')) confBoost += 3;
+            if (intraAccel) confBoost += 2;
+            setPicks(prev => prev.map(p => p.key === pick.key ? {
+              ...p,
+              stockVWAP: vwapSig,
+              intraVolRatio,
+              intraBull,
+              intraAccel,
+              conf: Math.min(99, Math.max(1, Math.round(p.conf + confBoost))),
+            } : p));
+          } catch(_) {}
+        }));
+      }
     } catch(e) {
       setPicksError(e.message); setStatusDot('err'); setStatusTxt('Error');
       lg('Scan error: '+e.message,'e');

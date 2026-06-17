@@ -10,7 +10,7 @@ import {
   getRec, autoSLTarget, calcEntryTrigger, detectReversal, calcMACD,
   isNearSupport, calcRSIDivergence, getSignalStrength,
   calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain,
-  applyFIIBias, calcVolumeSurge,
+  applyFIIBias, calcVolumeSurge, calcEMA,
 } from '../services/technical';
 import { fmt, fmtVol } from '../utils/formatters';
 import { getIST, getISTDate, sleep, localIsOpen } from '../utils/marketTime';
@@ -286,17 +286,43 @@ export default function LookupPane() {
 
       let tf5 = {};
       let marketCtx = null;
-      if (localIsOpen()) {
-        setProgress('Loading 5-min intraday candles...');
-        try {
-          const c5 = await fetchIntraday(inst.key, '5minute', token, onTokenExpired);
-          if (c5.length >= 3) {
-            const cl5 = c5.map((c) => +c[4]).reverse();
-            tf5 = { rsi: calcRSI(cl5), vwap: calcVWAP(c5), trend: cl5.at(-1) > cl5[0] ? 'UP' : 'DOWN' };
-            marketCtx = computeCtxFromCandles(c5, ltp, chgPct, 0, null);
-          }
-        } catch (e) {}
-      }
+      let intraData = null;
+      setProgress('Loading intraday candles...');
+      try {
+        // Always try intraday — if market closed, fetchIntraday returns [] safely
+        const c5 = await fetchIntraday(inst.key, '5minute', token, onTokenExpired);
+        if (c5.length >= 3) {
+          const c5chron = [...c5].reverse();
+          const cl5     = c5chron.map(c => +c[4]);
+
+          // EMA momentum
+          const ema5v   = calcEMA(cl5, 5);
+          const ema13v  = calcEMA(cl5, 13);
+          const emaBull = ema5v[ema5v.length-1] != null && ema13v[ema13v.length-1] != null
+            ? ema5v[ema5v.length-1] > ema13v[ema13v.length-1] : null;
+          const accel   = ema5v.length >= 2 && ema5v[ema5v.length-1] > ema5v[ema5v.length-2];
+
+          // Volume
+          const curVol  = +(c5chron[c5chron.length-1]?.[5] || 0);
+          const avgVol  = c5chron.length > 5
+            ? c5chron.slice(0,-1).reduce((s,c)=>s+(+c[5]||0),0) / (c5chron.length-1) : 0;
+          const volRatio = avgVol > 0 ? +(curVol/avgVol).toFixed(2) : null;
+
+          // VWAP
+          const vwap5   = calcVWAP(c5);
+          const aboveVWAP = vwap5 ? ltp >= vwap5 : null;
+
+          // Intraday high/low vs PDH/PDL
+          const intraHi  = Math.max(...c5chron.map(c => +c[2]));
+          const intraLo  = Math.min(...c5chron.map(c => +c[3]));
+
+          tf5 = { rsi:calcRSI(cl5), vwap:vwap5, trend:cl5[cl5.length-1]>cl5[0]?'UP':'DOWN',
+            volRatio, emaBull, accelerating:accel };
+          intraData = { volRatio, emaBull, accelerating:accel, aboveVWAP, vwap:vwap5,
+            intraHi, intraLo, curVol, avgVol };
+          marketCtx = computeCtxFromCandles(c5, ltp, chgPct, 0, null);
+        }
+      } catch (e) { lg('Intraday fetch: ' + e.message, 'w'); }
 
       setProgress('Checking option contracts...');
       let foData = { unsupported: true, picks: [] };
@@ -364,7 +390,7 @@ export default function LookupPane() {
         foData = { error: e.message, picks: [] };
       }
 
-      setResult({ inst, q, ltp, chgPct, chgPts, tech, tf30, tf5, marketCtx, foData, time:getIST() });
+      setResult({ inst, q, ltp, chgPct, chgPts, tech, tf30, tf5, marketCtx, foData, intraData, time:getIST() });
       setProgress('');
     } catch (e) {
       setError(e.message);
@@ -495,13 +521,51 @@ export default function LookupPane() {
 
           {(r.tf30?.rsi || r.tf5?.rsi) && (
             <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:14, marginBottom:12 }}>
-              <div style={{ fontSize:11, fontWeight:700, marginBottom:10 }}>Multi-Timeframe</div>
+              <div style={{ fontSize:11, fontWeight:700, marginBottom:10 }}>Multi-Timeframe Analysis</div>
               <div className="stats-g">
                 {r.tech.rsi && <StatCard label="DAILY RSI" value={r.tech.rsi?.toFixed(1)} sub="Daily" valClass={r.tech.rsi < (cfg.rsiOS||35) ? 'up' : r.tech.rsi > (cfg.rsiOB||65) ? 'dn' : 'bl'} />}
-                {r.tf30?.rsi && <StatCard label="30-MIN RSI" value={r.tf30.rsi.toFixed(1)} sub={`30-min · ${r.tf30.trend}`} valClass={r.tf30.trend === 'UP' ? 'up' : 'dn'} />}
-                {r.tf5?.rsi && <StatCard label="5-MIN RSI" value={r.tf5.rsi.toFixed(1)} sub={`5-min · ${r.tf5.trend}`} valClass={r.tf5.trend === 'UP' ? 'up' : 'dn'} />}
-                {r.tf5?.vwap && <StatCard label="INTRA VWAP" value={`Rs ${fmt(r.tf5.vwap)}`} sub={r.ltp >= r.tf5.vwap ? 'Above VWAP' : 'Below VWAP'} valClass={r.ltp >= r.tf5.vwap ? 'up' : 'dn'} />}
+                {r.tf30?.rsi && <StatCard label="30-MIN RSI" value={r.tf30.rsi.toFixed(1)} sub={`30m · ${r.tf30.trend}`} valClass={r.tf30.trend === 'UP' ? 'up' : 'dn'} />}
+                {r.tf5?.rsi && <StatCard label="5-MIN RSI" value={r.tf5.rsi.toFixed(1)} sub={`5m · ${r.tf5.trend}`} valClass={r.tf5.trend === 'UP' ? 'up' : 'dn'} />}
+                {r.tf5?.vwap && <StatCard label="INTRA VWAP" value={`₹${fmt(r.tf5.vwap)}`} sub={r.ltp >= r.tf5.vwap ? '▲ Above VWAP' : '▼ Below VWAP'} valClass={r.ltp >= r.tf5.vwap ? 'up' : 'dn'} />}
+                {r.tf5?.volRatio != null && <StatCard label="INTRA VOL" value={`${r.tf5.volRatio}×`} sub="vs avg 5m candle" valClass={r.tf5.volRatio >= 2 ? 'up' : r.tf5.volRatio >= 1.5 ? 'am' : 'dn'} />}
+                {r.tf5?.emaBull != null && <StatCard label="5M EMA" value={r.tf5.emaBull ? '▲ Bull' : '▼ Bear'} sub="EMA 5 vs 13" valClass={r.tf5.emaBull ? 'up' : 'dn'} />}
               </div>
+
+              {/* Intraday signal badges */}
+              {r.intraData && (r.intraData.volRatio >= 1.5 || r.intraData.emaBull != null || r.intraData.accelerating) && (
+                <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginTop:10 }}>
+                  {r.intraData.volRatio >= 2 && (
+                    <span style={{ fontSize:9, fontWeight:800, background:'#fdf4ff', color:'#7c3aed', border:'1px solid #ddd6fe', borderRadius:6, padding:'3px 8px' }}>
+                      🔥 Volume surge {r.intraData.volRatio}× intraday
+                    </span>
+                  )}
+                  {r.intraData.volRatio >= 1.5 && r.intraData.volRatio < 2 && (
+                    <span style={{ fontSize:9, fontWeight:700, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:6, padding:'3px 8px' }}>
+                      📊 Elevated intraday volume {r.intraData.volRatio}×
+                    </span>
+                  )}
+                  {r.intraData.emaBull && (
+                    <span style={{ fontSize:9, fontWeight:700, background:'#f0fdf4', color:'#16a34a', border:'1px solid #86efac', borderRadius:6, padding:'3px 8px' }}>
+                      ⚡ 5m EMA bullish trend
+                    </span>
+                  )}
+                  {r.intraData.accelerating && (
+                    <span style={{ fontSize:9, fontWeight:700, background:'#fff7ed', color:'#c2410c', border:'1px solid #fed7aa', borderRadius:6, padding:'3px 8px' }}>
+                      🚀 Intraday momentum accelerating
+                    </span>
+                  )}
+                  {r.intraData.aboveVWAP && (
+                    <span style={{ fontSize:9, fontWeight:700, background:'#f0fdf4', color:'#16a34a', border:'1px solid #86efac', borderRadius:6, padding:'3px 8px' }}>
+                      ↑ Above VWAP ₹{r.intraData.vwap?.toFixed(1)}
+                    </span>
+                  )}
+                  {r.intraData.aboveVWAP === false && (
+                    <span style={{ fontSize:9, fontWeight:700, background:'#fef2f2', color:'#dc2626', border:'1px solid #fca5a5', borderRadius:6, padding:'3px 8px' }}>
+                      ↓ Below VWAP ₹{r.intraData.vwap?.toFixed(1)}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

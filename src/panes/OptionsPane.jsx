@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
-import { fetchQ, fetchOptions, fetchIntraday, resolveAccessToken } from '../services/api';
+import { fetchQ, fetchOptions, fetchIntraday, fetchCandles, resolveAccessToken } from '../services/api';
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST, sleep } from '../utils/marketTime';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK, isWeeklyExpiryDay, getTimeOfDayPenalty } from '../constants/config';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias, applyAdaptWeights } from '../services/technical';
+import LiveChart from '../components/LiveChart';
 import { useIndexFeed } from '../hooks/useIndexFeed.js';
 import { logSignals, buildOptionSignal } from '../services/github';
 
@@ -270,23 +271,20 @@ function OptionCard({ pick, cfg: cardCfg }) {
         </div>
       )}
 
-      {/* Mini intraday chart */}
-      {pick.candles?.length >= 5 && (()=>{
-        const ch = pick.candles, W=320, H=100, pad={t:6,r:4,b:14,l:2};
-        const cw=W-pad.l-pad.r, ch2=H-pad.t-pad.b;
-        const hi=Math.max(...ch.map(c=>+c[2])), lo=Math.min(...ch.map(c=>+c[3]));
-        const range=hi-lo; if(range<=0) return null;
-        const py=p=>pad.t+ch2*(1-(p-lo)/range);
-        const sw=cw/ch.length, bw=Math.max(2,sw*0.6);
-        let cs='';
-        ch.forEach((c,i)=>{const [,o,h,l,cl]=c.map(Number);const up=cl>=o;const col=up?'#16a34a':'#dc2626';const bt=py(Math.max(o,cl));const bh=Math.max(1,py(Math.min(o,cl))-bt);const x=pad.l+(i+0.5)*sw;cs+=`<line x1="${x}" y1="${py(h)}" x2="${x}" y2="${py(l)}" stroke="${col}" stroke-width="1" opacity="0.8"/><rect x="${(x-bw/2).toFixed(1)}" y="${bt.toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${col}" rx="0.5"/>`;});
-        return(
-          <div style={{marginBottom:8}}>
-            <div style={{fontSize:8,color:'#64748b',fontWeight:700,marginBottom:3}}>📈 {pick.und} INTRADAY (5-min · last {Math.min(20,ch.length)} candles)</div>
-            <div dangerouslySetInnerHTML={{__html:`<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" xmlns="http://www.w3.org/2000/svg" style="display:block;border-radius:6px;background:#f8fafc;border:1px solid #e2e8f0">${cs}</svg>`}}/>
-          </div>
-        );
-      })()}
+      {/* Live scrollable chart — replaces static mini chart */}
+      {pick.instrKey && (
+        <div style={{ marginBottom:8, borderTop:'1px solid #e2e8f0', paddingTop:10 }}>
+          <LiveChart
+            instrKey={pick.instrKey}
+            candles={pick.candles || []}
+            entry={pick.entry}
+            sl={pick.sl}
+            target={pick.tgt}
+            symbol={`${pick.und} ${pick.strike} ${pick.type}`}
+            interval="5minute"
+          />
+        </div>
+      )}
 
       <div className={`c-why ${rc}`}>{pick.type==='CE'?'📈 Call':'📉 Put'} on {pick.und} · Strike {pick.strike}. Capital: ₹{fmt(pick.amtRequired||0,0)} for {pick.lot} qty. Max profit ₹{fmt(pick.maxProfit||0,0)} if target hit.</div>
     </div>
@@ -369,7 +367,7 @@ export default function OptionsPane() {
       if (!nQ?.last_price) throw new Error('Nifty quote missing');
       const vixVal    = vQ?.last_price || 15;
       const nLtp      = nQ.last_price;
-      const nNetChg   = nQ.net_change ?? (nQ.ohlc?.open ? nLtp - nQ.ohlc.open : 0);
+      const nNetChg   = nQ.net_change ?? (nQ.ohlc?.close ? nLtp - nQ.ohlc.close : 0);
       const nChgPct   = nLtp > 0 ? (nNetChg / nLtp) * 100 : 0;
       const niftyBull = nChgPct > -0.3;
       setVix(vixVal);
@@ -500,13 +498,23 @@ export default function OptionsPane() {
             const q = foSpots2[inst.key]; const spot = q?.last_price || 0;
             if (spot < 1) { lg(inst.s + ': no spot', 'w'); continue; }
             const spotChg = getChgPct(q);
-            // Fetch 5-min intraday candles for this stock so compositeScore has real data
+            // Fetch both daily (for EMA50/200 context) AND 5-min intraday (for momentum/VWAP)
             let stkCandles = [];
-            try { stkCandles = await fetchIntraday(inst.key, '5minute', accessToken, onTokenExpired); } catch(_) {}
+            let stkDailyCandles = [];
+            try {
+              const today = new Date().toISOString().split('T')[0];
+              const from365 = new Date(Date.now() - 365*86400000).toISOString().split('T')[0];
+              [stkCandles, stkDailyCandles] = await Promise.all([
+                fetchIntraday(inst.key, '5minute', accessToken, onTokenExpired).catch(() => []),
+                fetchCandles(inst.key, from365, today, 'day', accessToken, onTokenExpired).catch(() => []),
+              ]);
+            } catch(_) {}
+            // Use daily candles for EMA200 — intraday for momentum signals
+            const candlesForCtx = stkDailyCandles.length >= 50 ? stkDailyCandles : stkCandles;
             const ctxKey = SECTOR_CTX_MAP[inst.s] || 'NIFTY';
             const baseCtx = ctxMap[ctxKey] || ctxMap['NIFTY'] || {};
             // Compute full context with real candles instead of empty array
-            const stkCtx = { ...(computeCtxFromCandles(stkCandles, spot, spotChg, vixVal, null) || baseCtx) };
+            const stkCtx = { ...(computeCtxFromCandles(candlesForCtx, spot, spotChg, vixVal, null) || baseCtx) };
             stkCtx.spot = spot; stkCtx.dayChange = spotChg;
             stkCtx.bullish = stkCtx.compositeScore > 0;
             stkCtx.neutral = Math.abs(stkCtx.compositeScore || 0) < 0.5;
@@ -651,7 +659,7 @@ export default function OptionsPane() {
           </div>
 
           {/* Max Pain + OI Walls */}
-          {false && groups.filter(g => g.maxPain > 0).map(g => (
+          {groups.filter(g => g.maxPain > 0).map(g => (
             <div key={g.name+'-mp'} style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, padding:'8px 12px', marginBottom:8, display:'flex', gap:16, flexWrap:'wrap', fontSize:10, alignItems:'center' }}>
               <span style={{ fontWeight:700 }}>{g.name}</span>
               <span>🎯 Max Pain: <b style={{ color:'#7c3aed' }}>₹{fmt(g.maxPain)}</b></span>
