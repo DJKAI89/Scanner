@@ -277,6 +277,35 @@ export default function StockCard({ pick: p, rank, cfg = {} }) {
         )}
       </div>
 
+      {/* Intraday enrichment badges — shown after background 5m fetch */}
+      {(p.stockVWAP || p.intraVolRatio >= 1.5 || p.intraBull != null) && (
+        <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:6 }}>
+          {p.stockVWAP && (
+            <span style={{ fontSize:7, fontWeight:800, borderRadius:5, padding:'2px 6px',
+              background: p.stockVWAP.aboveVWAP ? '#f0fdf4' : '#fef2f2',
+              color:      p.stockVWAP.aboveVWAP ? '#16a34a' : '#dc2626',
+              border: `1px solid ${p.stockVWAP.aboveVWAP ? '#86efac' : '#fca5a5'}`,
+            }}>{p.stockVWAP.aboveVWAP ? '↑' : '↓'} VWAP ₹{p.stockVWAP.vwap?.toFixed(1)}</span>
+          )}
+          {p.intraVolRatio >= 2 && (
+            <span style={{ fontSize:7, fontWeight:800, background:'#fdf4ff', color:'#7c3aed', border:'1px solid #ddd6fe', borderRadius:5, padding:'2px 6px' }}>
+              🔥 Vol {p.intraVolRatio}×
+            </span>
+          )}
+          {p.intraVolRatio >= 1.5 && p.intraVolRatio < 2 && (
+            <span style={{ fontSize:7, fontWeight:700, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:5, padding:'2px 6px' }}>
+              📊 Vol {p.intraVolRatio}×
+            </span>
+          )}
+          {p.intraBull === true && (
+            <span style={{ fontSize:7, fontWeight:700, background:'#f0fdf4', color:'#16a34a', border:'1px solid #86efac', borderRadius:5, padding:'2px 6px' }}>⚡ 5m Bull</span>
+          )}
+          {p.intraAccel && (
+            <span style={{ fontSize:7, fontWeight:700, background:'#fff7ed', color:'#c2410c', border:'1px solid #fed7aa', borderRadius:5, padding:'2px 6px' }}>🚀 Accel</span>
+          )}
+        </div>
+      )}
+
       {/* 10 indicator dots */}
       <div className="c-inds">
         {indLbls.map((l,j)=><span key={l} className={`ind ${di[j]?'ok':di[j]===false&&p.rsi!=null?'no':'na'}`}>{l}</span>)}
@@ -284,6 +313,45 @@ export default function StockCard({ pick: p, rank, cfg = {} }) {
           <span key={k} className="ind ok">📊{k.replace(/([A-Z])/g,' $1').trim()}</span>
         )}
       </div>
+
+      {/* Intraday enrichment badges */}
+      {(p.stockVWAP || p.intraVolRatio >= 1.5 || p.intraBull !== undefined) && (
+        <div style={{ display:'flex', gap:3, flexWrap:'wrap', marginBottom:6, marginTop:2 }}>
+          {p.stockVWAP && (
+            <span style={{ fontSize:8, fontWeight:700, padding:'2px 6px', borderRadius:8,
+              background: p.stockVWAP.aboveVWAP?'#f0fdf4':'#fef2f2',
+              color:      p.stockVWAP.aboveVWAP?'#16a34a':'#ef4444',
+              border:`1px solid ${p.stockVWAP.aboveVWAP?'#86efac':'#fca5a5'}`,
+            }}>
+              {p.stockVWAP.aboveVWAP?'↑':'↓'} VWAP {p.stockVWAP.distPct>0?'+':''}{p.stockVWAP.distPct}%
+            </span>
+          )}
+          {p.intraVolRatio >= 2 && (
+            <span style={{ fontSize:8, fontWeight:700, padding:'2px 6px', borderRadius:8, background:'#fdf4ff', color:'#7c3aed', border:'1px solid #ddd6fe' }}>
+              🔥 Vol {p.intraVolRatio}× intraday
+            </span>
+          )}
+          {p.intraVolRatio >= 1.5 && p.intraVolRatio < 2 && (
+            <span style={{ fontSize:8, fontWeight:700, padding:'2px 6px', borderRadius:8, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe' }}>
+              📊 Vol {p.intraVolRatio}× 5m
+            </span>
+          )}
+          {p.intraBull !== null && (
+            <span style={{ fontSize:8, fontWeight:700, padding:'2px 6px', borderRadius:8,
+              background: p.intraBull?'#f0fdf4':'#fef2f2',
+              color:      p.intraBull?'#16a34a':'#ef4444',
+              border:`1px solid ${p.intraBull?'#86efac':'#fca5a5'}`,
+            }}>
+              {p.intraBull?'⚡ 5m EMA↑':'⚡ 5m EMA↓'}
+            </span>
+          )}
+          {p.intraAccel && (
+            <span style={{ fontSize:8, fontWeight:700, padding:'2px 6px', borderRadius:8, background:'#fff7ed', color:'#c2410c', border:'1px solid #fed7aa' }}>
+              🚀 Accelerating
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Why */}
       <div className={`c-why ${cls}`}>
