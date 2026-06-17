@@ -3,8 +3,7 @@ import { fmt, fmtVol } from '../utils/formatters';
 import { getSignalStrength, calcEMA } from '../services/technical';
 import LiveChart from './LiveChart';
 
-// Inline mini chart (shared logic with StocksPane)
-function drawMiniChart(candles, closes, opts = {}) {
+) {
   if (!candles || candles.length < 3) return null;
   const W = opts.width || 320, H = opts.height || 92;
   const PAD = { top: 6, right: 4, bottom: 14, left: 2 };
@@ -115,11 +114,6 @@ export default function StockCard({ pick: p, rank, cfg = {} }) {
   const volLabel = volRatio==null?'—':volRatio>=2?`${volRatio}x avg 🔥`:volRatio>=1.5?`${volRatio}x avg ↑`:volRatio>=0.8?`${volRatio}x avg`:`${volRatio}x avg ↓`;
   const volCls   = volRatio==null?'':volRatio>=1.5?'up':volRatio>=0.8?'am':'dn';
 
-  // Mini candlestick chart
-  const chart = p.recentCandles?.length >= 3
-    ? drawMiniChart(p.recentCandles, p.closes||[], {entry:et?.trigger||ltp, target:p.target, sl:p.sl})
-    : null;
-
   return (
     <div className={`card ${cls}`}>
       {/* Fallback banner */}
@@ -200,16 +194,6 @@ export default function StockCard({ pick: p, rank, cfg = {} }) {
           </div>
           <div style={{fontSize:18,fontWeight:800,color:triggered?'#15803d':'#1d4ed8'}}>₹{fmt(et.trigger)}</div>
           <div style={{fontSize:9,color:'#64748b',marginTop:1}}>{et.method}{et.note?' · '+et.note:''}</div>
-        </div>
-      )}
-
-      {/* Mini candlestick chart — before trade setup, same as HTML */}
-      {chart&&(
-        <div style={{marginBottom:8}}>
-          <div style={{fontSize:8,fontWeight:700,color:'#94a3b8',marginBottom:2,letterSpacing:'.5px'}}>
-            20-DAY CHART{chart.ema50Val?` · EMA50 ₹${fmt(chart.ema50Val,0)}`:''}{chart.ema200Val?` · EMA200 ₹${fmt(chart.ema200Val,0)}`:''}
-          </div>
-          <div dangerouslySetInnerHTML={{__html:chart.svgStr}}/>
         </div>
       )}
 
@@ -371,6 +355,8 @@ export default function StockCard({ pick: p, rank, cfg = {} }) {
             sl={p.sl}
             target={p.target}
             symbol={p.s}
+            livePrice={ltp}
+            liveChgPct={p.chgPct}
           />
         </div>
       )}

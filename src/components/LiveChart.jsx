@@ -102,6 +102,8 @@ export default function LiveChart({
   symbol = '',
   interval = 'day',
   style  = {},
+  livePrice = null,    // optional: parent already has a live tick — avoids duplicate WS subscription
+  liveChgPct = null,   // optional: parent's computed change % to keep header in sync with card
 }) {
   const { token, marketStatus } = useApp();
   const accessToken = resolveAccessToken(token);
@@ -178,12 +180,15 @@ export default function LiveChart({
   }, [instrKey, selInterval]); // eslint-disable-line
 
   // ── Live WS tick ─────────────────────────────────────────────
-  const wsKeys = useMemo(() => instrKey ? [instrKey] : [], [instrKey]);
+  // Skip internal WS if parent already provides a live price — prevents duplicate
+  // subscriptions to the same instrument disagreeing with the parent card's price
+  const useOwnFeed = livePrice == null;
+  const wsKeys = useMemo(() => (useOwnFeed && instrKey) ? [instrKey] : [], [instrKey, useOwnFeed]);
   const { lastPrices, connected } = useMarketFeed(
     accessToken, wsKeys, wsKeys.length > 0 && !!marketStatus.open,
     { mode: 'ltpc', pollFallback: true }
   );
-  const tick = instrKey ? lastPrices[instrKey] : null;
+  const tick = useOwnFeed ? (instrKey ? lastPrices[instrKey] : null) : { ltp: livePrice };
 
   useEffect(() => {
     if (!tick?.ltp || !allCandles.length) return;
@@ -234,9 +239,9 @@ export default function LiveChart({
     return nums.slice(start, end);
   }, [allCandles, liveCandle, viewOffset, visibleCount]);
 
-  const ltp = tick?.ltp || display[display.length - 1]?.[4] || 0;
+  const ltp = (useOwnFeed ? tick?.ltp : livePrice) || display[display.length - 1]?.[4] || 0;
   const prevClose = display[display.length - 2]?.[4] || ltp;
-  const chgPct = prevClose > 0 ? (ltp - prevClose) / prevClose * 100 : 0;
+  const chgPct = liveChgPct != null ? liveChgPct : (prevClose > 0 ? (ltp - prevClose) / prevClose * 100 : 0);
   const chgColor = chgPct >= 0 ? '#16a34a' : '#ef4444';
 
   // ── Chart dimensions ─────────────────────────────────────────
@@ -372,7 +377,7 @@ export default function LiveChart({
           <span style={{ fontSize:17, fontWeight:900, color:'#0f172a' }}>₹{fmtP(ltp)}</span>
           <span style={{ fontSize:11, fontWeight:700, color:chgColor }}>{chgPct>=0?'+':''}{chgPct.toFixed(2)}%</span>
         </div>
-        {connected && marketStatus.open && (
+        {useOwnFeed && connected && marketStatus.open && (
           <div style={{ display:'flex', alignItems:'center', gap:3, fontSize:9, color:'#16a34a', fontWeight:700 }}>
             <div style={{ width:6, height:6, borderRadius:'50%', background:'#16a34a', animation:'pulse 1.5s infinite' }} />
             LIVE {tickTime}
