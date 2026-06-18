@@ -7,7 +7,7 @@ import { getIST, sleep } from '../utils/marketTime';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK, isWeeklyExpiryDay, getTimeOfDayPenalty } from '../constants/config';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias, applyAdaptWeights } from '../services/technical';
-import LiveChart from '../components/LiveChart';
+import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote } from '../components/cardKit';
 import { useIndexFeed } from '../hooks/useIndexFeed.js';
 import { logSignals, buildOptionSignal } from '../services/github';
 
@@ -100,21 +100,16 @@ function calcStructure(chain) {
 
 function OptionCard({ pick, cfg: cardCfg }) {
   const isBuy   = pick.action === 'BUY';
-  const bg      = isBuy ? '#f0fdf4' : '#fef2f2';
-  const bdr     = isBuy ? '#16a34a' : '#dc2626';
-  const rc      = isBuy ? 'buy' : pick.action === 'SELL' ? 'sell' : 'watch';
-  const dc      = Math.abs(pick.delta || 0) >= 0.5 ? 'up' : Math.abs(pick.delta || 0) >= 0.3 ? 'am' : 'dn';
-  const ivc     = (pick.iv || 0) >= 35 ? 'dn' : (pick.iv || 0) >= 20 ? 'am' : 'up';
+  const dir     = isBuy ? 'bull' : pick.action === 'SELL' ? 'bear' : 'neutral';
+  const dc      = Math.abs(pick.delta || 0) >= 0.5 ? '#16a34a' : Math.abs(pick.delta || 0) >= 0.3 ? '#d97706' : '#dc2626';
+  const ivc     = (pick.iv || 0) >= 35 ? '#dc2626' : (pick.iv || 0) >= 20 ? '#d97706' : '#16a34a';
   const minConf = cardCfg?.minOptConf || 65;
-  const confC   = pick.confidence >= minConf ? 'up' : pick.confidence >= minConf - 15 ? 'am' : 'dn';
   const slPct   = pick.entry > 0 ? ((pick.entry - pick.sl) / pick.entry * 100).toFixed(2) : 0;
   const tgtPct  = pick.entry > 0 ? ((pick.tgt - pick.entry) / pick.entry * 100).toFixed(2) : 0;
   const vix_    = pick.vix || 15;
   const ivRatio = pick.iv > 0 && vix_ > 0 ? +(pick.iv / vix_).toFixed(2) : null;
   const ivCheap = ivRatio != null && ivRatio < 0.80;
   const ivRich  = ivRatio != null && ivRatio > 1.40;
-  const ivLabel = ivCheap ? `💡 IV CHEAP (${ivRatio}× VIX)` : ivRich ? `🔥 IV RICH (${ivRatio}× VIX)` : null;
-  const ivLabelCol = ivCheap ? '#065f46' : ivRich ? '#991b1b' : '#374151';
   const isExpiry = isWeeklyExpiryDay();
   const isOpening = (() => { const d = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'})); const m = d.getHours()*60+d.getMinutes(); return m>=555&&m<=585; })();
   const portSz = cardCfg?.portSize || 500000, riskPct2 = cardCfg?.riskPct || 2;
@@ -129,10 +124,9 @@ function OptionCard({ pick, cfg: cardCfg }) {
   const isCE_  = pick.type === 'CE';
   const beSpot = spot_ > 0 ? (isCE_ ? pick.strike + (pick.entry||0) : pick.strike - (pick.entry||0)) : 0;
   const bePct  = spot_ > 0 ? ((beSpot - spot_) / spot_ * 100).toFixed(2) : '?';
-  const oiMap  = { LONG_BUILD:{txt:'📈 Long Build-up',bg:'#f0fdf4',br:'#86efac',c:'#15803d'}, SHORT_COVER:{txt:'↩ Short Covering',bg:'#f0fdf4',br:'#bbf7d0',c:'#166534'}, SHORT_BUILD:{txt:'📉 Short Build-up',bg:'#fef2f2',br:'#fca5a5',c:'#dc2626'}, LONG_UNWIND:{txt:'↪ Long Unwinding',bg:'#fef2f2',br:'#fecaca',c:'#991b1b'} };
-  const ivEnvMap = { EXPANDING:{txt:'🔥 IV Expanding',bg:'#fff7ed',br:'#fed7aa',c:'#c2410c'}, RISING:{txt:'↑ IV Rising',bg:'#fffbeb',br:'#fde68a',c:'#92400e'}, CONTRACTING:{txt:'❄ IV Contracting',bg:'#eff6ff',br:'#bfdbfe',c:'#1d4ed8'}, FALLING:{txt:'↓ IV Falling',bg:'#f0f9ff',br:'#bae6fd',c:'#0369a1'} };
-  const pzoneColor = pick.priceZone === 'abovePDH' || pick.priceZone === 'nearPDH' ? '#15803d' : pick.priceZone === 'belowPDL' || pick.priceZone === 'nearPDL' ? '#991b1b' : '#92400e';
-  const pzoneBg = pick.priceZone === 'abovePDH' || pick.priceZone === 'nearPDH' ? '#f0fdf4' : pick.priceZone === 'belowPDL' || pick.priceZone === 'nearPDL' ? '#fef2f2' : '#fffbeb';
+  const oiMap  = { LONG_BUILD:{txt:'📈 Long Build-up',tone:'green'}, SHORT_COVER:{txt:'↩ Short Covering',tone:'green'}, SHORT_BUILD:{txt:'📉 Short Build-up',tone:'red'}, LONG_UNWIND:{txt:'↪ Long Unwinding',tone:'red'} };
+  const ivEnvMap = { EXPANDING:{txt:'🔥 IV Expanding',tone:'amber'}, RISING:{txt:'↑ IV Rising',tone:'amber'}, CONTRACTING:{txt:'❄ IV Contracting',tone:'blue'}, FALLING:{txt:'↓ IV Falling',tone:'blue'} };
+  const pzoneTone = pick.priceZone === 'abovePDH' || pick.priceZone === 'nearPDH' ? 'green' : pick.priceZone === 'belowPDL' || pick.priceZone === 'nearPDL' ? 'red' : 'amber';
   const pzoneLabel = pick.priceZone === 'abovePDH' ? `📈 Above PDH ₹${pick.pdh||''} — breakout zone (+10 conf)` : pick.priceZone === 'nearPDH' ? `📈 Near PDH ₹${pick.pdh||''} — approaching breakout (+5 conf)` : pick.priceZone === 'belowPDL' ? `📉 Below PDL ₹${pick.pdl||''} — breakdown zone (+10 conf)` : pick.priceZone === 'nearPDL' ? `📉 Near PDL ₹${pick.pdl||''} — approaching breakdown (+5 conf)` : `⚠ Mid-range (PDH ₹${pick.pdh||'?'} / PDL ₹${pick.pdl||'?'}) — caution (-18 conf)`;
 
   const scenarios = [-2,-1,0,1,2].map(pct => {
@@ -141,105 +135,91 @@ function OptionCard({ pick, cfg: cardCfg }) {
     return { pct, newPrem:+newPrem.toFixed(2), pnl:+pnl.toFixed(2), pnlPct:pick.entry>0?(pnl/pick.entry*100).toFixed(0):0 };
   });
 
+  // ── Unified signal tags ──
+  const tags = [];
+  if (!pick.trendAligned) tags.push({ label: `⚠ AGAINST TREND (${pick.trendDir})`, tone: 'amber' });
+  if (pick.atm) tags.push({ label: 'ATM', tone: 'blue' });
+  if (pick.emaCross==='bullish_cross'&&pick.type==='CE') tags.push({ label: `📶 EMA CROSS ↑ ${(pick.emaCrossCandles||0)<=1?'FRESH':pick.emaCrossCandles+'c ago'}`, tone:'green' });
+  if (pick.emaCross==='bearish_cross'&&pick.type==='PE') tags.push({ label: `📶 EMA CROSS ↓ ${(pick.emaCrossCandles||0)<=1?'FRESH':pick.emaCrossCandles+'c ago'}`, tone:'red' });
+  if (!pick.emaCross&&pick.emaTrendBull===true&&pick.type==='CE') tags.push({ label:'📶 EMA Bull', tone:'green' });
+  if (!pick.emaCross&&pick.emaTrendBull===false&&pick.type==='PE') tags.push({ label:'📶 EMA Bear', tone:'red' });
+  if ((pick.volRatio||0)>=2.0) tags.push({ label:`📊 VOL ${pick.volRatio}× surge`, tone:'blue' });
+  else if ((pick.volRatio||0)>=1.5) tags.push({ label:`📊 VOL ${pick.volRatio}× avg`, tone:'blue' });
+  if (pick.momentumFresh) tags.push({ label:'⚡ FRESH momentum', tone:'amber' });
+  if (pick.priceZone) tags.push({ label: pzoneLabel, tone: pzoneTone });
+  if (pick.oiBuildType && pick.oiBuildType!=='NEUTRAL' && oiMap[pick.oiBuildType]) {
+    const b = oiMap[pick.oiBuildType];
+    tags.push({ label: `${b.txt}${(pick.oiBuildBonus||0)!==0?' '+(pick.oiBuildBonus>0?'+':'')+pick.oiBuildBonus+' conf':''}`, tone: b.tone });
+  }
+  if (pick.ivEnv && ivEnvMap[pick.ivEnv]) tags.push({ label: ivEnvMap[pick.ivEnv].txt, tone: ivEnvMap[pick.ivEnv].tone });
+  if (isExpiry) tags.push({ label: '⚡ EXPIRY DAY', tone: 'amber' });
+  if (isOpening) tags.push({ label: '⏰ OPENING HOUR +5 conf', tone: 'green' });
+  (pick.signals||[]).forEach(s => tags.push({ label: s.l, tone: 'green' }));
+
   return (
-    <div className={`card ${rc}`}>
-      <span className={`c-rec ${rc}`}>{pick.action}</span>
-      {pick.atm && <span style={{position:'absolute',top:11,right:72,background:'#eff6ff',color:'#1d4ed8',fontSize:8,fontWeight:700,padding:'2px 6px',borderRadius:10}}>ATM</span>}
-
-      {/* Counter-trend warning */}
-      {!pick.trendAligned && (
-        <div style={{background:'#fef3c7',border:'1px solid #fcd34d',borderRadius:6,padding:'4px 10px',marginBottom:8,fontSize:9,fontWeight:700,color:'#92400e'}}>
-          ⚠ AGAINST TREND — Market: {pick.trendDir}{pick.compositeScore!=null?` (score ${pick.compositeScore})`:''} · Counter-directional. Lower confidence applied.
-        </div>
-      )}
-
-      {/* Header */}
-      <div className="c-head" style={{paddingRight:80}}>
-        <div className="c-sym">
-          {pick.und} {pick.strike} {pick.type}
-          <span style={{fontSize:10,fontWeight:700,color:pick.confidence>=minConf?'#16a34a':pick.confidence>=minConf-15?'#d97706':'#dc2626',marginLeft:6}}>{pick.confidence}% conf</span>
-        </div>
-        <div className="c-name">{pick.type==='CE'?'📈 Call':'📉 Put'} · Lot {pick.lot} · Spot ₹{fmt(pick.spot,0)} · Exp {pick.expiry}</div>
-      </div>
+    <AccentCard dir={dir}>
+      <CardHeader
+        rank={null}
+        symbol={`${pick.und} ${pick.strike} ${pick.type}`}
+        sector={pick.type==='CE'?'📈 Call':'📉 Put'}
+        name={`Lot ${pick.lot} · Spot ₹${fmt(pick.spot,0)} · Exp ${pick.expiry}`}
+        ltp={fmt(pick.entry||0)}
+        chgPct={null}
+        rec={pick.action}
+        dir={dir}
+        rightExtra={
+          <div style={{ fontSize: 10, fontWeight: 700, color: pick.confidence>=minConf?'#16a34a':pick.confidence>=minConf-15?'#d97706':'#dc2626', marginTop: 2 }}>
+            {pick.confidence}% conf
+          </div>
+        }
+      />
 
       {/* Capital required */}
-      <div style={{background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:8,padding:'8px 10px',marginBottom:8,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+      <div style={{background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:9,padding:'8px 10px',marginBottom:9,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
         <div>
-          <div style={{fontSize:7,color:'#64748b',marginBottom:2}}>CAPITAL REQUIRED</div>
-          <div style={{fontSize:16,fontWeight:800,color:'#0f172a'}}>₹{fmt(pick.amtRequired||0,0)}</div>
+          <div style={{fontSize:7.5,color:'#64748b',marginBottom:2}}>CAPITAL REQUIRED</div>
+          <div style={{fontSize:15,fontWeight:800,color:'#0f172a'}}>₹{fmt(pick.amtRequired||0,0)}</div>
           <div style={{fontSize:9,color:'#64748b'}}>{pick.lot} qty × ₹{fmt(pick.entry)} premium</div>
         </div>
         <div style={{textAlign:'right'}}>
-          <div style={{fontSize:7,color:'#64748b',marginBottom:2}}>MAX PROFIT</div>
-          <div style={{fontSize:13,fontWeight:700,color:'#16a34a'}}>+₹{fmt(pick.maxProfit||0,0)}</div>
-          <div style={{fontSize:9,color:'#dc2626'}}>Max Loss: −₹{fmt(Math.abs(pick.maxLoss||0),0)}</div>
+          <div style={{fontSize:7.5,color:'#64748b',marginBottom:2}}>MAX PROFIT / LOSS</div>
+          <div style={{fontSize:12.5,fontWeight:700,color:'#16a34a'}}>+₹{fmt(pick.maxProfit||0,0)}</div>
+          <div style={{fontSize:9,color:'#dc2626'}}>−₹{fmt(Math.abs(pick.maxLoss||0),0)}</div>
         </div>
       </div>
 
-      {/* Trade setup */}
-      <div className="trade-setup">
-        <div className="ts-box"><div className="ts-l">ENTRY</div><div className="ts-v bl">₹{fmt(pick.entry||0)}</div><div className="ts-s" style={{color:'#64748b'}}>LTP</div></div>
-        <div className="ts-box"><div className="ts-l">{pick.action==='SELL'?'SL (ABOVE)':'STOP LOSS'}</div><div className="ts-v dn">₹{fmt(pick.sl||0)}</div><div className="ts-s dn">{pick.action==='BUY'?'-':'+'}{ slPct}%</div></div>
-        <div className="ts-box"><div className="ts-l">TARGET</div><div className="ts-v up">₹{fmt(pick.tgt||0)}</div><div className="ts-s up">{pick.action==='BUY'?'+':'-'}{tgtPct}% · R:R {(pick.rr||0).toFixed?pick.rr.toFixed(1):pick.rr}</div></div>
-      </div>
-      {pick.slTgtMethod && <div style={{fontSize:8,color:'#94a3b8',marginTop:3,padding:'0 2px'}}>📐 {pick.slTgtMethod}{isExpiry?' · ⚡ EXPIRY DAY':''}</div>}
+      <LevelsStrip
+        entry={fmt(pick.entry||0)}
+        sl={fmt(pick.sl||0)}
+        target={fmt(pick.tgt||0)}
+        entrySub="LTP"
+        slSub={`${pick.action==='BUY'?'-':'+'}${slPct}%`}
+        tgtSub={`${pick.action==='BUY'?'+':'-'}${tgtPct}% · R:R ${(pick.rr||0).toFixed?pick.rr.toFixed(1):pick.rr}`}
+      />
+      {pick.slTgtMethod && <div style={{fontSize:8.5,color:'#94a3b8',marginTop:-4,marginBottom:9}}>📐 {pick.slTgtMethod}</div>}
 
-      {/* Expiry day banner */}
-      {isExpiry && <div style={{background:'#fef3c7',border:'1px solid #fcd34d',borderRadius:6,padding:'3px 8px',marginTop:4,marginBottom:6,fontSize:9,fontWeight:700,color:'#92400e'}}>⚡ EXPIRY DAY — Gamma elevated · ATM moves 3-5× normal · Tight SL applied</div>}
-      {isOpening && <div style={{background:'#f0fdf4',border:'1px solid #86efac',borderRadius:6,padding:'3px 8px',marginBottom:6,fontSize:9,fontWeight:700,color:'#15803d'}}>⏰ OPENING HOUR (9:15–9:45) — Best historical win rate · +5 conf bonus applied</div>}
+      <SignalTags tags={tags} />
 
-      {/* EMA + Volume badges */}
-      {(pick.emaCross || pick.volRatio >= 1.5 || pick.momentumFresh) && (
-        <div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:6}}>
-          {pick.emaCross==='bullish_cross'&&pick.type==='CE'&&<span style={{background:'#dcfce7',color:'#15803d',border:'1px solid #86efac',fontSize:8,fontWeight:700,padding:'2px 7px',borderRadius:10}}>📶 EMA CROSS ↑ {(pick.emaCrossCandles||0)<=1?'FRESH':pick.emaCrossCandles+'c ago'}</span>}
-          {pick.emaCross==='bearish_cross'&&pick.type==='PE'&&<span style={{background:'#fef2f2',color:'#991b1b',border:'1px solid #fecaca',fontSize:8,fontWeight:700,padding:'2px 7px',borderRadius:10}}>📶 EMA CROSS ↓ {(pick.emaCrossCandles||0)<=1?'FRESH':pick.emaCrossCandles+'c ago'}</span>}
-          {!pick.emaCross&&pick.emaTrendBull===true&&pick.type==='CE'&&<span style={{background:'#f0fdf4',color:'#15803d',border:'1px solid #bbf7d0',fontSize:8,fontWeight:700,padding:'2px 7px',borderRadius:10}}>📶 EMA Bull</span>}
-          {!pick.emaCross&&pick.emaTrendBull===false&&pick.type==='PE'&&<span style={{background:'#fef2f2',color:'#991b1b',border:'1px solid #fecaca',fontSize:8,fontWeight:700,padding:'2px 7px',borderRadius:10}}>📶 EMA Bear</span>}
-          {(pick.volRatio||0)>=2.0&&<span style={{background:'#eff6ff',color:'#1d4ed8',border:'1px solid #bfdbfe',fontSize:8,fontWeight:700,padding:'2px 7px',borderRadius:10}}>📊 VOL {pick.volRatio}× surge</span>}
-          {(pick.volRatio||0)>=1.5&&(pick.volRatio||0)<2.0&&<span style={{background:'#eff6ff',color:'#1d4ed8',border:'1px solid #bfdbfe',fontSize:8,fontWeight:700,padding:'2px 7px',borderRadius:10}}>📊 VOL {pick.volRatio}× avg</span>}
-          {pick.momentumFresh&&<span style={{background:'#fefce8',color:'#854d0e',border:'1px solid #fde68a',fontSize:8,fontWeight:700,padding:'2px 7px',borderRadius:10}}>⚡ FRESH momentum</span>}
-        </div>
-      )}
-
-      {/* PDH/PDL zone */}
-      {pick.priceZone && <div style={{fontSize:9,fontWeight:700,padding:'3px 8px',borderRadius:5,marginBottom:5,background:pzoneBg,color:pzoneColor}}>{pzoneLabel}{pick.dirFlipPenalty?' · ⚠ Direction flipped ('+pick.dirFlipPenalty+' conf)':''}</div>}
-
-      {/* Confidence bar */}
-      <div>
-        <span className="bar-lbl">Confidence</span>
-        <div className="bar-track"><div className="bar-fill" style={{width:pick.confidence+'%',background:pick.confidence>=minConf?'#16a34a':pick.confidence>=minConf-15?'#d97706':'#dc2626'}}/></div>
-        <span className={`bar-val ${confC}`}>{pick.confidence}%</span>
-      </div>
+      <ProgressStat label="Confidence" pct={pick.confidence||0} color={pick.confidence>=minConf?'#16a34a':pick.confidence>=minConf-15?'#d97706':'#dc2626'} valueLabel={`${pick.confidence}%`} />
 
       {/* Greeks */}
-      <div className="c-metrics cm4" style={{gap:1,marginBottom:7}}>
-        <div className={`cbox ${rc}`}><div className="cb-l">DELTA Δ</div><div className={`cb-v ${dc}`} style={{fontSize:13}}>{(pick.delta||0).toFixed(2)}</div></div>
-        <div className={`cbox ${rc}`} style={ivLabel?{background:ivCheap?'#ecfdf5':ivRich?'#fef2f2':'',border:`1px solid ${ivCheap?'#a7f3d0':ivRich?'#fecaca':'#e2e8f0'}`}:{}}><div className="cb-l">IV %</div><div className={`cb-v ${ivc}`} style={{fontSize:13}}>{(pick.iv||0).toFixed(1)}</div>{ivLabel&&<div className="cb-s" style={{color:ivLabelCol,fontWeight:700,fontSize:7}}>{ivLabel}</div>}</div>
-        <div className={`cbox ${rc}`}><div className="cb-l">THETA Θ</div><div className="cb-v dn" style={{fontSize:13}}>{(pick.theta||0).toFixed(2)}</div></div>
-        <div className={`cbox ${rc}`}><div className="cb-l">OI CHG</div><div className={`cb-v ${(pick.oiChg||0)>=0?'up':'dn'}`} style={{fontSize:13}}>{(pick.oiChg||0).toFixed(0)}%</div></div>
-      </div>
-      <div className="c-metrics cm2" style={{gap:1,marginBottom:8}}>
-        <div className="cbox neutral"><div className="cb-l">OPEN INTEREST</div><div className="cb-v" style={{color:'#374151',fontSize:12}}>{(pick.oi||0).toLocaleString('en-IN')}</div><div className="cb-s" style={{color:'#64748b'}}>{(pick.oiChg||0)>10?'Buildup':(pick.oiChg||0)<-10?'Unwinding':'Stable'}</div></div>
-        <div className="cbox neutral"><div className="cb-l">SIGNAL SCORE</div><div className="cb-v am">{pick.score||0}/9</div><div className="cb-s" style={{color:'#64748b'}}>{(pick.signals||[]).length} triggers</div></div>
-      </div>
-
-      {/* OI Build + IV Env */}
-      {(pick.oiBuildType&&pick.oiBuildType!=='NEUTRAL'&&oiMap[pick.oiBuildType]||pick.ivEnv&&ivEnvMap[pick.ivEnv]) && (
-        <div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:8}}>
-          {pick.oiBuildType&&pick.oiBuildType!=='NEUTRAL'&&oiMap[pick.oiBuildType]&&(()=>{const b=oiMap[pick.oiBuildType];return<span style={{background:b.bg,color:b.c,border:`1px solid ${b.br}`,fontSize:8,fontWeight:700,padding:'2px 7px',borderRadius:10}}>{b.txt}{(pick.oiBuildBonus||0)>0?' +'+pick.oiBuildBonus:''+pick.oiBuildBonus} conf</span>;})()}
-          {pick.ivEnv&&ivEnvMap[pick.ivEnv]&&(()=>{const b=ivEnvMap[pick.ivEnv];return<span style={{background:b.bg,color:b.c,border:`1px solid ${b.br}`,fontSize:8,fontWeight:700,padding:'2px 7px',borderRadius:10}}>{b.txt}</span>;})()}
-        </div>
-      )}
-
-      {/* Signal indicators */}
-      <div className="c-inds">{(pick.signals||[]).map((s,i)=><span key={i} className="ind ok">{s.l}</span>)}</div>
+      <MetricGrid cols={4}>
+        <MetricMini label="DELTA Δ" value={(pick.delta||0).toFixed(2)} color={dc} />
+        <MetricMini label="IV %" value={(pick.iv||0).toFixed(1)} color={ivc} sub={ivCheap?'💡 Cheap':ivRich?'🔥 Rich':null} />
+        <MetricMini label="THETA Θ" value={(pick.theta||0).toFixed(2)} color="#dc2626" />
+        <MetricMini label="OI CHG" value={`${(pick.oiChg||0).toFixed(0)}%`} color={(pick.oiChg||0)>=0?'#16a34a':'#dc2626'} />
+      </MetricGrid>
+      <MetricGrid cols={2}>
+        <MetricMini label="Open Interest" value={(pick.oi||0).toLocaleString('en-IN')} color="#374151" sub={(pick.oiChg||0)>10?'Buildup':(pick.oiChg||0)<-10?'Unwinding':'Stable'} />
+        <MetricMini label="Signal Score" value={`${pick.score||0}/9`} color="#d97706" sub={`${(pick.signals||[]).length} triggers`} />
+      </MetricGrid>
 
       {/* Position sizing */}
       {recLots > 0 && (
-        <div style={{background:sizeBg,border:'1px solid #e2e8f0',borderRadius:8,padding:'8px 10px',marginBottom:8,marginTop:4}}>
-          <div style={{fontSize:8,color:'#64748b',fontWeight:700,marginBottom:4}}>💰 POSITION SIZING (₹{(portSz/100000).toFixed(1)}L portfolio · {riskPct2}% risk = ₹{fmt(maxRisk,0)} max loss)</div>
+        <div style={{background:sizeBg,border:'1px solid #e2e8f0',borderRadius:9,padding:'8px 10px',marginBottom:9}}>
+          <div style={{fontSize:8,color:'#64748b',fontWeight:700,marginBottom:4}}>💰 POSITION SIZING (₹{(portSz/100000).toFixed(1)}L · {riskPct2}% risk = ₹{fmt(maxRisk,0)} max)</div>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div><span style={{fontSize:18,fontWeight:800,color:sizeColor}}>{recLots} lot{recLots>1?'s':''}</span><span style={{fontSize:9,color:'#64748b',marginLeft:6}}>recommended</span></div>
+            <div><span style={{fontSize:17,fontWeight:800,color:sizeColor}}>{recLots} lot{recLots>1?'s':''}</span><span style={{fontSize:9,color:'#64748b',marginLeft:6}}>recommended</span></div>
             <div style={{textAlign:'right',fontSize:9,color:'#64748b'}}>Capital: ₹{fmt(recCapital,0)}<br/>Max loss: ₹{fmt(recLots*lossPerLot,0)}</div>
           </div>
           {recLots>3&&<div style={{fontSize:8,color:'#64748b',marginTop:3}}>⚠ Consider max {Math.min(recLots,3)} lots to diversify</div>}
@@ -248,10 +228,10 @@ function OptionCard({ pick, cfg: cardCfg }) {
 
       {/* Payoff calculator */}
       {spot_ > 0 && (pick.entry||0) > 0 && (
-        <div style={{background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:8,padding:'8px 10px',marginBottom:8}}>
-          <div style={{fontSize:8,color:'#64748b',fontWeight:700,marginBottom:6}}>📊 PAYOFF CALCULATOR (delta approx · underlying moves)</div>
+        <div style={{background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:9,padding:'8px 10px',marginBottom:9}}>
+          <div style={{fontSize:8,color:'#64748b',fontWeight:700,marginBottom:6}}>📊 PAYOFF CALCULATOR (delta approx)</div>
           {scenarios.map(s=>(
-            <div key={s.pct} style={{display:'flex',justifyContent:'space-between',padding:'3px 6px',borderRadius:4,background:s.pnl>0?'#f0fdf4':s.pnl<0?'#fef2f2':'#f8fafc'}}>
+            <div key={s.pct} style={{display:'flex',justifyContent:'space-between',padding:'3px 6px',borderRadius:5,background:s.pnl>0?'#f0fdf4':s.pnl<0?'#fef2f2':'#f8fafc'}}>
               <span style={{fontSize:9,color:'#374151',fontWeight:600}}>{s.pct>0?'+':''}{s.pct}% (₹{fmt(spot_*(1+s.pct/100),0)})</span>
               <span style={{fontSize:9,fontWeight:700,color:s.pnl>0?'#16a34a':s.pnl<0?'#dc2626':'#64748b'}}>₹{fmt(s.newPrem)} {s.pnlPct!=='0'?`(${s.pnlPct>0?'+':''}${s.pnlPct}%)`:''}</span>
             </div>
@@ -271,26 +251,13 @@ function OptionCard({ pick, cfg: cardCfg }) {
         </div>
       )}
 
-      {/* Live scrollable chart — replaces static mini chart */}
-      {pick.instrKey && (
-        <div style={{ marginBottom:8, borderTop:'1px solid #e2e8f0', paddingTop:10 }}>
-          <LiveChart
-            instrKey={pick.instrKey}
-            candles={pick.candles || []}
-            entry={pick.entry}
-            sl={pick.sl}
-            target={pick.tgt}
-            symbol={`${pick.und} ${pick.strike} ${pick.type}`}
-            interval="5minute"
-            livePrice={pick.entry}
-          />
-        </div>
-      )}
-
-      <div className={`c-why ${rc}`}>{pick.type==='CE'?'📈 Call':'📉 Put'} on {pick.und} · Strike {pick.strike}. Capital: ₹{fmt(pick.amtRequired||0,0)} for {pick.lot} qty. Max profit ₹{fmt(pick.maxProfit||0,0)} if target hit.</div>
-    </div>
+      <FooterNote>
+        {pick.type==='CE'?'📈 Call':'📉 Put'} on {pick.und} · Strike {pick.strike}. Capital ₹{fmt(pick.amtRequired||0,0)} for {pick.lot} qty. Max profit ₹{fmt(pick.maxProfit||0,0)} if target hit.
+      </FooterNote>
+    </AccentCard>
   );
 }
+
 
 export default function OptionsPane() {
   const {
@@ -660,8 +627,7 @@ export default function OptionsPane() {
           </div>
 
           {/* Max Pain + OI Walls */}
-          
-          {groups.filter(g => g.maxPain < 0).map(g => (
+          {groups.filter(g => g.maxPain > 0).map(g => (
             <div key={g.name+'-mp'} style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, padding:'8px 12px', marginBottom:8, display:'flex', gap:16, flexWrap:'wrap', fontSize:10, alignItems:'center' }}>
               <span style={{ fontWeight:700 }}>{g.name}</span>
               <span>🎯 Max Pain: <b style={{ color:'#7c3aed' }}>₹{fmt(g.maxPain)}</b></span>

@@ -25,6 +25,7 @@ function getDeliveryPct(q) {
 }
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import LiveChart from '../components/LiveChart';
+import { AccentCard, CardHeader, LevelsStrip, ProgressStat, SignalTags, WhyBox } from '../components/cardKit';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed.js';
 
@@ -447,10 +448,7 @@ function PickChartPopup({ p, onClose }) {
 function BoCard({ r, rank, onPopup }) {
   const fmtV = v => v != null ? (+v).toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—';
   const isBull = r.dir === 'BULL';
-  const cardBg = isBull ? '#f0fdf4' : '#fef2f2';
-  const cardBorder = isBull ? '#16a34a' : '#dc2626';
-  const dirColor = isBull ? '#16a34a' : '#dc2626';
-  const chgColor = (r.chgPct || 0) >= 0 ? '#16a34a' : '#dc2626';
+  const dir = isBull ? 'bull' : 'bear';
   const t = r.trade || {};
 
   let _bull = 0, _bear = 0;
@@ -458,66 +456,63 @@ function BoCard({ r, rank, onPopup }) {
   if (r.pdhl) { if (r.pdhl.bullBreakout) _bull+=3; else if (r.pdhl.bearBreakout) _bear+=3; else if (r.pdhl.nearPDH) _bull+=1; else if (r.pdhl.nearPDL) _bear+=1; }
   if (r.st) { r.st.crossed ? (r.st.trend==='UP'?_bull+=2:_bear+=2) : (r.st.trend==='UP'?_bull+=1:_bear+=1); }
 
-  const pills = [];
-  const pill = (txt, bg, col, border) => pills.push(
-    <span key={pills.length} style={{fontSize:8,fontWeight:800,background:bg,color:col,border:`1px solid ${border}`,borderRadius:10,padding:'2px 7px'}}>{txt}</span>
-  );
-  if (_bull>0&&_bear>0) pill('⚡ MIXED SIGNALS','#fff7ed','#9a3412','#fed7aa');
+  const tags = [];
+  const tag = (label, tone) => tags.push({ label, tone });
+  if (_bull>0&&_bear>0) tag('⚡ MIXED SIGNALS','amber');
   if (r.ema) {
-    if (r.ema.goldenCross)       pill('⭐ GOLDEN CROSS','#fef9c3','#854d0e','#fde68a');
-    else if (r.ema.deathCross)   pill('💀 DEATH CROSS','#fee2e2','#991b1b','#fecaca');
-    else if (r.ema.nearCross)    pill('⚡ EMA NEAR CROSS','#fffbeb','#92400e','#fde68a');
-    else if (r.ema.uptrend)      pill('📈 EMA UPTREND','#f0fdf4','#15803d','#bbf7d0');
-    else                          pill('📉 EMA DOWNTREND','#fef2f2','#991b1b','#fecaca');
+    if (r.ema.goldenCross)       tag('⭐ GOLDEN CROSS','amber');
+    else if (r.ema.deathCross)   tag('💀 DEATH CROSS','red');
+    else if (r.ema.nearCross)    tag('⚡ EMA NEAR CROSS','amber');
+    else if (r.ema.uptrend)      tag('📈 EMA UPTREND','green');
+    else                          tag('📉 EMA DOWNTREND','red');
   }
   if (r.pdhl) {
-    if (r.pdhl.bullBreakout)      pill(`🚀 PDH BREAK +${r.pdhl.pdHDist}%`,'#dcfce7','#15803d','#86efac');
-    else if (r.pdhl.bearBreakout) pill(`📉 PDL BREAK ${r.pdhl.pdLDist}%`,'#fef2f2','#b91c1c','#fecaca');
-    else if (r.pdhl.nearPDH)      pill(`⚡ NEAR PDH ₹${fmtV(r.pdhl.pdh)}`,'#f0fdf4','#15803d','#bbf7d0');
-    else if (r.pdhl.nearPDL)      pill(`⚡ NEAR PDL ₹${fmtV(r.pdhl.pdl)}`,'#fffbeb','#92400e','#fde68a');
+    if (r.pdhl.bullBreakout)      tag(`🚀 PDH BREAK +${r.pdhl.pdHDist}%`,'green');
+    else if (r.pdhl.bearBreakout) tag(`📉 PDL BREAK ${r.pdhl.pdLDist}%`,'red');
+    else if (r.pdhl.nearPDH)      tag(`⚡ NEAR PDH ₹${fmtV(r.pdhl.pdh)}`,'green');
+    else if (r.pdhl.nearPDL)      tag(`⚡ NEAR PDL ₹${fmtV(r.pdhl.pdl)}`,'amber');
   }
   if (r.st) {
-    const sc=r.st.trend==='UP'?'#1e40af':'#6b21a8', sb=r.st.trend==='UP'?'#eff6ff':'#faf5ff', sbr=r.st.trend==='UP'?'#bfdbfe':'#ddd6fe';
-    pill(r.st.crossed?(r.st.trend==='UP'?'📈 ST CROSSED UP':'📉 ST CROSSED DOWN'):(r.st.trend==='UP'?`📈 ST UP ₹${fmtV(r.st.value)}`:`📉 ST DOWN ₹${fmtV(r.st.value)}`),sb,sc,sbr);
+    tag(r.st.crossed?(r.st.trend==='UP'?'📈 ST CROSSED UP':'📉 ST CROSSED DOWN'):(r.st.trend==='UP'?`📈 ST UP ₹${fmtV(r.st.value)}`:`📉 ST DOWN ₹${fmtV(r.st.value)}`), r.st.trend==='UP'?'blue':'purple');
   }
   if (r.vol) {
-    if (r.vol.strong)         pill(`🔥 VOL ${r.vol.ratio}× AVG`,'#fdf4ff','#7e22ce','#e9d5ff');
-    else if (r.vol.confirmed) pill(`📊 VOL ${r.vol.ratio}× AVG`,'#fdf4ff','#7e22ce','#e9d5ff');
-    else if (r.vol.dry)       pill(`🔇 LOW VOL ${r.vol.ratio}×`,'#f8fafc','#94a3b8','#e2e8f0');
+    if (r.vol.strong)         tag(`🔥 VOL ${r.vol.ratio}× AVG`,'purple');
+    else if (r.vol.confirmed) tag(`📊 VOL ${r.vol.ratio}× AVG`,'purple');
+    else if (r.vol.dry)       tag(`🔇 LOW VOL ${r.vol.ratio}×`,'slate');
   }
   if (r.wk52) {
-    if (r.wk52.breakHigh)       pill('🏆 52WK HIGH BREAK','#fef9c3','#854d0e','#fde68a');
-    else if (r.wk52.atHigh)     pill(`📍 AT 52WK HIGH ₹${fmtV(r.wk52.hi52)}`,'#fef9c3','#854d0e','#fde68a');
-    if (r.wk52.breakLow)        pill('⚠ 52WK LOW BREAK','#fef2f2','#991b1b','#fecaca');
-    else if (r.wk52.atLow)      pill(`📍 AT 52WK LOW ₹${fmtV(r.wk52.lo52)}`,'#fff7ed','#9a3412','#fed7aa');
+    if (r.wk52.breakHigh)       tag('🏆 52WK HIGH BREAK','amber');
+    else if (r.wk52.atHigh)     tag(`📍 AT 52WK HIGH ₹${fmtV(r.wk52.hi52)}`,'amber');
+    if (r.wk52.breakLow)        tag('⚠ 52WK LOW BREAK','red');
+    else if (r.wk52.atLow)      tag(`📍 AT 52WK LOW ₹${fmtV(r.wk52.lo52)}`,'amber');
   }
   if (r.gap) {
-    if (r.gap.bigGapUp)        pill(`⬆ GAP UP +${r.gap.gapPct}%`,'#dcfce7','#15803d','#86efac');
-    else if (r.gap.gapUp)      pill(`↑ GAP UP +${r.gap.gapPct}%`,'#f0fdf4','#15803d','#bbf7d0');
-    if (r.gap.bigGapDown)      pill(`⬇ GAP DOWN ${r.gap.gapPct}%`,'#fef2f2','#b91c1c','#fecaca');
-    else if (r.gap.gapDown)    pill(`↓ GAP DOWN ${r.gap.gapPct}%`,'#fef2f2','#b91c1c','#fecaca');
+    if (r.gap.bigGapUp)        tag(`⬆ GAP UP +${r.gap.gapPct}%`,'green');
+    else if (r.gap.gapUp)      tag(`↑ GAP UP +${r.gap.gapPct}%`,'green');
+    if (r.gap.bigGapDown)      tag(`⬇ GAP DOWN ${r.gap.gapPct}%`,'red');
+    else if (r.gap.gapDown)    tag(`↓ GAP DOWN ${r.gap.gapPct}%`,'red');
   }
-  if (r.nr7?.isNR7||r.nr7?.isNR4) pill(`🎯 ${r.nr7.isNR7?'NR7':'NR4'} COILED`,'#f0f9ff','#0c4a6e','#bae6fd');
-  if (r.bb?.extremeSqueeze)        pill('🗜 BB EXTREME SQUEEZE','#f0f9ff','#0c4a6e','#bae6fd');
-  else if (r.bb?.squeeze)          pill('🗜 BB SQUEEZE','#f0f9ff','#0c4a6e','#bae6fd');
-  if (r.mom?.bullConf)       pill('✅ RSI+MACD BULL','#dcfce7','#15803d','#86efac');
-  else if (r.mom?.bearConf)  pill('❌ RSI+MACD BEAR','#fef2f2','#991b1b','#fecaca');
-  else if (r.mom?.contra)    pill('⚡ MOMENTUM CONTRA','#fff7ed','#9a3412','#fed7aa');
-  if (r.wick?.bearRejected)  pill('🕯 WICK REJECTION ↑','#fef2f2','#991b1b','#fecaca');
-  else if (r.wick?.bullStrong) pill(`🕯 STRONG CLOSE ${Math.round((r.wick.closePos||0)*100)}%`,'#f0fdf4','#15803d','#bbf7d0');
-  if (r.adx?.strong)                           pill(`💪 ADX ${r.adx.adx} STRONG`,'#ecfdf5','#065f46','#a7f3d0');
-  else if (r.adx&&!r.adx.trending&&!r.adx.weakTrend) pill(`〰 ADX ${r.adx.adx} CHOPPY`,'#f8fafc','#94a3b8','#e2e8f0');
-  if (r.rs?.outperforming&&r.rs.strongly) pill(`🚀 RS +${r.rs.rs}% vs NIFTY`,'#ecfdf5','#065f46','#a7f3d0');
-  else if (r.rs?.underperforming&&r.rs.strongly) pill(`🐢 RS ${r.rs.rs}% vs NIFTY`,'#fef2f2','#991b1b','#fecaca');
-  if (r.ivPct?.cheap) pill(`📉 IV CHEAP ${r.ivPct.iv}% vs HV ${r.ivPct.hv20}%`,'#f0fdf4','#15803d','#bbf7d0');
-  else if (r.ivPct?.rich) pill(`📈 IV RICH ${r.ivPct.iv}% vs HV ${r.ivPct.hv20}%`,'#fef2f2','#991b1b','#fecaca');
-  if (r.stockVWAP?.aboveVWAP && r.stockVWAP?.strong) pill(`📊 ABOVE VWAP ₹${fmtV(r.stockVWAP.vwap)} (+${r.stockVWAP.distPct}%)`,'#ecfdf5','#065f46','#a7f3d0');
-  else if (!r.stockVWAP?.aboveVWAP && r.stockVWAP?.strong) pill(`📊 BELOW VWAP ₹${fmtV(r.stockVWAP.vwap)} (${r.stockVWAP.distPct}%)`,'#fef2f2','#991b1b','#fecaca');
-  else if (r.stockVWAP?.nearVWAP) pill(`📊 AT VWAP ₹${fmtV(r.stockVWAP.vwap)}`,'#f8fafc','#64748b','#e2e8f0');
-  if (r.wMTF?.confirms) pill('📅 WEEKLY CONFIRMS','#f5f3ff','#5b21b6','#ddd6fe');
-  if (r.sectorScore>0)  pill(`🏭 ${r.sec||'NSE'} STRONG`,'#f0fdf4','#15803d','#bbf7d0');
-  else if (r.sectorScore<0) pill(`🏭 ${r.sec||'NSE'} WEAK`,'#fef2f2','#991b1b','#fecaca');
-  if (r.phase==='opening') pill('⏰ OPENING HOUR','#fffbeb','#92400e','#fde68a');
+  if (r.nr7?.isNR7||r.nr7?.isNR4) tag(`🎯 ${r.nr7.isNR7?'NR7':'NR4'} COILED`,'blue');
+  if (r.bb?.extremeSqueeze)        tag('🗜 BB EXTREME SQUEEZE','blue');
+  else if (r.bb?.squeeze)          tag('🗜 BB SQUEEZE','blue');
+  if (r.mom?.bullConf)       tag('✅ RSI+MACD BULL','green');
+  else if (r.mom?.bearConf)  tag('❌ RSI+MACD BEAR','red');
+  else if (r.mom?.contra)    tag('⚡ MOMENTUM CONTRA','amber');
+  if (r.wick?.bearRejected)  tag('🕯 WICK REJECTION ↑','red');
+  else if (r.wick?.bullStrong) tag(`🕯 STRONG CLOSE ${Math.round((r.wick.closePos||0)*100)}%`,'green');
+  if (r.adx?.strong)                           tag(`💪 ADX ${r.adx.adx} STRONG`,'green');
+  else if (r.adx&&!r.adx.trending&&!r.adx.weakTrend) tag(`〰 ADX ${r.adx.adx} CHOPPY`,'slate');
+  if (r.rs?.outperforming&&r.rs.strongly) tag(`🚀 RS +${r.rs.rs}% vs NIFTY`,'green');
+  else if (r.rs?.underperforming&&r.rs.strongly) tag(`🐢 RS ${r.rs.rs}% vs NIFTY`,'red');
+  if (r.ivPct?.cheap) tag(`📉 IV CHEAP ${r.ivPct.iv}% vs HV ${r.ivPct.hv20}%`,'green');
+  else if (r.ivPct?.rich) tag(`📈 IV RICH ${r.ivPct.iv}% vs HV ${r.ivPct.hv20}%`,'red');
+  if (r.stockVWAP?.aboveVWAP && r.stockVWAP?.strong) tag(`📊 ABOVE VWAP ₹${fmtV(r.stockVWAP.vwap)} (+${r.stockVWAP.distPct}%)`,'green');
+  else if (!r.stockVWAP?.aboveVWAP && r.stockVWAP?.strong) tag(`📊 BELOW VWAP ₹${fmtV(r.stockVWAP.vwap)} (${r.stockVWAP.distPct}%)`,'red');
+  else if (r.stockVWAP?.nearVWAP) tag(`📊 AT VWAP ₹${fmtV(r.stockVWAP.vwap)}`,'slate');
+  if (r.wMTF?.confirms) tag('📅 WEEKLY CONFIRMS','purple');
+  if (r.sectorScore>0)  tag(`🏭 ${r.sec||'NSE'} STRONG`,'green');
+  else if (r.sectorScore<0) tag(`🏭 ${r.sec||'NSE'} WEAK`,'red');
+  if (r.phase==='opening') tag('⏰ OPENING HOUR','amber');
 
   const emaGapPct = r.ema ? ((r.ema.ema50 - (r.ema.ema200||0)) / (r.ema.ema200||1) * 100).toFixed(1) : 0;
   const why = [];
@@ -558,56 +553,40 @@ function BoCard({ r, rank, onPopup }) {
   if (r.sectorScore>0)  why.push(`${r.sec||'NSE'} sector outperforming market — tailwind for this signal`);
   else if (r.sectorScore<0) why.push(`${r.sec||'NSE'} sector underperforming market — headwind for this signal`);
 
+  const scoreColor = (r.score||0)>=7?'#16a34a':(r.score||0)>=4?'#d97706':'#0ea5e9';
+
   return (
-    <div style={{background:cardBg,border:`2px solid ${cardBorder}`,borderRadius:11,padding:13,boxShadow:'0 2px 8px rgba(0,0,0,.05)',minWidth:0,overflow:'hidden',animation:'fadeIn .3s ease both'}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:8}}>
-        <div style={{cursor:'pointer'}} onClick={onPopup}>
-          <div style={{fontSize:16,fontWeight:800,color:'#0f172a',display:'flex',alignItems:'center',gap:5}}>
-            {r.s}
-            <span style={{fontSize:9,color:'#1d4ed8',fontWeight:700,background:'#eff6ff',padding:'1px 5px',borderRadius:8}}>📊 View</span>
-          </div>
-          <div style={{fontSize:10,color:'#64748b'}}>{r.n||r.s} · {r.sec||'NSE'}</div>
-        </div>
-        <div style={{textAlign:'right'}}>
-          <div style={{fontSize:14,fontWeight:800,color:'#0f172a'}}>₹{fmtV(r.ltp)}</div>
-          <div style={{fontSize:11,fontWeight:700,color:chgColor}}>{(r.chgPct||0)>=0?'+':''}{(r.chgPct||0).toFixed(2)}%</div>
-          <div style={{fontSize:9,fontWeight:800,color:dirColor,marginTop:2}}>{isBull?'▲ BULLISH':'▼ BEARISH'}</div>
-        </div>
-      </div>
-      <div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:9}}>{pills}</div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:1,background:'#e2e8f0',borderRadius:8,overflow:'hidden',marginBottom:8}}>
-        <div style={{background:'#f8fafc',padding:8,textAlign:'center'}}>
-          <div style={{fontSize:8,color:'#64748b',marginBottom:2}}>ENTRY</div>
-          <div style={{fontSize:13,fontWeight:800,color:'#1d4ed8'}}>₹{fmtV(t.entry||r.ltp)}</div>
-        </div>
-        <div style={{background:'#fef2f2',padding:8,textAlign:'center'}}>
-          <div style={{fontSize:8,color:'#64748b',marginBottom:2}}>STOP LOSS</div>
-          <div style={{fontSize:13,fontWeight:800,color:'#dc2626'}}>₹{fmtV(t.sl)}</div>
-          <div style={{fontSize:8,color:'#dc2626'}}>{isBull?'-':'+'}{t.sl>0&&(t.entry||r.ltp)>0?Math.abs((t.sl-(t.entry||r.ltp))/(t.entry||r.ltp)*100).toFixed(1):'—'}%</div>
-        </div>
-        <div style={{background:'#f0fdf4',padding:8,textAlign:'center'}}>
-          <div style={{fontSize:8,color:'#64748b',marginBottom:2}}>TARGET</div>
-          <div style={{fontSize:13,fontWeight:800,color:'#16a34a'}}>₹{fmtV(t.target)}</div>
-          <div style={{fontSize:8,color:'#16a34a'}}>R:R {t.rr||0}:1</div>
-        </div>
-      </div>
-      <div style={{display:'flex',alignItems:'center',gap:5,marginBottom:8}}>
-        <span style={{fontSize:8,color:'#94a3b8',width:52}}>STRENGTH</span>
-        <div style={{flex:1,height:4,background:'#e2e8f0',borderRadius:3}}>
-          <div style={{width:`${Math.min(100,(r.score||0)*10)}%`,height:'100%',background:(r.score||0)>=7?'#16a34a':(r.score||0)>=4?'#d97706':'#0ea5e9',borderRadius:3}}/>
-        </div>
-        <span style={{fontSize:8,fontWeight:800,color:(r.score||0)>=7?'#16a34a':(r.score||0)>=4?'#d97706':'#0ea5e9'}}>{r.score||0}/10</span>
-      </div>
-      {/* chart moved to popup — click stock name to open */}
-      {why.length>0&&(
-        <div style={{marginTop:8,paddingTop:7,borderTop:`1px solid ${isBull?'#bbf7d0':'#fecaca'}`,fontSize:10,color:'#475569',lineHeight:1.6}}>
-          {why.map((w,i)=><div key={i}>→ {w}</div>)}
-        </div>
-      )}
-      {t.method&&<div style={{marginTop:4,fontSize:8,color:'#94a3b8'}}>{t.method}</div>}
-    </div>
+    <AccentCard dir={dir}>
+      <CardHeader
+        rank={rank}
+        symbol={r.s}
+        sector={r.sec || 'NSE'}
+        name={r.n || r.s}
+        ltp={fmtV(r.ltp)}
+        chgPct={r.chgPct || 0}
+        rec={isBull ? 'BULLISH' : 'BEARISH'}
+        dir={dir}
+        onPopup={onPopup}
+      />
+
+      <SignalTags tags={tags} />
+
+      <LevelsStrip
+        entry={fmtV(t.entry||r.ltp)}
+        sl={fmtV(t.sl)}
+        target={fmtV(t.target)}
+        slSub={t.sl>0&&(t.entry||r.ltp)>0?`${isBull?'-':'+'}${Math.abs((t.sl-(t.entry||r.ltp))/(t.entry||r.ltp)*100).toFixed(1)}%`:null}
+        tgtSub={`R:R ${t.rr||0}:1`}
+        entrySub={t.method || null}
+      />
+
+      <ProgressStat label="Strength" pct={Math.min(100,(r.score||0)*10)} color={scoreColor} valueLabel={`${r.score||0}/10`} />
+
+      <WhyBox lines={why} />
+    </AccentCard>
   );
 }
+
 
 // Exact port of HTML calcStockVWAPSignal
 function calcStockVWAPSignal(ltp, intradayVWAP) {
