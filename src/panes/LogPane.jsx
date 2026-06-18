@@ -113,9 +113,9 @@ function SignalRow({ sig, livePrice }) {
             </div>
             {slDist!=null && (
               <div style={{ textAlign:'center' }}>
-                <div style={{ fontSize:7, color:'#94a3b8' }}>SL DIST</div>
-                <div style={{ fontSize:11, fontWeight:700, color:slDist<0?'#dc2626':'#64748b' }}>
-                  {slDist>=0?'+':''}{slDist}%
+                <div style={{ fontSize:11, color:'#94a3b8' }}>SL DIST</div>
+                <div style={{ fontSize:11, fontWeight:700, color:pnlPct<0?'#dc2626':'#64748b' }}>
+                  {pnlPct>=0?'+':'-'}{slDist}%
                 </div>
               </div>
             )}
@@ -128,7 +128,7 @@ function SignalRow({ sig, livePrice }) {
           {/* Progress bar: entry → target */}
           {toPct!=null && (
             <div>
-              <div style={{ display:'flex', justifyContent:'space-between', fontSize:7, color:'#94a3b8', marginBottom:3 }}>
+              <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'#94a3b8', marginBottom:3, fontWeight:700}}>
                 <span>Entry ₹{fmt(entry)}</span>
                 <span>To Target {toPct}%</span>
                 <span>₹{fmt(tgtVal)}</span>
