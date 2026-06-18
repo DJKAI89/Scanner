@@ -15,6 +15,102 @@ import {
 import { fmt, fmtVol } from '../utils/formatters';
 import { getIST, getISTDate, sleep, localIsOpen } from '../utils/marketTime';
 import { QUICK_STOCKS } from '../constants/config';
+import {
+  AccentCard, Tag, RecPill, LevelsStrip, Banner, FooterNote,
+} from '../components/cardKit';
+
+// ── SectionCard — accent-header card shell, consistent with Analysis/Stocks pages ──
+function SectionCard({ title, accent = '#16a34a', right, children }) {
+  return (
+    <div style={{
+      background: '#fff', border: '1px solid #e2e8f0', borderRadius: 14,
+      overflow: 'hidden', marginBottom: 12, boxShadow: '0 1px 4px rgba(0,0,0,.04)',
+    }}>
+      <div style={{
+        padding: '10px 14px 9px', borderBottom: `1px solid ${accent}33`,
+        background: `linear-gradient(90deg, ${accent}14, #ffffff)`,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <div style={{ width: 3, height: 14, borderRadius: 2, background: accent, flexShrink: 0 }} />
+          <span style={{ fontSize: 11, fontWeight: 800, color: '#0f172a', letterSpacing: 0.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
+        </div>
+        {right}
+      </div>
+      <div style={{ padding: '13px 14px' }}>{children}</div>
+    </div>
+  );
+}
+
+// ── LookupChartPopup — full-screen bottom-sheet popup, matching Stocks/Picks chart popup ──
+function LookupChartPopup({ r, onClose }) {
+  if (!r) return null;
+  const chgColor = (r.chgPct || 0) >= 0 ? '#16a34a' : '#dc2626';
+  const recColors = { 'STRONG BUY':'#16a34a', BUY:'#22c55e', MODERATE:'#0ea5e9', WATCH:'#d97706', AVOID:'#dc2626' };
+  const rec = r.tech?.rec;
+  const recColor = recColors[rec] || '#64748b';
+
+  return (
+    <div
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', backdropFilter: 'blur(2px)' }}
+    >
+      <div style={{ background: '#fff', width: '100%', maxHeight: '92dvh', borderRadius: '18px 18px 0 0', overflowY: 'auto', padding: '0 0 24px', boxShadow: '0 -8px 32px rgba(0,0,0,0.2)', animation: 'slideUp .22s ease' }}>
+        {/* Drag handle */}
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 4px' }}>
+          <div style={{ width: 36, height: 4, borderRadius: 2, background: '#e2e8f0' }} />
+        </div>
+
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '6px 16px 12px' }}>
+          <div>
+            <div style={{ fontSize: 20, fontWeight: 900, color: '#0f172a', lineHeight: 1.1 }}>{r.inst?.s}</div>
+            <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{r.inst?.n || r.inst?.s} · {r.inst?.sec || 'NSE'}</div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 22, fontWeight: 900, color: '#0f172a' }}>₹{fmt(r.ltp)}</div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: chgColor }}>{(r.chgPct||0)>=0?'+':''}{r.chgPct.toFixed(2)}%</div>
+            {rec && <div style={{ fontSize: 10, fontWeight: 800, color: recColor }}>{rec} · {r.tech?.numInds || 0} ind</div>}
+          </div>
+        </div>
+
+        {/* Live chart — auto-loads historicals + live ticks */}
+        <div style={{ padding: '0 12px', marginBottom: 12 }}>
+          <LiveChart
+            instrKey={r.inst?.key || ''}
+            candles={[]}
+            entry={r.tech?.entry?.trigger || r.ltp}
+            sl={r.tech?.sl}
+            target={r.tech?.target}
+            symbol={r.inst?.s || ''}
+            livePrice={r.ltp}
+            liveChgPct={r.chgPct}
+          />
+        </div>
+
+        {/* Trade setup */}
+        {r.tech?.sl > 0 && (
+          <div style={{ padding: '0 12px', marginBottom: 12 }}>
+            <LevelsStrip
+              entry={fmt(r.tech?.entry?.trigger || r.ltp)}
+              sl={fmt(r.tech?.sl)}
+              target={fmt(r.tech?.target)}
+              entrySub={r.tech?.entry?.method}
+              tgtSub={r.tech?.pot?.rr ? `R:R ${Number(r.tech.pot.rr).toFixed(1)}:1` : null}
+            />
+          </div>
+        )}
+
+        {/* Close button */}
+        <div style={{ padding: '0 12px' }}>
+          <button onClick={onClose} style={{ width: '100%', padding: '13px', background: '#0f172a', color: '#fff', border: 'none', borderRadius: 12, fontSize: 14, fontWeight: 800, cursor: 'pointer' }}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function getChgPct(q) {
   if (!q) return 0;
@@ -40,20 +136,20 @@ function PayoffCalc({ pick }) {
   });
 
   return (
-    <div style={{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:8, padding:'8px 10px', marginBottom:8 }}>
-      <div style={{ fontSize:8, color:'#64748b', fontWeight:700, marginBottom:6 }}>PAYOFF CALCULATOR</div>
+    <div style={{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:9, padding:'9px 11px', marginBottom:8 }}>
+      <div style={{ fontSize:8.5, color:'#64748b', fontWeight:800, letterSpacing:.3, marginBottom:6 }}>PAYOFF CALCULATOR</div>
       {scenarios.map((s) => (
         <div key={s.pct} style={{ display:'flex', justifyContent:'space-between', padding:'3px 6px' }}>
-          <span style={{ fontSize:9, color:'#374151', fontWeight:600 }}>{s.pct > 0 ? '+' : ''}{s.pct}%</span>
-          <span style={{ fontSize:9, fontWeight:700, color:s.pnlPct >= 0 ? '#16a34a' : '#dc2626' }}>
-            Rs {fmt(s.newPrem)} {s.pnlPct !== 0 ? `(${s.pnlPct > 0 ? '+' : ''}${s.pnlPct}%)` : ''}
+          <span style={{ fontSize:9.5, color:'#374151', fontWeight:600 }}>{s.pct > 0 ? '+' : ''}{s.pct}%</span>
+          <span style={{ fontSize:9.5, fontWeight:700, color:s.pnlPct >= 0 ? '#16a34a' : '#dc2626' }}>
+            ₹{fmt(s.newPrem)} {s.pnlPct !== 0 ? `(${s.pnlPct > 0 ? '+' : ''}${s.pnlPct}%)` : ''}
           </span>
         </div>
       ))}
-      <div style={{ display:'flex', justifyContent:'space-between', marginTop:6, paddingTop:6, borderTop:'1px solid #e2e8f0', fontSize:8, color:'#64748b' }}>
-        <span>Break-even Rs {fmt(beSpot, 0)}</span>
+      <div style={{ display:'flex', justifyContent:'space-between', marginTop:6, paddingTop:6, borderTop:'1px solid #e2e8f0', fontSize:8.5, color:'#64748b' }}>
+        <span>Break-even ₹{fmt(beSpot, 0)}</span>
         <span>{bePct}% move needed</span>
-        <span>Theta -Rs {thetaAbs.toFixed(2)}/day</span>
+        <span>Theta -₹{thetaAbs.toFixed(2)}/day</span>
       </div>
     </div>
   );
@@ -66,13 +162,13 @@ function PositionSizing({ pick, portSize, riskPct }) {
   const recLots = Math.max(1, Math.floor(maxRisk / lossPerLot));
   const recCapital = recLots * pick.entry * pick.lot;
   return (
-    <div style={{ background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:8, padding:'8px 10px', marginBottom:8 }}>
-      <div style={{ fontSize:8, color:'#64748b', fontWeight:700, marginBottom:4 }}>POSITION SIZING</div>
+    <div style={{ background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:9, padding:'9px 11px', marginBottom:8 }}>
+      <div style={{ fontSize:8.5, color:'#64748b', fontWeight:800, letterSpacing:.3, marginBottom:4 }}>POSITION SIZING</div>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-        <div style={{ fontSize:16, fontWeight:800, color:'#1d4ed8' }}>{recLots} lot{recLots > 1 ? 's' : ''}</div>
-        <div style={{ textAlign:'right', fontSize:11, color:'#64748b' }}>
-          <b>Capital:</b> Rs {fmt(recCapital, 0)}<br />
-          <b>Risk cap:</b> Rs {fmt(maxRisk, 0)}
+        <div style={{ fontSize:17, fontWeight:800, color:'#1d4ed8' }}>{recLots} lot{recLots > 1 ? 's' : ''}</div>
+        <div style={{ textAlign:'right', fontSize:10.5, color:'#64748b', lineHeight:1.6 }}>
+          <b style={{ color:'#0f172a' }}>Capital</b> ₹{fmt(recCapital, 0)}<br />
+          <b style={{ color:'#0f172a' }}>Risk cap</b> ₹{fmt(maxRisk, 0)}
         </div>
       </div>
     </div>
@@ -80,65 +176,59 @@ function PositionSizing({ pick, portSize, riskPct }) {
 }
 
 function OptionSuggestionCard({ pick, cfg, showTools = true }) {
-  const isBuy    = pick.action === 'BUY';
-  const isSell   = pick.action === 'SELL';
-  const actionBg = isBuy  ? '#16a34a' : isSell ? '#dc2626' : '#64748b';
-  const cardBg   = pick.type === 'CE' ? '#f0fdf4' : '#fef2f2';
-  const cardBdr  = pick.type === 'CE' ? '#86efac' : '#fca5a5';
-  // For SELL: SL is above entry, target is below — swap colors
-  const slColor  = isSell ? '#16a34a' : '#dc2626';
-  const tgtColor = isSell ? '#dc2626' : '#16a34a';
-  const slLabel  = isSell ? 'SL (ABOVE)' : 'STOP LOSS';
-  const tgtLabel = isSell ? 'TARGET (BELOW)' : 'TARGET';
+  const isBuy  = pick.action === 'BUY';
+  const isSell = pick.action === 'SELL';
+  const dir    = isBuy ? 'bull' : isSell ? 'bear' : 'neutral';
+  // For SELL: SL is above entry, target is below — swap colors/labels
+  const slSub  = pick.entry > 0 ? `${isBuy ? '-' : '+'}${((Math.abs(pick.sl - pick.entry)/pick.entry)*100).toFixed(1)}%` : null;
+  const tgtSub = pick.entry > 0 ? `${isBuy ? '+' : '-'}${((Math.abs(pick.tgt - pick.entry)/pick.entry)*100).toFixed(1)}%` : null;
 
   return (
-    <div style={{ marginBottom:12 }}>
-      <div style={{ background:cardBg, border:`1px solid ${cardBdr}`, borderRadius:10, padding:12, marginBottom:6, position:'relative' }}>
-        {/* BUY/SELL action badge */}
-        <div style={{ position:'absolute', top:10, right:10, background:actionBg, color:'#fff', fontSize:9, fontWeight:800, padding:'3px 10px', borderRadius:20, letterSpacing:'.5px' }}>
-          {pick.action || 'BUY'} {pick.type}
-        </div>
-
-        <div style={{ fontWeight:800, fontSize:14, marginBottom:4, paddingRight:70 }}>
-          {pick.und} {pick.strike} {pick.type}
-        </div>
-        <div style={{ fontSize:10, color:'#64748b', marginBottom:8 }}>
-          ₹{fmt(pick.entry)} entry · {pick.confidence}% conf · Exp {pick.expiry || '—'} · Lot {pick.lot || 1}
-        </div>
-
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:4, background:'#e2e8f0', borderRadius:7, padding:1, marginBottom:8 }}>
-          {[
-            { l:'ENTRY',   v:`₹${fmt(pick.entry)}`, c:'#1d4ed8' },
-            { l:slLabel,   v:`₹${fmt(pick.sl)}`,    c:slColor,  s: pick.entry > 0 ? `${isBuy ? '-' : '+'}${((Math.abs(pick.sl - pick.entry)/pick.entry)*100).toFixed(1)}%` : '' },
-            { l:tgtLabel,  v:`₹${fmt(pick.tgt)}`,   c:tgtColor, s: pick.entry > 0 ? `${isBuy ? '+' : '-'}${((Math.abs(pick.tgt - pick.entry)/pick.entry)*100).toFixed(1)}%` : '' },
-          ].map((b) => (
-            <div key={b.l} style={{ background:'#f8fafc', padding:'6px 8px', textAlign:'center' }}>
-              <div style={{ fontSize:7, color:'#64748b' }}>{b.l}</div>
-              <div style={{ fontSize:13, fontWeight:800, color:b.c }}>{b.v}</div>
-              {b.s && <div style={{ fontSize:8, color:b.c }}>{b.s}</div>}
-            </div>
-          ))}
-        </div>
-
-        {/* R:R and capital */}
-        <div style={{ display:'flex', gap:12, fontSize:9, color:'#64748b', marginBottom:showTools?6:0 }}>
-          {pick.rr > 0 && <span>⚖ R:R {Number(pick.rr).toFixed(1)}:1</span>}
-          {pick.amtRequired > 0 && <span>💰 Capital ₹{fmt(pick.amtRequired,0)}</span>}
-          {pick.maxLoss > 0 && <span>⛔ Max Loss ₹{fmt(Math.abs(pick.maxLoss),0)}</span>}
-          {pick.maxProfit > 0 && <span>🎯 Max Profit ₹{fmt(pick.maxProfit,0)}</span>}
-        </div>
-
-        {/* Trend alignment */}
-        {pick.trendAligned !== undefined && (
-          <div style={{ fontSize:9, fontWeight:700, color:pick.trendAligned?'#16a34a':'#d97706', marginTop:4 }}>
-            {pick.trendAligned ? '✅ With Market Trend' : '⚠ Against Market Trend — lower confidence'}
+    <AccentCard dir={dir} style={{ marginBottom: 10 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:8, marginBottom:8 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight:800, fontSize:14.5, color:'#0f172a' }}>{pick.und} {pick.strike} {pick.type}</div>
+          <div style={{ fontSize:10, color:'#64748b', marginTop:2 }}>
+            ₹{fmt(pick.entry)} entry · Exp {pick.expiry || '—'} · Lot {pick.lot || 1}
           </div>
-        )}
-
-        {showTools && <PositionSizing pick={pick} portSize={cfg.portSize} riskPct={cfg.riskPct} />}
-        {showTools && <PayoffCalc pick={pick} />}
+        </div>
+        <RecPill label={`${pick.action || 'BUY'} ${pick.type}`} dir={dir} />
       </div>
-    </div>
+
+      <div style={{ marginBottom: 8 }}>
+        <Tag tone={pick.confidence >= 70 ? 'green' : pick.confidence >= 50 ? 'amber' : 'red'}>
+          {pick.confidence}% confidence
+        </Tag>
+      </div>
+
+      <LevelsStrip
+        entry={fmt(pick.entry)}
+        sl={fmt(pick.sl)}
+        target={fmt(pick.tgt)}
+        slSub={slSub}
+        tgtSub={tgtSub}
+      />
+
+      {/* R:R and capital */}
+      <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginBottom: pick.trendAligned !== undefined || showTools ? 8 : 0 }}>
+        {pick.rr > 0 && <Tag tone="purple">R:R {Number(pick.rr).toFixed(1)}:1</Tag>}
+        {pick.amtRequired > 0 && <Tag tone="blue">Capital ₹{fmt(pick.amtRequired,0)}</Tag>}
+        {pick.maxLoss > 0 && <Tag tone="red">Max Loss ₹{fmt(Math.abs(pick.maxLoss),0)}</Tag>}
+        {pick.maxProfit > 0 && <Tag tone="green">Max Profit ₹{fmt(pick.maxProfit,0)}</Tag>}
+      </div>
+
+      {/* Trend alignment */}
+      {pick.trendAligned !== undefined && (
+        <Banner
+          tone={pick.trendAligned ? 'green' : 'amber'}
+          icon={pick.trendAligned ? '✅' : '⚠'}
+          title={pick.trendAligned ? 'With Market Trend' : 'Against Market Trend — lower confidence'}
+        />
+      )}
+
+      {showTools && <PositionSizing pick={pick} portSize={cfg.portSize} riskPct={cfg.riskPct} />}
+      {showTools && <PayoffCalc pick={pick} />}
+    </AccentCard>
   );
 }
 
@@ -151,6 +241,7 @@ export default function LookupPane() {
   const [progress, setProgress] = useState('');
   const [ddOpen, setDdOpen] = useState(false);
   const [ddItems, setDdItems] = useState([]);
+  const [chartOpen, setChartOpen] = useState(false);
 
   const activeKey = result?.inst?.key ? [result.inst.key] : [];
   const { connected: liveConnected, lastPrices: livePrices, wsMode: liveMode } = useMarketFeed(
@@ -201,6 +292,7 @@ export default function LookupPane() {
     setLoading(true);
     setError('');
     setResult(null);
+    setChartOpen(false);
     setProgress('Searching for ' + s + '...');
 
     try {
@@ -444,36 +536,60 @@ export default function LookupPane() {
 
       {r && !loading && (
         <div>
-          <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:11, padding:16, marginBottom:12 }}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:8 }}>
-              <div>
-                <div style={{ fontSize:20, fontWeight:800 }}>{r.inst?.s}</div>
-                <div style={{ fontSize:11, color:'#64748b' }}>{r.inst?.n} · {r.inst?.sec} {r.inst?.fo ? '· F&O' : ''}</div>
-                <div style={{ fontSize:9, color:'#94a3b8', marginTop:4 }}>
-                  Updated: {r.time}{activeKey.length ? ` · ${liveConnected ? (liveMode === 'ws' ? 'Live WS' : 'Live Poll') : 'Static'}` : ''}
+          {/* Hero card */}
+          <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:14, padding:16, marginBottom:12, boxShadow:'0 1px 4px rgba(0,0,0,.04)' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:10 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                  <span style={{ fontSize:21, fontWeight:900, color:'#0f172a', letterSpacing:-0.3 }}>{r.inst?.s}</span>
+                  <button
+                    onClick={() => setChartOpen(true)}
+                    style={{ fontSize:9.5, color:'#1d4ed8', fontWeight:700, background:'#eff6ff', border:'1px solid #bfdbfe', padding:'3px 9px', borderRadius:7, cursor:'pointer', display:'inline-flex', alignItems:'center', gap:3 }}
+                  >
+                    📊 Chart
+                  </button>
+                </div>
+                <div style={{ fontSize:11, color:'#64748b', marginTop:3 }}>{r.inst?.n} · {r.inst?.sec} {r.inst?.fo ? '· F&O' : ''}</div>
+                <div style={{ fontSize:9, color:'#94a3b8', marginTop:5, display:'flex', alignItems:'center', gap:5 }}>
+                  <span>Updated {r.time}</span>
+                  {activeKey.length > 0 && (
+                    <>
+                      <span>·</span>
+                      <span style={{ display:'inline-flex', alignItems:'center', gap:4 }}>
+                        <span style={{ width:5, height:5, borderRadius:'50%', background: liveConnected ? '#16a34a' : '#cbd5e1', flexShrink:0 }} />
+                        {liveConnected ? (liveMode === 'ws' ? 'Live WS' : 'Live Poll') : 'Static'}
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
               <div style={{ textAlign:'right' }}>
-                <div style={{ fontSize:24, fontWeight:800, color:r.chgPct >= 0 ? '#16a34a' : '#dc2626' }}>₹{fmt(r.ltp)}</div>
+                <div style={{ fontSize:25, fontWeight:900, color:r.chgPct >= 0 ? '#16a34a' : '#dc2626', letterSpacing:-0.5 }}>₹{fmt(r.ltp)}</div>
                 <div style={{ fontSize:13, fontWeight:700, color:r.chgPct >= 0 ? '#16a34a' : '#dc2626' }}>
                   {r.chgPts != null ? (r.chgPts >= 0 ? '+' : '') + fmt(r.chgPts) : (r.chgPct >= 0 ? '+' : '') + r.chgPct.toFixed(2) + '%'}
                   {' '}
-                  <span style={{ fontSize:10, fontWeight:500 }}>({r.chgPct >= 0 ? '+' : ''}{r.chgPct.toFixed(2)}%)</span>
+                  <span style={{ fontSize:10, fontWeight:600, opacity:.8 }}>({r.chgPct >= 0 ? '+' : ''}{r.chgPct.toFixed(2)}%)</span>
                 </div>
               </div>
             </div>
             {r.q.volume > 0 && (
-              <div style={{ fontSize:9, color:'#94a3b8', marginTop:6 }}>
-                Vol: {fmtVol(r.q.volume)} · Avg20: {fmtVol(r.tech?.avgVol || 0)} · {(r.tech?.volRatio || 1).toFixed(1)}x avg
+              <div style={{ fontSize:9.5, color:'#94a3b8', marginTop:9, paddingTop:9, borderTop:'1px solid #f1f5f9' }}>
+                Vol {fmtVol(r.q.volume)} · Avg20 {fmtVol(r.tech?.avgVol || 0)} · {(r.tech?.volRatio || 1).toFixed(1)}× avg
               </div>
             )}
           </div>
 
+          {/* Recommendation banner */}
           {r.tech?.rec && (
-            <div style={{ background:recBg[r.tech.rec] || '#fffbeb', border:`1.5px solid ${recColors[r.tech.rec] || '#d97706'}`, borderRadius:10, padding:14, marginBottom:12 }}>
+            <div style={{
+              background: recBg[r.tech.rec] || '#fffbeb',
+              border: `1px solid ${(recColors[r.tech.rec] || '#d97706')}55`,
+              borderLeft: `4px solid ${recColors[r.tech.rec] || '#d97706'}`,
+              borderRadius: 10, padding: '13px 15px', marginBottom: 12,
+            }}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:6 }}>
-                <div style={{ fontWeight:800, fontSize:18, color:recColors[r.tech.rec] || '#d97706' }}>{r.tech.rec}</div>
-                <div style={{ fontSize:11, fontWeight:700, color:r.tech.strength?.color }}>{r.tech.strength?.label} · {r.tech.numInds} indicators · {r.tech.conf?.toFixed(0)}% conf</div>
+                <div style={{ fontWeight:900, fontSize:18, color:recColors[r.tech.rec] || '#d97706', letterSpacing:-0.3 }}>{r.tech.rec}</div>
+                <div style={{ fontSize:10.5, fontWeight:700, color:r.tech.strength?.color }}>{r.tech.strength?.label} · {r.tech.numInds} indicators · {r.tech.conf?.toFixed(0)}% conf</div>
               </div>
               <div style={{ fontSize:11, color:'#475569', lineHeight:1.6, marginTop:8 }}>
                 {[
@@ -487,42 +603,34 @@ export default function LookupPane() {
             </div>
           )}
 
-          <div className="stats-g">
-            <StatCard label="RSI (14)" value={r.tech.rsi?.toFixed(1) || '—'} sub={r.tech.rsi < (cfg.rsiOS||35) ? 'Oversold' : r.tech.rsi > (cfg.rsiOB||65) ? 'Overbought' : 'Neutral'} valClass={r.tech.rsi < (cfg.rsiOS||35) ? 'up' : r.tech.rsi > (cfg.rsiOB||65) ? 'dn' : 'bl'} />
-            <StatCard label="ATR" value={`Rs ${fmt(r.tech.atr || 0)}`} sub="14-day volatility" valClass="am" />
-            <StatCard label="MA50" value={r.tech.ema?.e50 ? `Rs ${fmt(r.tech.ema.e50)}` : '—'} sub={r.tech.a50 ? 'Above' : r.tech.a50 === false ? 'Below' : 'N/A'} valClass={r.tech.a50 ? 'up' : 'dn'} />
-            <StatCard label="MA200" value={r.tech.ema?.e200 ? `Rs ${fmt(r.tech.ema.e200)}` : '—'} sub={r.tech.a200 ? 'Above' : r.tech.a200 === false ? 'Below' : 'Need 200d'} valClass={r.tech.a200 ? 'up' : 'dn'} />
-            <StatCard label="SUPPORT" value={r.tech.sr?.pivotS1 ? `Rs ${fmt(r.tech.sr.pivotS1)}` : '—'} sub="Pivot S1" valClass="up" />
-            <StatCard label="RESISTANCE" value={r.tech.sr?.pivotR1 ? `Rs ${fmt(r.tech.sr.pivotR1)}` : '—'} sub="Pivot R1" valClass="dn" />
-          </div>
-
-          {/* Live chart */}
-          <div style={{ marginBottom:14 }}>
-            <LiveChart
-              instrKey={r.inst?.key || ''}
-              candles={[]}
-              entry={r.tech.entry?.trigger || r.ltp}
-              sl={r.tech.sl}
-              target={r.tech.target}
-              symbol={r.inst?.s || ''}
-            />
-          </div>
-
-          {r.tech.sl && (
-            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:14, marginBottom:12 }}>
-              <div style={{ fontSize:11, fontWeight:700, marginBottom:10 }}>Trade Setup</div>
-              <div className="trade-setup">
-                <div className="ts-box"><div className="ts-l">ENTRY</div><div className="ts-v" style={{ color:'#1d4ed8' }}>Rs {fmt(r.tech.entry?.trigger || r.ltp)}</div><div className="ts-s" style={{ color:'#64748b', fontSize:8 }}>{r.tech.entry?.method}</div></div>
-                <div className="ts-box"><div className="ts-l">STOP LOSS</div><div className="ts-v" style={{ color:'#dc2626' }}>Rs {fmt(r.tech.sl)}</div></div>
-                <div className="ts-box"><div className="ts-l">TARGET</div><div className="ts-v" style={{ color:'#16a34a' }}>Rs {fmt(r.tech.target)}</div><div className="ts-s" style={{ color:'#16a34a' }}>R:R {r.tech.pot?.rr?.toFixed(1)}</div></div>
-              </div>
-            </div>
+          {/* Trade setup */}
+          {r.tech.sl > 0 && (
+            <SectionCard title="Trade Setup" accent="#16a34a">
+              <LevelsStrip
+                entry={fmt(r.tech.entry?.trigger || r.ltp)}
+                sl={fmt(r.tech.sl)}
+                target={fmt(r.tech.target)}
+                entrySub={r.tech.entry?.method}
+                tgtSub={r.tech.pot?.rr ? `R:R ${r.tech.pot.rr.toFixed(1)}:1` : null}
+              />
+            </SectionCard>
           )}
 
+          {/* Key technical levels */}
+          <SectionCard title="Technical Levels" accent="#0ea5e9">
+            <div className="stats-g" style={{ marginBottom: 0 }}>
+              <StatCard label="RSI (14)" value={r.tech.rsi?.toFixed(1) || '—'} sub={r.tech.rsi < (cfg.rsiOS||35) ? 'Oversold' : r.tech.rsi > (cfg.rsiOB||65) ? 'Overbought' : 'Neutral'} valClass={r.tech.rsi < (cfg.rsiOS||35) ? 'up' : r.tech.rsi > (cfg.rsiOB||65) ? 'dn' : 'bl'} />
+              <StatCard label="ATR" value={`₹${fmt(r.tech.atr || 0)}`} sub="14-day volatility" valClass="am" />
+              <StatCard label="MA50" value={r.tech.ema?.e50 ? `₹${fmt(r.tech.ema.e50)}` : '—'} sub={r.tech.a50 ? 'Above' : r.tech.a50 === false ? 'Below' : 'N/A'} valClass={r.tech.a50 ? 'up' : 'dn'} />
+              <StatCard label="MA200" value={r.tech.ema?.e200 ? `₹${fmt(r.tech.ema.e200)}` : '—'} sub={r.tech.a200 ? 'Above' : r.tech.a200 === false ? 'Below' : 'Need 200d'} valClass={r.tech.a200 ? 'up' : 'dn'} />
+              <StatCard label="SUPPORT" value={r.tech.sr?.pivotS1 ? `₹${fmt(r.tech.sr.pivotS1)}` : '—'} sub="Pivot S1" valClass="up" />
+              <StatCard label="RESISTANCE" value={r.tech.sr?.pivotR1 ? `₹${fmt(r.tech.sr.pivotR1)}` : '—'} sub="Pivot R1" valClass="dn" />
+            </div>
+          </SectionCard>
+
           {(r.tf30?.rsi || r.tf5?.rsi) && (
-            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:14, marginBottom:12 }}>
-              <div style={{ fontSize:11, fontWeight:700, marginBottom:10 }}>Multi-Timeframe Analysis</div>
-              <div className="stats-g">
+            <SectionCard title="Multi-Timeframe Analysis" accent="#7c3aed">
+              <div className="stats-g" style={{ marginBottom: 0 }}>
                 {r.tech.rsi && <StatCard label="DAILY RSI" value={r.tech.rsi?.toFixed(1)} sub="Daily" valClass={r.tech.rsi < (cfg.rsiOS||35) ? 'up' : r.tech.rsi > (cfg.rsiOB||65) ? 'dn' : 'bl'} />}
                 {r.tf30?.rsi && <StatCard label="30-MIN RSI" value={r.tf30.rsi.toFixed(1)} sub={`30m · ${r.tf30.trend}`} valClass={r.tf30.trend === 'UP' ? 'up' : 'dn'} />}
                 {r.tf5?.rsi && <StatCard label="5-MIN RSI" value={r.tf5.rsi.toFixed(1)} sub={`5m · ${r.tf5.trend}`} valClass={r.tf5.trend === 'UP' ? 'up' : 'dn'} />}
@@ -531,62 +639,39 @@ export default function LookupPane() {
                 {r.tf5?.emaBull != null && <StatCard label="5M EMA" value={r.tf5.emaBull ? '▲ Bull' : '▼ Bear'} sub="EMA 5 vs 13" valClass={r.tf5.emaBull ? 'up' : 'dn'} />}
               </div>
 
-              {/* Intraday signal badges */}
+              {/* Intraday signal tags */}
               {r.intraData && (r.intraData.volRatio >= 1.5 || r.intraData.emaBull != null || r.intraData.accelerating) && (
                 <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginTop:10 }}>
-                  {r.intraData.volRatio >= 2 && (
-                    <span style={{ fontSize:9, fontWeight:800, background:'#fdf4ff', color:'#7c3aed', border:'1px solid #ddd6fe', borderRadius:6, padding:'3px 8px' }}>
-                      🔥 Volume surge {r.intraData.volRatio}× intraday
-                    </span>
-                  )}
-                  {r.intraData.volRatio >= 1.5 && r.intraData.volRatio < 2 && (
-                    <span style={{ fontSize:9, fontWeight:700, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:6, padding:'3px 8px' }}>
-                      📊 Elevated intraday volume {r.intraData.volRatio}×
-                    </span>
-                  )}
-                  {r.intraData.emaBull && (
-                    <span style={{ fontSize:9, fontWeight:700, background:'#f0fdf4', color:'#16a34a', border:'1px solid #86efac', borderRadius:6, padding:'3px 8px' }}>
-                      ⚡ 5m EMA bullish trend
-                    </span>
-                  )}
-                  {r.intraData.accelerating && (
-                    <span style={{ fontSize:9, fontWeight:700, background:'#fff7ed', color:'#c2410c', border:'1px solid #fed7aa', borderRadius:6, padding:'3px 8px' }}>
-                      🚀 Intraday momentum accelerating
-                    </span>
-                  )}
-                  {r.intraData.aboveVWAP && (
-                    <span style={{ fontSize:9, fontWeight:700, background:'#f0fdf4', color:'#16a34a', border:'1px solid #86efac', borderRadius:6, padding:'3px 8px' }}>
-                      ↑ Above VWAP ₹{r.intraData.vwap?.toFixed(1)}
-                    </span>
-                  )}
-                  {r.intraData.aboveVWAP === false && (
-                    <span style={{ fontSize:9, fontWeight:700, background:'#fef2f2', color:'#dc2626', border:'1px solid #fca5a5', borderRadius:6, padding:'3px 8px' }}>
-                      ↓ Below VWAP ₹{r.intraData.vwap?.toFixed(1)}
-                    </span>
-                  )}
+                  {r.intraData.volRatio >= 2 && <Tag tone="purple">🔥 Volume surge {r.intraData.volRatio}× intraday</Tag>}
+                  {r.intraData.volRatio >= 1.5 && r.intraData.volRatio < 2 && <Tag tone="blue">📊 Elevated intraday volume {r.intraData.volRatio}×</Tag>}
+                  {r.intraData.emaBull && <Tag tone="green">⚡ 5m EMA bullish trend</Tag>}
+                  {r.intraData.accelerating && <Tag tone="amber">🚀 Intraday momentum accelerating</Tag>}
+                  {r.intraData.aboveVWAP && <Tag tone="green">↑ Above VWAP ₹{r.intraData.vwap?.toFixed(1)}</Tag>}
+                  {r.intraData.aboveVWAP === false && <Tag tone="red">↓ Below VWAP ₹{r.intraData.vwap?.toFixed(1)}</Tag>}
                 </div>
               )}
-            </div>
+            </SectionCard>
           )}
 
           {fiiInterp && (
-            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:9, padding:'10px 14px', marginBottom:12 }}>
-              <div style={{ fontSize:9, color:'#94a3b8', marginBottom:3 }}>FII/DII BIAS</div>
-              <div style={{ fontSize:13, fontWeight:800, color:fiiInterp.color }}>{fiiInterp.label}</div>
-              <div style={{ fontSize:10, color:'#64748b', marginTop:2 }}>{fiiInterp.detail}</div>
-            </div>
+            <SectionCard title="FII / DII Bias" accent="#0ea5e9">
+              <div style={{ fontSize:14, fontWeight:800, color:fiiInterp.color }}>{fiiInterp.label}</div>
+              <div style={{ fontSize:10.5, color:'#64748b', marginTop:3 }}>{fiiInterp.detail}</div>
+            </SectionCard>
           )}
 
           {r.foData && !r.foData.error && (
-            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:14, marginBottom:12 }}>
-              <div style={{ fontSize:11, fontWeight:700, marginBottom:10 }}>
-                {r.foData.unsupported
-                  ? 'Options Suggestions · No NSE option contracts'
-                  : r.foData.empty
-                    ? `Options Suggestions · Exp ${r.foData.expiry} · No chain data`
-                    : `Options Suggestions · ${r.foData.picks.filter((p) => p.trendAligned).length} with-trend · ${r.foData.picks.length} total · Exp ${r.foData.expiry}`}
-              </div>
-
+            <SectionCard
+              title={r.foData.unsupported
+                ? 'Options Suggestions'
+                : r.foData.empty
+                  ? `Options Suggestions · Exp ${r.foData.expiry}`
+                  : `Options Suggestions · Exp ${r.foData.expiry}`}
+              accent="#d97706"
+              right={!r.foData.unsupported && !r.foData.empty ? (
+                <Tag tone="slate">{r.foData.picks.filter((p) => p.trendAligned).length} with-trend · {r.foData.picks.length} total</Tag>
+              ) : null}
+            >
               {r.foData.unsupported && (
                 <div style={{ fontSize:11, color:'#64748b', padding:8 }}>No options contracts found for {r.inst?.s} on NSE.</div>
               )}
@@ -598,26 +683,22 @@ export default function LookupPane() {
               {!r.foData.unsupported && !r.foData.empty && (
                 <>
                   <div className="stats-g" style={{ marginBottom:10 }}>
-                    {r.foData.maxPain > 0 && <StatCard label="MAX PAIN" value={`Rs ${fmt(r.foData.maxPain)}`} valClass="pu" />}
-                    {r.foData.oiWalls?.callWall > 0 && <StatCard label="CALL WALL" value={`Rs ${fmt(r.foData.oiWalls.callWall)}`} valClass="dn" />}
-                    {r.foData.oiWalls?.putWall > 0 && <StatCard label="PUT WALL" value={`Rs ${fmt(r.foData.oiWalls.putWall)}`} valClass="up" />}
+                    {r.foData.maxPain > 0 && <StatCard label="MAX PAIN" value={`₹${fmt(r.foData.maxPain)}`} valClass="pu" />}
+                    {r.foData.oiWalls?.callWall > 0 && <StatCard label="CALL WALL" value={`₹${fmt(r.foData.oiWalls.callWall)}`} valClass="dn" />}
+                    {r.foData.oiWalls?.putWall > 0 && <StatCard label="PUT WALL" value={`₹${fmt(r.foData.oiWalls.putWall)}`} valClass="up" />}
                     <StatCard label="PCR" value={(r.foData.pcr || 0).toFixed(2)} sub={r.foData.pcr > 1.2 ? 'Bearish hedging' : 'Put-Call ratio'} valClass={r.foData.pcr > 1.2 ? 'dn' : 'up'} />
                   </div>
 
                   {r.foData.picks.filter((p) => p.trendAligned).length > 0 && (
                     <>
-                      <div style={{ background:'#f0fdf4', border:'1px solid #bbf7d0', borderRadius:6, padding:'6px 10px', marginBottom:8, fontSize:10, fontWeight:700, color:'#15803d' }}>
-                        {r.foData.picks.filter((p) => p.trendAligned).length} WITH-TREND signals
-                      </div>
+                      <Banner tone="green" icon="✅" title={`${r.foData.picks.filter((p) => p.trendAligned).length} WITH-TREND signals`} />
                       {r.foData.picks.filter((p) => p.trendAligned).slice(0, 3).map((pick, i) => <OptionSuggestionCard key={`wt-${i}`} pick={pick} cfg={cfg} />)}
                     </>
                   )}
 
                   {r.foData.picks.filter((p) => !p.trendAligned).length > 0 && (
                     <>
-                      <div style={{ background:'#fffbeb', border:'1px solid #fde68a', borderRadius:6, padding:'6px 10px', marginBottom:8, fontSize:10, fontWeight:700, color:'#92400e' }}>
-                        {r.foData.picks.filter((p) => !p.trendAligned).length} COUNTER-TREND signals
-                      </div>
+                      <Banner tone="amber" icon="⚠" title={`${r.foData.picks.filter((p) => !p.trendAligned).length} COUNTER-TREND signals`} />
                       {r.foData.picks.filter((p) => !p.trendAligned).slice(0, 3).map((pick, i) => <OptionSuggestionCard key={`ct-${i}`} pick={pick} cfg={cfg} />)}
                     </>
                   )}
@@ -627,8 +708,8 @@ export default function LookupPane() {
                   )}
 
                   {r.foData.multiExpiry && (
-                    <div style={{ marginTop:12, background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:12 }}>
-                      <div style={{ fontSize:10, fontWeight:800, marginBottom:8 }}>MULTI-EXPIRY COMPARISON · ATM {r.foData.multiExpiry.atm}</div>
+                    <div style={{ marginTop:4, background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:11, padding:12 }}>
+                      <div style={{ fontSize:9.5, fontWeight:800, color:'#374151', letterSpacing:.3, marginBottom:9 }}>MULTI-EXPIRY COMPARISON · ATM {r.foData.multiExpiry.atm}</div>
                       {['CE', 'PE'].map((side) => {
                         const me = r.foData.multiExpiry;
                         const cur = me[side.toLowerCase()].cur;
@@ -636,16 +717,16 @@ export default function LookupPane() {
                         const costDiff = nxt.ltp > 0 && cur.ltp > 0 ? +((nxt.ltp - cur.ltp) / cur.ltp * 100).toFixed(0) : null;
                         return (
                           <div key={side} style={{ marginBottom:8 }}>
-                            <div style={{ fontSize:9, fontWeight:700, color:'#374151', marginBottom:4 }}>{side} ATM {me.atm}</div>
-                            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:4 }}>
-                              <div style={{ background:'#f0f9ff', border:'1px solid #bae6fd', borderRadius:6, padding:'6px 8px' }}>
-                                <div style={{ fontSize:7, color:'#0369a1', fontWeight:700 }}>CURRENT · {me.expiry} · {me.dteCur}d</div>
-                                <div style={{ fontSize:14, fontWeight:800, color:'#1e40af' }}>Rs {fmt(cur.ltp)}</div>
+                            <div style={{ fontSize:9.5, fontWeight:700, color:'#374151', marginBottom:4 }}>{side} ATM {me.atm}</div>
+                            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
+                              <div style={{ background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:8, padding:'7px 9px' }}>
+                                <div style={{ fontSize:7.5, color:'#1d4ed8', fontWeight:800, letterSpacing:.2 }}>CURRENT · {me.expiry} · {me.dteCur}d</div>
+                                <div style={{ fontSize:14.5, fontWeight:800, color:'#1e40af', marginTop:1 }}>₹{fmt(cur.ltp)}</div>
                               </div>
-                              <div style={{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:6, padding:'6px 8px' }}>
-                                <div style={{ fontSize:7, color:'#64748b', fontWeight:700 }}>NEXT · {me.nextExp} · {me.dteNxt}d</div>
-                                <div style={{ fontSize:14, fontWeight:800, color:'#374151' }}>Rs {fmt(nxt.ltp)}</div>
-                                {costDiff !== null && <div style={{ fontSize:7, color:costDiff > 0 ? '#dc2626' : '#16a34a', fontWeight:600 }}>{costDiff > 0 ? '+' : ''}{costDiff}% vs current</div>}
+                              <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, padding:'7px 9px' }}>
+                                <div style={{ fontSize:7.5, color:'#64748b', fontWeight:800, letterSpacing:.2 }}>NEXT · {me.nextExp} · {me.dteNxt}d</div>
+                                <div style={{ fontSize:14.5, fontWeight:800, color:'#0f172a', marginTop:1 }}>₹{fmt(nxt.ltp)}</div>
+                                {costDiff !== null && <div style={{ fontSize:7.5, color:costDiff > 0 ? '#dc2626' : '#16a34a', fontWeight:700, marginTop:1 }}>{costDiff > 0 ? '+' : ''}{costDiff}% vs current</div>}
                               </div>
                             </div>
                           </div>
@@ -655,22 +736,22 @@ export default function LookupPane() {
                   )}
                 </>
               )}
-            </div>
+            </SectionCard>
           )}
 
           {r.foData?.error && (
-            <div style={{ background:'#fef2f2', border:'1px solid #fecaca', borderRadius:8, padding:10, marginBottom:12, fontSize:11, color:'#dc2626' }}>
-              Options error: {r.foData.error}
-            </div>
+            <Banner tone="red" icon="⛔" title="Options error" detail={r.foData.error} />
           )}
 
-          <div className="disc">Analysis for educational purposes only. Not SEBI-registered advice. Always DYODD.</div>
+          <FooterNote>Analysis for educational purposes only. Not SEBI-registered advice. Always DYODD.</FooterNote>
         </div>
       )}
 
       {!r && !loading && !error && (
         <EmptyState>Enter a stock symbol above to get full analysis including option suggestions where available.</EmptyState>
       )}
+
+      {chartOpen && <LookupChartPopup r={r} onClose={() => setChartOpen(false)} />}
     </div>
   );
 }
