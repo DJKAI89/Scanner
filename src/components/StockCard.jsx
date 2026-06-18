@@ -1,7 +1,6 @@
 import React from 'react';
 import { fmt, fmtVol } from '../utils/formatters';
-import { getSignalStrength, calcEMA } from '../services/technical';
-import LiveChart from './LiveChart';
+import { getSignalStrength } from '../services/technical';
 
 
 function recCls(rec) {
@@ -14,7 +13,7 @@ function recCls(rec) {
   return 'watch';
 }
 
-export default function StockCard({ pick: p, rank, cfg = {} }) {
+export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
   const rec = p.rec || p.signal || 'WATCH';
   const cls = recCls(rec);
   const ltp = p.ltp || p.entry || 0;
@@ -60,9 +59,15 @@ export default function StockCard({ pick: p, rank, cfg = {} }) {
       <div className="c-rank">{rank}</div>
       <span className={`c-rec ${cls}`}>{rec}</span>
 
-      {/* Header */}
-      <div className="c-head">
-        <div className="c-sym">{p.s} <span style={{fontSize:9,color:'#94a3b8',fontWeight:400}}>{p.sec}</span></div>
+      {/* Header — tap to open live chart popup */}
+      <div className="c-head" style={{ cursor: onPopup ? 'pointer' : 'default' }} onClick={onPopup}>
+        <div className="c-sym" style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
+          {p.s}
+          <span style={{fontSize:9,color:'#94a3b8',fontWeight:400}}>{p.sec}</span>
+          {onPopup && (
+            <span style={{fontSize:9,color:'#1d4ed8',fontWeight:700,background:'#eff6ff',padding:'1px 6px',borderRadius:8}}>📊 Chart</span>
+          )}
+        </div>
         <div className="c-name">{p.n}</div>
       </div>
 
@@ -195,35 +200,6 @@ export default function StockCard({ pick: p, rank, cfg = {} }) {
         )}
       </div>
 
-      {/* Intraday enrichment badges — shown after background 5m fetch */}
-      {(p.stockVWAP || p.intraVolRatio >= 1.5 || p.intraBull != null) && (
-        <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:6 }}>
-          {p.stockVWAP && (
-            <span style={{ fontSize:7, fontWeight:800, borderRadius:5, padding:'2px 6px',
-              background: p.stockVWAP.aboveVWAP ? '#f0fdf4' : '#fef2f2',
-              color:      p.stockVWAP.aboveVWAP ? '#16a34a' : '#dc2626',
-              border: `1px solid ${p.stockVWAP.aboveVWAP ? '#86efac' : '#fca5a5'}`,
-            }}>{p.stockVWAP.aboveVWAP ? '↑' : '↓'} VWAP ₹{p.stockVWAP.vwap?.toFixed(1)}</span>
-          )}
-          {p.intraVolRatio >= 2 && (
-            <span style={{ fontSize:7, fontWeight:800, background:'#fdf4ff', color:'#7c3aed', border:'1px solid #ddd6fe', borderRadius:5, padding:'2px 6px' }}>
-              🔥 Vol {p.intraVolRatio}×
-            </span>
-          )}
-          {p.intraVolRatio >= 1.5 && p.intraVolRatio < 2 && (
-            <span style={{ fontSize:7, fontWeight:700, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:5, padding:'2px 6px' }}>
-              📊 Vol {p.intraVolRatio}×
-            </span>
-          )}
-          {p.intraBull === true && (
-            <span style={{ fontSize:7, fontWeight:700, background:'#f0fdf4', color:'#16a34a', border:'1px solid #86efac', borderRadius:5, padding:'2px 6px' }}>⚡ 5m Bull</span>
-          )}
-          {p.intraAccel && (
-            <span style={{ fontSize:7, fontWeight:700, background:'#fff7ed', color:'#c2410c', border:'1px solid #fed7aa', borderRadius:5, padding:'2px 6px' }}>🚀 Accel</span>
-          )}
-        </div>
-      )}
-
       {/* 10 indicator dots */}
       <div className="c-inds">
         {indLbls.map((l,j)=><span key={l} className={`ind ${di[j]?'ok':di[j]===false&&p.rsi!=null?'no':'na'}`}>{l}</span>)}
@@ -254,7 +230,7 @@ export default function StockCard({ pick: p, rank, cfg = {} }) {
               📊 Vol {p.intraVolRatio}× 5m
             </span>
           )}
-          {p.intraBull !== null && (
+          {typeof p.intraBull === 'boolean' && (
             <span style={{ fontSize:8, fontWeight:700, padding:'2px 6px', borderRadius:8,
               background: p.intraBull?'#f0fdf4':'#fef2f2',
               color:      p.intraBull?'#16a34a':'#ef4444',
@@ -278,22 +254,6 @@ export default function StockCard({ pick: p, rank, cfg = {} }) {
         {et?.alreadyTriggered?' · ✅ Trigger hit':` · ⏳ Wait for trigger at ₹${fmt(et?.trigger||ltp)}`}
       </div>
 
-      {/* Live chart */}
-      {p.key && (
-        <div style={{ marginTop:10, borderTop:'1px solid #e2e8f0', paddingTop:10 }}>
-          <LiveChart
-            instrKey={p.key}
-            candles={p.recentCandles || []}
-            closes={p.closes || []}
-            entry={et?.trigger || p.ltp}
-            sl={p.sl}
-            target={p.target}
-            symbol={p.s}
-            livePrice={ltp}
-            liveChgPct={p.chgPct}
-          />
-        </div>
-      )}
     </div>
   );
 }
