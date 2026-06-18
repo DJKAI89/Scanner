@@ -660,7 +660,8 @@ export default function OptionsPane() {
           </div>
 
           {/* Max Pain + OI Walls */}
-          {groups.filter(g => g.maxPain > 0).map(g => (
+          
+          {groups.filter(g => g.maxPain < 0).map(g => (
             <div key={g.name+'-mp'} style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, padding:'8px 12px', marginBottom:8, display:'flex', gap:16, flexWrap:'wrap', fontSize:10, alignItems:'center' }}>
               <span style={{ fontWeight:700 }}>{g.name}</span>
               <span>🎯 Max Pain: <b style={{ color:'#7c3aed' }}>₹{fmt(g.maxPain)}</b></span>
