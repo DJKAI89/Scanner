@@ -264,6 +264,185 @@ function BoChartPopup({ r, onClose }) {
   );
 }
 
+
+// ── PickChartPopup — full-screen popup for Stock Picks (Professional Picks tab) ──
+function PickChartPopup({ p, onClose }) {
+  if (!p) return null;
+  const fmtV = v => v != null ? (+v).toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—';
+  const rec      = p.rec || p.signal || 'WATCH';
+  const isBuy    = rec === 'BUY' || rec === 'STRONG BUY' || rec === 'MODERATE';
+  const dirColor = isBuy ? '#16a34a' : '#dc2626';
+  const ltp      = p.ltp || p.entry || 0;
+  const chgColor = (p.chgPct || 0) >= 0 ? '#16a34a' : '#dc2626';
+  const et       = p.entryTrigger;
+
+  const metrics = [
+    { label: 'LTP',         value: `₹${fmtV(ltp)}`,                         color: '#0f172a' },
+    { label: 'Change',      value: `${(p.chgPct||0)>=0?'+':''}${(p.chgPct||0).toFixed(2)}%`, color: chgColor },
+    { label: 'Entry',       value: `₹${fmtV(et?.trigger||ltp)}`,             color: '#1d4ed8' },
+    { label: 'Stop Loss',   value: `₹${fmtV(p.sl)}`,                         color: '#dc2626' },
+    { label: 'Target',      value: `₹${fmtV(p.target)}`,                     color: '#16a34a' },
+    { label: 'R:R',         value: `${p.pot?.rr||0}:1`,                      color: '#7c3aed' },
+    { label: 'Confidence',  value: `${p.conf||0}%`,                          color: (p.conf||0)>=70?'#16a34a':(p.conf||0)>=50?'#d97706':'#dc2626' },
+    { label: 'Risk',        value: `${p.risk||0}%`,                          color: (p.risk||0)<30?'#16a34a':(p.risk||0)<50?'#d97706':'#dc2626' },
+    { label: 'Win Rate',    value: `${p.pot?.wr||0}%`,                       color: '#0ea5e9' },
+    { label: 'RSI(14)',     value: p.rsi!=null ? p.rsi.toFixed(1) : '—',     color: '#7c3aed' },
+    { label: 'Volume',      value: p.vol ? fmtVolShort(p.vol) : '—',         color: '#64748b' },
+    { label: 'Day H/L',     value: `₹${fmtV(p.high)} / ${fmtV(p.low)}`,      color: '#374151' },
+  ];
+
+  function fmtVolShort(v) {
+    if (v >= 1e7) return (v/1e7).toFixed(2)+'Cr';
+    if (v >= 1e5) return (v/1e5).toFixed(2)+'L';
+    return v.toLocaleString('en-IN');
+  }
+
+  return (
+    <div
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.55)', zIndex:1000, display:'flex', alignItems:'flex-end', backdropFilter:'blur(2px)' }}
+    >
+      <div style={{ background:'#fff', width:'100%', maxHeight:'92dvh', borderRadius:'18px 18px 0 0', overflowY:'auto', padding:'0 0 24px', boxShadow:'0 -8px 32px rgba(0,0,0,0.2)', animation:'slideUp .22s ease' }}>
+        {/* Drag handle */}
+        <div style={{ display:'flex', justifyContent:'center', padding:'10px 0 4px' }}>
+          <div style={{ width:36, height:4, borderRadius:2, background:'#e2e8f0' }} />
+        </div>
+
+        {/* Header */}
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', padding:'6px 16px 12px' }}>
+          <div>
+            <div style={{ fontSize:20, fontWeight:900, color:'#0f172a', lineHeight:1.1 }}>{p.s}</div>
+            <div style={{ fontSize:11, color:'#64748b', marginTop:2 }}>{p.n || p.s} · {p.sec || 'NSE'}</div>
+          </div>
+          <div style={{ textAlign:'right' }}>
+            <div style={{ fontSize:22, fontWeight:900, color:'#0f172a' }}>₹{fmtV(ltp)}</div>
+            <div style={{ fontSize:13, fontWeight:800, color:chgColor }}>{(p.chgPct||0)>=0?'+':''}{(p.chgPct||0).toFixed(2)}%</div>
+            <div style={{ fontSize:10, fontWeight:800, color:dirColor }}>{rec} · {p.numInds||0}/7 ind</div>
+          </div>
+        </div>
+
+        {/* Live chart */}
+        <div style={{ padding:'0 12px', marginBottom:12 }}>
+          <LiveChart
+            instrKey={p.key || ''}
+            candles={p.recentCandles || []}
+            closes={p.closes || []}
+            entry={et?.trigger || ltp}
+            sl={p.sl}
+            target={p.target}
+            symbol={p.s}
+            livePrice={ltp}
+            liveChgPct={p.chgPct}
+          />
+        </div>
+
+        {/* Intraday confirmation badges */}
+        {(p.stockVWAP || p.intraVolRatio >= 1.5 || p.intraBull != null || p.intraAccel) && (
+          <div style={{ display:'flex', gap:5, flexWrap:'wrap', padding:'0 12px', marginBottom:10 }}>
+            {p.stockVWAP && (
+              <span style={{ fontSize:9, fontWeight:800, background: p.stockVWAP.aboveVWAP?'#f0fdf4':'#fef2f2', color: p.stockVWAP.aboveVWAP?'#16a34a':'#ef4444', border:`1px solid ${p.stockVWAP.aboveVWAP?'#86efac':'#fca5a5'}`, borderRadius:6, padding:'3px 8px' }}>
+                {p.stockVWAP.aboveVWAP?'↑ Above':'↓ Below'} VWAP ₹{p.stockVWAP.vwap?.toFixed(1)}
+              </span>
+            )}
+            {p.intraVolRatio >= 1.5 && (
+              <span style={{ fontSize:9, fontWeight:800, background:'#fdf4ff', color:'#7c3aed', border:'1px solid #ddd6fe', borderRadius:6, padding:'3px 8px' }}>
+                🔥 Intraday Vol {p.intraVolRatio}×
+              </span>
+            )}
+            {p.intraBull === true && (
+              <span style={{ fontSize:9, fontWeight:700, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:6, padding:'3px 8px' }}>
+                ⚡ 5m EMA Bullish
+              </span>
+            )}
+            {p.intraAccel && (
+              <span style={{ fontSize:9, fontWeight:700, background:'#fff7ed', color:'#c2410c', border:'1px solid #fed7aa', borderRadius:6, padding:'3px 8px' }}>
+                🚀 Momentum Accelerating
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Trade setup */}
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:1, background:'#e2e8f0', margin:'0 12px 12px', borderRadius:10, overflow:'hidden' }}>
+          {[
+            { l:'ENTRY',     v:`₹${fmtV(et?.trigger||ltp)}`, c:'#1d4ed8', bg:'#eff6ff' },
+            { l:'STOP LOSS', v:`₹${fmtV(p.sl)}`,             c:'#dc2626', bg:'#fef2f2' },
+            { l:'TARGET',    v:`₹${fmtV(p.target)}`,          c:'#16a34a', bg:'#f0fdf4' },
+          ].map(x => (
+            <div key={x.l} style={{ background:x.bg, padding:'10px 8px', textAlign:'center' }}>
+              <div style={{ fontSize:8, color:'#64748b', marginBottom:3 }}>{x.l}</div>
+              <div style={{ fontSize:15, fontWeight:900, color:x.c }}>{x.v}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Metrics grid */}
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:6, padding:'0 12px', marginBottom:12 }}>
+          {metrics.map(m => (
+            <div key={m.label} style={{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:8, padding:'7px 9px' }}>
+              <div style={{ fontSize:8, color:'#94a3b8', fontWeight:700, marginBottom:2 }}>{m.label}</div>
+              <div style={{ fontSize:13, fontWeight:800, color:m.color }}>{m.value}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* 3 Targets */}
+        {p.pot && (
+          <div style={{ display:'flex', gap:6, padding:'0 12px', marginBottom:12 }}>
+            {[
+              { l:'Conservative', v:p.pot.cons, c:'#16a34a', bg:'#f0fdf4', bd:'#bbf7d0' },
+              { l:'Moderate',     v:p.pot.mod,  c:'#1d4ed8', bg:'#eff6ff', bd:'#bfdbfe' },
+              { l:'Aggressive',   v:p.pot.agg,  c:'#7c3aed', bg:'#faf5ff', bd:'#ddd6fe' },
+            ].map(t => (
+              <div key={t.l} style={{ flex:1, background:t.bg, border:`1px solid ${t.bd}`, borderRadius:8, padding:'7px 6px', textAlign:'center' }}>
+                <div style={{ fontSize:8, color:'#94a3b8' }}>{t.l}</div>
+                <div style={{ fontSize:13, fontWeight:800, color:t.c }}>₹{fmtV(t.v)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Signal strength */}
+        <div style={{ padding:'0 12px', marginBottom:12 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:5 }}>
+            <span style={{ fontSize:9, fontWeight:700, color:'#64748b' }}>CONFIDENCE</span>
+            <span style={{ fontSize:11, fontWeight:900, color:(p.conf||0)>=70?'#16a34a':(p.conf||0)>=50?'#d97706':'#dc2626' }}>{p.conf||0}%</span>
+          </div>
+          <div style={{ height:8, background:'#e2e8f0', borderRadius:4, overflow:'hidden' }}>
+            <div style={{ height:'100%', width:`${Math.min(100,p.conf||0)}%`, background:(p.conf||0)>=70?'#16a34a':(p.conf||0)>=50?'#d97706':'#dc2626', borderRadius:4, transition:'width .5s' }} />
+          </div>
+        </div>
+
+        {/* Reversal */}
+        {p.reversal?.type && p.reversal.type !== 'NONE' && (
+          <div style={{ margin:'0 12px 12px', padding:'10px 12px', background:p.reversal.type==='BULLISH_REVERSAL'?'#f0fdf4':'#fef2f2', border:`1px solid ${p.reversal.type==='BULLISH_REVERSAL'?'#86efac':'#fca5a5'}`, borderRadius:10 }}>
+            <div style={{ fontWeight:800, fontSize:11, color:p.reversal.type==='BULLISH_REVERSAL'?'#15803d':'#dc2626', marginBottom:2 }}>
+              {p.reversal.type==='BULLISH_REVERSAL'?'🔄📈 BULLISH':'🔄📉 BEARISH'} REVERSAL · {p.reversal.strength}
+            </div>
+            <div style={{ fontSize:10, color:'#475569' }}>{(p.reversal.signals||[]).join(' · ')}</div>
+          </div>
+        )}
+
+        {/* Why */}
+        <div style={{ margin:'0 12px', padding:'10px 12px', background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:10, marginBottom:12 }}>
+          <div style={{ fontSize:9, fontWeight:800, color:'#64748b', marginBottom:6 }}>SIGNAL ANALYSIS</div>
+          <div style={{ fontSize:10, color:'#475569', lineHeight:1.7 }}>
+            {p.numInds||0}/7 indicators aligned · R:R {p.pot?.rr||0}:1 · Win rate ~{p.pot?.wr||0}%
+            {et?.alreadyTriggered ? ' · ✅ Entry trigger hit' : ` · ⏳ Waiting for trigger at ₹${fmtV(et?.trigger||ltp)}`}
+          </div>
+        </div>
+
+        {/* Close button */}
+        <div style={{ padding:'0 12px' }}>
+          <button onClick={onClose} style={{ width:'100%', padding:'13px', background:'#0f172a', color:'#fff', border:'none', borderRadius:12, fontSize:14, fontWeight:800, cursor:'pointer' }}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── BoCard — dedicated breakout card (port from index.html) ──
 function BoCard({ r, rank, onPopup }) {
   const fmtV = v => v != null ? (+v).toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—';
@@ -499,6 +678,7 @@ export default function StocksPane() {
   const [boProgress, setBoProgress]   = useState('');
   const [boFilter, setBoFilter]       = useState('all');
   const [popupStock, setPopupStock]   = useState(null); // breakout chart popup
+  const [popupPick,  setPopupPick]    = useState(null); // stock picks chart popup
   const scanInProgress = useRef(false);
 
   // ── Index WebSocket ──────────────────────────────────────────
@@ -1244,7 +1424,7 @@ export default function StocksPane() {
                   {!stocks?.length?'⚙ Configure stocks.json in GitHub Settings':marketStatus.open?'🔄 Click ▶ Scan to fetch picks':'📅 Market Closed'}
                   {scanStats&&<><br/><span style={{fontSize:11,color:'#64748b'}}>Conf≥{cfg.minStockConf||50}% · Pot≥{cfg.pot||3}% · Risk&lt;{cfg.risk||55}% · R:R≥{cfg.rr||1.2}</span><br/><span style={{fontSize:10}}>Scanned {scanStats.totalScanned||0} stocks · Lower thresholds in ⚙ Settings</span></>}
                 </EmptyState>
-                :<div className="cards-g">{picks.map((p,i)=>{const live=stockPrices[p.key];return(<StockCard key={`${p._scanId||picksScanId}-${p.key||p.s}-${i}`} pick={live?{...p,ltp:live.ltp,chgPct:live.chgPct}:p} rank={i+1} cfg={cfg}/>);})}</div>
+                :<div className="cards-g">{picks.map((p,i)=>{const live=stockPrices[p.key];const pickData=live?{...p,ltp:live.ltp,chgPct:live.chgPct}:p;return(<StockCard key={`${p._scanId||picksScanId}-${p.key||p.s}-${i}`} pick={pickData} rank={i+1} cfg={cfg} onPopup={()=>setPopupPick(pickData)}/>);})}</div>
               }
               <div className="disc">⚠ Not SEBI advice. Always DYODD.</div>
             </div>
@@ -1289,6 +1469,7 @@ export default function StocksPane() {
       )}
       {/* Breakout stock popup */}
       {popupStock && <BoChartPopup r={popupStock} onClose={() => setPopupStock(null)} />}
+      {popupPick  && <PickChartPopup p={popupPick} onClose={() => setPopupPick(null)} />}
     </div>
   );
 }
