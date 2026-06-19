@@ -17,7 +17,8 @@ function getLogDayPath(date) { return `${getLogFolder()}/${date}.json`; }
 function getLogIndexPath()   { return `${getLogFolder()}/index.json`; }
 function getAiFolder()       { return `ai-models/${_uid()}`; }
 function getAiLatestPath()   { return `${getAiFolder()}/latest.json`; }
-function getAiHistoryPath()  { return `${getAiFolder()}/history.json`; }
+function getAiHistoryIndexPath()        { return `${getAiFolder()}/history/index.json`; }
+function getAiHistoryDayPath(date)      { return `${getAiFolder()}/history/${date}.json`; }
 function getPaperFolder()    { return `paper-trades/${_uid()}`; }
 function getPaperDayPath(date) { return `${getPaperFolder()}/${date}.json`; }
 
@@ -134,12 +135,37 @@ export async function pushAiModelToGH(gh, modelPayload) {
 export async function appendAiHistoryToGH(gh, snapshot) {
   if (!gh.token || !gh.user || !gh.repo || !snapshot) return false;
   try {
-    const existing = await _ghFetch(gh, getAiHistoryPath());
-    const prev = existing ? _decode(existing.content) : { items: [] };
-    const items = [snapshot, ...(prev.items || [])].slice(0, 100);
-    const r = await _ghPut(gh, getAiHistoryPath(), { items, updatedAt: new Date().toISOString(), upstoxId: _uid() }, existing?.sha || null, `FRIDAY AI history · ${_uid()}`);
-    return r?.ok ?? false;
+    const today = new Date().toISOString().slice(0, 10);
+    const dayPath = getAiHistoryDayPath(today);
+    const dayExisting = await _ghFetch(gh, dayPath);
+    const dayR = await _ghPut(gh, dayPath, { date: today, snapshot, upstoxId: _uid() }, dayExisting?.sha || null, `FRIDAY AI history · ${_uid()} · ${today}`);
+
+    const indexPath = getAiHistoryIndexPath();
+    const indexExisting = await _ghFetch(gh, indexPath);
+    const prevIndex = indexExisting ? _decode(indexExisting.content) : { dates: [] };
+    const dates = Array.from(new Set([...(prevIndex?.dates || []), today])).sort().slice(-100);
+    const indexR = await _ghPut(gh, indexPath, { dates, updatedAt: new Date().toISOString() }, indexExisting?.sha || null, `FRIDAY AI history index · ${_uid()}`);
+
+    return (dayR?.ok ?? false) && (indexR?.ok ?? false);
   } catch (_) { return false; }
+}
+
+export async function pullAiHistoryFromGH(gh, limit = 100) {
+  if (!gh.token || !gh.user || !gh.repo) return [];
+  try {
+    const indexExisting = await _ghFetch(gh, getAiHistoryIndexPath());
+    if (!indexExisting) return [];
+    const index = _decode(indexExisting.content);
+    const dates = (index?.dates || []).slice(-limit).reverse();
+    const items = [];
+    for (const date of dates) {
+      const day = await _ghFetch(gh, getAiHistoryDayPath(date));
+      if (!day) continue;
+      const payload = _decode(day.content);
+      if (payload?.snapshot) items.push(payload.snapshot);
+    }
+    return items;
+  } catch (_) { return []; }
 }
 
 export async function pullPaperTradesFromGH(gh, date) {
