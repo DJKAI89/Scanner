@@ -1,15 +1,21 @@
 import fs from 'node:fs/promises';
 
-const GH_TOKEN = process.env.GH_TOKEN || process.env.GITHUB_TOKEN || '';
+const GH_TOKEN = process.env.AI_GH_TOKEN || process.env.GH_TOKEN || '';
 const GH_USER = process.env.GH_USER || '';
 const GH_REPO = process.env.GH_REPO || '';
 const FRIDAY_USER_ID = (process.env.FRIDAY_USER_ID || '').replace(/[^a-zA-Z0-9_-]/g, '_');
 const LOOKBACK_DAYS = Number(process.env.AI_LOOKBACK_DAYS || 90);
 
 if (!GH_TOKEN || !GH_USER || !GH_REPO) {
-  console.error('Missing GH_TOKEN/GH_USER/GH_REPO');
+  console.error('Missing required config:', {
+    AI_GH_TOKEN: GH_TOKEN ? 'set' : 'MISSING',
+    GH_USER: GH_USER ? 'set' : 'MISSING',
+    GH_REPO: GH_REPO ? 'set' : 'MISSING',
+  });
+  console.error('Check that repo secrets AI_GH_TOKEN, AI_GH_USER, AI_GH_REPO exist and are spelled exactly like this (case-sensitive).');
   process.exit(1);
 }
+console.log(`Config OK — targeting ${GH_USER}/${GH_REPO}, token length ${GH_TOKEN.length}`);
 
 async function loadBrainModule() {
   const source = await fs.readFile(new URL('../src/services/mlRanking.js', import.meta.url), 'utf8');
@@ -20,11 +26,14 @@ async function loadBrainModule() {
 async function ghFetch(path) {
   const r = await fetch(`https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${path}`, {
     headers: {
-      Authorization: `token ${GH_TOKEN}`,
-      Accept: 'application/vnd.github.v3+json',
+      Authorization: `Bearer ${GH_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
     },
   });
   if (r.status === 404) return null;
+  if (r.status === 401) throw new Error(`GitHub 401 for ${path} — token invalid/expired/revoked. Check secrets.AI_GH_TOKEN.`);
+  if (r.status === 403) throw new Error(`GitHub 403 for ${path} — token lacks repo access (fine-grained PAT needs Contents permission) or rate-limited.`);
   if (!r.ok) throw new Error(`GitHub ${r.status} for ${path}`);
   return r.json();
 }
@@ -38,8 +47,9 @@ async function ghPut(path, payload, sha, message) {
   const r = await fetch(`https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${path}`, {
     method: 'PUT',
     headers: {
-      Authorization: `token ${GH_TOKEN}`,
-      Accept: 'application/vnd.github.v3+json',
+      Authorization: `Bearer ${GH_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
