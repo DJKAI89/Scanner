@@ -415,7 +415,7 @@ export default function SettingsPane() {
     if (!cleaned.repo)  { setGhStatus('❌ Repository name required'); setGhTesting(false); return; }
     try {
       const r = await fetch(`https://api.github.com/repos/${cleaned.user}/${cleaned.repo}`, {
-        headers: { Authorization: 'token ' + cleaned.token, Accept: 'application/vnd.github.v3+json' },
+        headers: { Authorization: 'Bearer ' + cleaned.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
       });
       if (r.ok) {
         saveGh(cleaned);
@@ -425,8 +425,9 @@ export default function SettingsPane() {
         else setGhStatus(s => s + ' · No remote settings yet');
         loadStocks(cleaned, true);
         loadFIIDII(cleaned, true);
-      } else if (r.status === 401) setGhStatus('❌ Token invalid — regenerate with repo scope');
-      else if (r.status === 404)   setGhStatus(`❌ Repo '${cleaned.user}/${cleaned.repo}' not found`);
+      } else if (r.status === 401) setGhStatus('❌ Token invalid — regenerate with repo scope (or Contents permission for fine-grained tokens)');
+      else if (r.status === 403) setGhStatus('❌ Forbidden — fine-grained token missing repo access/Contents permission, or rate-limited');
+      else if (r.status === 404)   setGhStatus(`❌ Repo '${cleaned.user}/${cleaned.repo}' not found (check spelling/case, or token can't see it)`);
       else setGhStatus('❌ GitHub error: HTTP ' + r.status);
     } catch (e) { setGhStatus('❌ Network error: ' + e.message); }
     setGhTesting(false);

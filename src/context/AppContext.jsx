@@ -179,9 +179,11 @@ export function AppProvider({ children }) {
     try {
       const r = await fetch(
         `https://api.github.com/repos/${g.user}/${g.repo}/contents/stocks/stocks.json`,
-        { headers: { Authorization: 'token ' + g.token, Accept: 'application/vnd.github.v3+json' } }
+        { headers: { Authorization: 'Bearer ' + g.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } }
       );
       if (r.status === 404) { setStocksStatus('⚠ stocks/stocks.json not found in repo'); return; }
+      if (r.status === 401) { setStocksStatus('❌ Token invalid/expired — regenerate in Settings'); return; }
+      if (r.status === 403) { setStocksStatus('❌ Token lacks repo access (check fine-grained PAT permissions or rate limit)'); return; }
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const d      = await r.json();
       const parsed = JSON.parse(atob(d.content.replace(/\n/g, '')));
@@ -218,9 +220,11 @@ export function AppProvider({ children }) {
     try {
       const r = await fetch(
         `https://api.github.com/repos/${g.user}/${g.repo}/contents/fii-dii/latest.json`,
-        { headers: { Authorization: 'token ' + g.token, Accept: 'application/vnd.github.v3+json' } }
+        { headers: { Authorization: 'Bearer ' + g.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } }
       );
       if (r.status === 404) { lg('FII/DII: fii-dii/latest.json not found in repo', 'w'); return; }
+      if (r.status === 401) { lg('FII/DII: token invalid/expired', 'w'); return; }
+      if (r.status === 403) { lg('FII/DII: token lacks repo access or rate-limited', 'w'); return; }
       if (!r.ok) return;
       const d    = await r.json();
       const data = JSON.parse(atob(d.content.replace(/\n/g, '')));
