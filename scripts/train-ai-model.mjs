@@ -56,24 +56,42 @@ async function ghFetch(path, retries = 3) {
   }
 }
 
-async function ghPut(path, payload, sha, message) {
-  const body = {
-    message,
-    content: Buffer.from(JSON.stringify(payload, null, 2), 'utf8').toString('base64'),
-    ...(sha ? { sha } : {}),
-  };
-  const r = await fetch(`https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${path}`, {
-    method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${GH_TOKEN}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) throw new Error(`GitHub PUT ${r.status} for ${path}`);
-  return r.json();
+async function ghPut(path, payload, sha, message, retries = 3) {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const body = {
+        message,
+        content: Buffer.from(JSON.stringify(payload, null, 2), 'utf8').toString('base64'),
+        ...(sha ? { sha } : {}),
+      };
+      
+      const r = await fetch(`https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${path}`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${GH_TOKEN}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        timeout: 10000,
+      });
+      
+      if (!r.ok) throw new Error(`GitHub PUT ${r.status} for ${path}`);
+      return r.json();
+    } catch (e) {
+      const isRetryable = e.message.includes('fetch failed') || e.message.includes('timeout') || e.message.includes('ECONNREFUSED');
+      
+      if (isRetryable && attempt < retries - 1) {
+        const delay = Math.pow(2, attempt) * 1000;
+        console.warn(`[ghPut] Attempt ${attempt + 1}/${retries} failed for ${path}: ${e.message}. Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      
+      throw new Error(`ghPut failed after ${retries} attempts for ${path}: ${e.message}`);
+    }
+  }
 }
 
 function decodeContent(content) {
