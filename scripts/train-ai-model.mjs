@@ -59,7 +59,20 @@ async function ghPut(path, payload, sha, message) {
 }
 
 function decodeContent(content) {
-  return JSON.parse(Buffer.from(content.replace(/\s/g, ''), 'base64').toString('utf8'));
+  const cleaned = (content || '').replace(/\s/g, '');
+  if (!cleaned) return null;
+  let text;
+  try {
+    text = Buffer.from(cleaned, 'base64').toString('utf8');
+  } catch (e) {
+    throw new Error(`decodeContent: invalid base64 (${e.message})`);
+  }
+  if (!text || !text.trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error(`decodeContent: invalid JSON — ${e.message}. Raw (first 200 chars): ${text.slice(0, 200)}`);
+  }
 }
 
 async function readSignalHistory() {
@@ -67,12 +80,14 @@ async function readSignalHistory() {
   const indexFile = await ghFetch(indexPath);
   if (!indexFile) return [];
   const index = decodeContent(indexFile.content);
+  if (!index) return [];
   const dates = (index.dates || []).slice(-LOOKBACK_DAYS);
   const signals = [];
   for (const date of dates) {
     const day = await ghFetch(`signal-logs/${FRIDAY_USER_ID}/${date}.json`);
     if (!day) continue;
     const payload = decodeContent(day.content);
+    if (!payload) continue;
     signals.push(...(payload.signals || []));
   }
   return signals;
@@ -103,12 +118,17 @@ async function main() {
       const indexFile = await ghFetch(indexPath);
       if (!indexFile) return [];
       const index = decodeContent(indexFile.content);
+      if (!index) {
+        console.log(`Skip ${userId}: index.json is empty/unreadable`);
+        return [];
+      }
       const dates = (index.dates || []).slice(-LOOKBACK_DAYS);
       const out = [];
       for (const date of dates) {
         const day = await ghFetch(`signal-logs/${userId}/${date}.json`);
         if (!day) continue;
         const payload = decodeContent(day.content);
+        if (!payload) continue;
         out.push(...(payload.signals || []));
       }
       return out;
@@ -132,7 +152,7 @@ async function main() {
     const latestExisting = await ghFetch(latestPath);
     const historyExisting = await ghFetch(historyPath);
     await ghPut(latestPath, { ...models, trainedOffline: true, userId }, latestExisting?.sha || null, `FRIDAY AI offline retrain · ${userId}`);
-    const historyPayload = historyExisting ? decodeContent(historyExisting.content) : { items: [] };
+    const historyPayload = historyExisting ? (decodeContent(historyExisting.content) || { items: [] }) : { items: [] };
     const items = [snapshot, ...(historyPayload.items || [])].slice(0, 100);
     await ghPut(historyPath, { items, updatedAt: new Date().toISOString(), trainedOffline: true, userId }, historyExisting?.sha || null, `FRIDAY AI history offline retrain · ${userId}`);
     console.log(`AI retrain complete for ${userId}. Closed signals: ${closed.length}`);
