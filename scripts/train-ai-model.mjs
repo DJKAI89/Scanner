@@ -231,14 +231,22 @@ async function main() {
     }
 
     const snapshot = brain.buildModelSnapshot(models);
+    const today = new Date().toISOString().slice(0, 10);
     const latestPath = `ai-models/${userId}/latest.json`;
-    const historyPath = `ai-models/${userId}/history.json`;
+    const historyIndexPath = `ai-models/${userId}/history/index.json`;
+    const historyDayPath = `ai-models/${userId}/history/${today}.json`;
+
     const latestExisting = await ghFetch(latestPath);
-    const historyExisting = await ghFetch(historyPath);
     await ghPut(latestPath, { ...models, trainedOffline: true, userId }, latestExisting?.sha || null, `FRIDAY AI offline retrain · ${userId}`);
-    const historyPayload = historyExisting ? (decodeContent(historyExisting.content) || { items: [] }) : { items: [] };
-    const items = [snapshot, ...(historyPayload.items || [])].slice(0, 100);
-    await ghPut(historyPath, { items, updatedAt: new Date().toISOString(), trainedOffline: true, userId }, historyExisting?.sha || null, `FRIDAY AI history offline retrain · ${userId}`);
+
+    const historyDayExisting = await ghFetch(historyDayPath);
+    await ghPut(historyDayPath, { date: today, snapshot, trainedOffline: true, userId }, historyDayExisting?.sha || null, `FRIDAY AI history · ${userId} · ${today}`);
+
+    const historyIndexExisting = await ghFetch(historyIndexPath);
+    const historyIndex = decodeContent(historyIndexExisting?.content) || { dates: [] };
+    const dates = Array.from(new Set([...(historyIndex.dates || []), today])).sort().slice(-LOOKBACK_DAYS);
+    await ghPut(historyIndexPath, { dates, updatedAt: new Date().toISOString() }, historyIndexExisting?.sha || null, `FRIDAY AI history index · ${userId}`);
+
     console.log(`AI retrain complete for ${userId}. Closed signals: ${closed.length}`);
     trained++;
   }
