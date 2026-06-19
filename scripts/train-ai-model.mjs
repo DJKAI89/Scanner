@@ -23,19 +23,37 @@ async function loadBrainModule() {
   return import(url);
 }
 
-async function ghFetch(path) {
-  const r = await fetch(`https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${path}`, {
-    headers: {
-      Authorization: `Bearer ${GH_TOKEN}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
-  });
-  if (r.status === 404) return null;
-  if (r.status === 401) throw new Error(`GitHub 401 for ${path} — token invalid/expired/revoked. Check secrets.AI_GH_TOKEN.`);
-  if (r.status === 403) throw new Error(`GitHub 403 for ${path} — token lacks repo access (fine-grained PAT needs Contents permission) or rate-limited.`);
-  if (!r.ok) throw new Error(`GitHub ${r.status} for ${path}`);
-  return r.json();
+async function ghFetch(path, retries = 3) {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const r = await fetch(`https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${path}`, {
+        headers: {
+          Authorization: `Bearer ${GH_TOKEN}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+        timeout: 10000, // 10 second timeout
+      });
+      
+      if (r.status === 404) return null;
+      if (r.status === 401) throw new Error(`GitHub 401 for ${path} — token invalid/expired/revoked. Check secrets.AI_GH_TOKEN.`);
+      if (r.status === 403) throw new Error(`GitHub 403 for ${path} — token lacks repo access (fine-grained PAT needs Contents permission) or rate-limited.`);
+      if (!r.ok) throw new Error(`GitHub ${r.status} for ${path}`);
+      
+      return r.json();
+    } catch (e) {
+      const isRetryable = e.message.includes('fetch failed') || e.message.includes('timeout') || e.message.includes('ECONNREFUSED') || e.message.includes('ENOTFOUND');
+      
+      if (isRetryable && attempt < retries - 1) {
+        const delay = Math.pow(2, attempt) * 1000; // exponential backoff: 1s, 2s, 4s
+        console.warn(`[ghFetch] Attempt ${attempt + 1}/${retries} failed for ${path}: ${e.message}. Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      
+      throw new Error(`ghFetch failed after ${retries} attempts for ${path}: ${e.message}`);
+    }
+  }
 }
 
 async function ghPut(path, payload, sha, message) {
