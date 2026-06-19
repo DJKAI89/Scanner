@@ -262,7 +262,7 @@ function OptionCard({ pick, cfg: cardCfg }) {
 export default function OptionsPane() {
   const {
     token, cfg, marketStatus, lg, onTokenExpired, updateBadge, fiiInterp, fiiData, gh, adaptWeights,
-    activeTab, setScanning, setStatusDot, setStatusTxt,
+    activeTab, setScanning, setStatusDot, setStatusTxt, stocks,
   } = useApp();
   const accessToken = resolveAccessToken(token);
   const [loading, setLoading]   = useState(false);
@@ -324,8 +324,14 @@ export default function OptionsPane() {
     setLoading(true); setError('');
     setGroups([]);
     setUpdTime('');
-    const foStocks = NIFTY50_FALLBACK.filter(s => s.fo && TOP_FO_SYMBOLS.includes(s.s));
-    const totalSteps = foStocks.length > 0 ? 4 : 3;
+    // ── F&O-eligible universe: prefer the live stocks.json list (all ~500 stocks,
+    // each carrying its own lot/step) and fall back to the static NIFTY50 list only
+    // if stocks.json hasn't loaded yet. Ranked by volume at scan time (Step 3). ──
+    const eligibleFOStocks = (stocks && stocks.length > 0)
+      ? stocks.filter(s => s.fo && s.lot > 0 && s.key)
+      : NIFTY50_FALLBACK.filter(s => s.fo && TOP_FO_SYMBOLS.includes(s.s));
+    const scanCount = Math.max(1, cfg.optStockScanCount || 20);
+    const totalSteps = eligibleFOStocks.length > 0 ? 4 : 3;
     try {
       // ── Step 1: Market context (Nifty + VIX + PCR) ──────────
       setProgress(`Step 1/${totalSteps}: Fetching market context (Nifty + VIX)...`);
@@ -449,15 +455,30 @@ export default function OptionsPane() {
       }
 
       // ── Step 3: Stock F&O options ────────────────────────────
-      // foStocks already computed above
+      // Fetch quotes for the FULL eligible F&O universe (batched, 50/call),
+      // rank by volume, then scan only the top `scanCount` to respect rate limits.
+      let foStocks = [];
+      const allSpots = {};
+      if (eligibleFOStocks.length > 0) {
+        const batches = Math.ceil(eligibleFOStocks.length / 50);
+        for (let b = 0; b < batches; b++) {
+          setProgress(`Step 3/${totalSteps}: Ranking F&O universe (${b + 1}/${batches} batches, ${eligibleFOStocks.length} stocks)...`);
+          const batchKeys = eligibleFOStocks.slice(b * 50, (b + 1) * 50).map(s => s.key).join(',');
+          try {
+            Object.assign(allSpots, await fetchQ(batchKeys, accessToken, onTokenExpired));
+          } catch (e) { lg('FO universe batch ' + b + ': ' + e.message, 'w'); }
+          if (b + 1 < batches) await sleep(250);
+        }
+        foStocks = eligibleFOStocks
+          .map(s => ({ ...s, _vol: allSpots[s.key]?.volume || 0, _hasQuote: !!allSpots[s.key]?.last_price }))
+          .filter(s => s._hasQuote)
+          .sort((a, b) => b._vol - a._vol)
+          .slice(0, scanCount);
+        lg(`F&O universe: ${eligibleFOStocks.length} eligible → ${foStocks.length} selected by volume (top ${scanCount})`, 'o');
+      }
       if (foStocks.length > 0) {
-        const foKeys2 = foStocks.map(s => s.key).join(',');
-        let foSpots2 = {};
-        try {
-          setProgress(`Step 3/${totalSteps}: Fetching F&O stock quotes...`);
-          foSpots2 = await fetchQ(foKeys2, accessToken, onTokenExpired);
-          lg(`FO spots: ${Object.keys(foSpots2).length}`, 'o');
-        } catch(e) { lg('FO spots: ' + e.message, 'w'); }
+        // Reuse quotes already fetched during ranking — no need to refetch.
+        const foSpots2 = allSpots;
 
         for (let fi = 0; fi < foStocks.length; fi++) {
           const inst = foStocks[fi];

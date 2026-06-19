@@ -374,6 +374,17 @@ export default function SettingsPane() {
           </div>
         </div>
 
+        {/* ── Options Stock Universe ── */}
+        <div className="setting-card">
+          <h4>⚡ Options Stock Scan</h4>
+          <SetRow label="Stocks to Scan for Options" sub="Top F&O stocks by volume, from your full stock list">
+            <Inp value={local.optStockScanCount} onChange={v => set('optStockScanCount', v)} min={5} max={100} step={5} width={70} />
+          </SetRow>
+          <div style={{ fontSize: 9, color: '#64748b', padding: '6px 8px', background: '#f8fafc', borderRadius: 6, marginTop: 6 }}>
+            📐 Picks the top {local.optStockScanCount || 20} F&O-eligible stocks by volume each scan. Higher = more coverage but slower scans (API rate limits).
+          </div>
+        </div>
+
         {/* ── Technical Thresholds ── */}
         <div className="setting-card">
           <h4>📈 Technical Thresholds</h4>
