@@ -24,6 +24,7 @@ export const DEF = {
   maxOptCapital: 0,
   portSize:     500000,
   riskPct:      2,
+  optStockScanCount: 20,
 };
 
 export const INDEX_OPTS = [
