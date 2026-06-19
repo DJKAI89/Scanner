@@ -10,8 +10,9 @@ import {
   getRec, autoSLTarget, calcEntryTrigger, detectReversal, calcMACD,
   isNearSupport, calcRSIDivergence, getSignalStrength,
   calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain,
-  applyFIIBias, calcVolumeSurge, calcEMA,
+  applyFIIBias, applyAdaptWeights, calcVolumeSurge, calcEMA,
 } from '../services/technical';
+import { applyMlRanking } from '../services/mlRanking';
 import { fmt, fmtVol } from '../utils/formatters';
 import { getIST, getISTDate, sleep, localIsOpen } from '../utils/marketTime';
 import { QUICK_STOCKS } from '../constants/config';
@@ -233,7 +234,7 @@ function OptionSuggestionCard({ pick, cfg, showTools = true }) {
 }
 
 export default function LookupPane() {
-  const { token, cfg, onTokenExpired, lg, stocks, fiiData, fiiInterp } = useApp();
+  const { token, cfg, onTokenExpired, lg, stocks, fiiData, fiiInterp, adaptWeights, mlModels } = useApp();
   const [sym, setSym] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -352,15 +353,27 @@ export default function LookupPane() {
           const preRec = preRR>=2.0?'BUY':preRR>=1.5?'MODERATE':'WATCH';
           const numInds = countIndicatorsEx(rsi, macd.bull, a50, a200, volOk, nearS, pats, preRec, macd, bb, adx, rsiDiv);
           const rec = numInds >= 4 ? 'BUY' : numInds >= 3 ? 'MODERATE' : numInds >= 2 ? 'WATCH' : 'AVOID';
-          const conf = calcConfidence(null, 0, 0, chgPct > 0, 0, q.volume || 0, volObj?.avgVol || 1, pats, preRec, numInds);
+          let conf = calcConfidence(null, 0, 0, chgPct > 0, 0, q.volume || 0, volObj?.avgVol || 1, pats, preRec, numInds);
           const risk = calcRisk(ltp, sl, target, atr, 0);
           const pot = calcPotential(ltp, target, sl, numInds, rec);
+          const reversal = detectReversal(ltp, rsi, pats, sr, 0, 1.0, chgPct > 0, chgPct, atr, q.ohlc?.high || ltp, q.ohlc?.low || ltp);
+          const _indSnap = {
+            macdBull: macd.bull===true, macdBullCross: macd?.bullCross===true, macdBearCross: macd?.bearCross===true,
+            bbSqueeze: bb?.squeeze===true, bbNearLower: bb?.nearLowerBand===true, adxBull: adx?.bullTrend===true,
+            adxBear: adx?.bearTrend===true, rsiDiv: rsiDiv?.bullish===true, rsiDivHidden: rsiDiv?.hidden_bullish===true,
+            rsiBearDiv: rsiDiv?.bearish===true, a50: a50===true, a200: a200===true, nearSupp: !!nearS,
+            aboveVWAP: false, vwapNearLower: false, engulfing: pats?.bullishEngulfing===true, hammer: pats?.hammer===true,
+            morningStar: pats?.morningStar===true, reversalFired: (reversal?.type || 'NONE') !== 'NONE',
+            delivHigh: false, delivLow: false,
+          };
+          conf = applyAdaptWeights(conf, adaptWeights?.stock || null, _indSnap);
+          const mlRank = applyMlRanking(conf, mlModels || null, { type:'STOCK', confidence: conf, numInds, risk, pot, rec: preRec, reversal, _indSnap });
+          conf = mlRank.confidence;
           const finalRec = getRec(conf, pot.base, risk, pot.rr);
-          const strength = getSignalStrength(numInds, conf, { type:'NONE' });
+          const strength = getSignalStrength(numInds, conf, reversal);
           const vwap = calcVWAP(candles);
           const entry = calcEntryTrigger(ltp, q.ohlc?.high || ltp, sr, atr, finalRec, vwap, chgPct);
-          const reversal = detectReversal(ltp, rsi, pats, sr, 0, 1.0, chgPct > 0, chgPct, atr, q.ohlc?.high || ltp, q.ohlc?.low || ltp);
-          tech = { rsi, ema, macd, bb, atr, adx, sr, pats, rsiDiv, a50, a200, volOk, nearS, numInds, rec: finalRec, conf, sl, target, targets, pot, risk, strength, vwap, entry, reversal, avgVol: volObj?.avgVol || 0, volRatio: volObj?.ratio || 1 };
+          tech = { rsi, ema, macd, bb, atr, adx, sr, pats, rsiDiv, a50, a200, volOk, nearS, numInds, rec: finalRec, conf, sl, target, targets, pot, risk, strength, vwap, entry, reversal, avgVol: volObj?.avgVol || 0, volRatio: volObj?.ratio || 1, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj };
         }
       } catch (e) {
         lg('Daily candles: ' + e.message, 'w');
@@ -443,7 +456,19 @@ export default function LookupPane() {
             const ctx = marketCtx || computeCtxFromCandles([], ltp, chgPct, 0, null);
             const picks = scanChain(chain, atm, ltp, s, expiry, inst.lot, chgPct > 0, 0, maxPain, pcr, ctx, cfg);
             const filteredPicks = picks
-              .map((p) => ({ ...p, confidence: applyFIIBias(p.confidence, p.action === 'BUY', fiiData) }))
+              .map((p) => {
+                const _indSnap = {
+                  trendAligned: p.trendAligned||false, emaBull: p.emaTrendBull===true, emaBearish: p.emaTrendBull===false,
+                  freshCross: p.emaCross==='bullish_cross'||p.emaCross==='bearish_cross', momentumFresh: p.momentumFresh||false,
+                  volSpike: (p.volRatio??0)>=1.5, lowVol: (p.volRatio??1)<0.7, nearPDH: p.priceZone==='PDH_BREAK'||p.priceZone==='NEAR_PDH',
+                  nearPDL: p.priceZone==='PDL_BREAK'||p.priceZone==='NEAR_PDL', oiBuildUp: p.oiBuildType==='CE_BUILD'||p.oiBuildType==='PE_BUILD',
+                  compositeHigh: Math.abs(p.compositeScore??0)>=2, compositeMed: Math.abs(p.compositeScore??0)>=1, atm: p.atm||false,
+                };
+                let c = applyFIIBias(p.confidence, p.action === 'BUY', fiiData);
+                c = applyAdaptWeights(c, adaptWeights?.option || null, _indSnap);
+                const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap });
+                return { ...p, confidence: mlRank.confidence, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj };
+              })
               .filter((p) => p.confidence >= cfg.minOptConf);
 
             let multiExpiry = null;

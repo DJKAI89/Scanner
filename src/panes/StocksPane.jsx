@@ -28,6 +28,7 @@ import LiveChart from '../components/LiveChart';
 import { AccentCard, CardHeader, LevelsStrip, ProgressStat, SignalTags, WhyBox } from '../components/cardKit';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed.js';
+import { applyMlRanking } from '../services/mlRanking';
 
 function getChgPct(q) {
   if (!q) return 0;
@@ -638,8 +639,8 @@ function fireBreakoutAlerts(results) {
 
 export default function StocksPane() {
   const { token, cfg, marketStatus, lg, onTokenExpired, updateBadge, gh,
-           setScanning, setStatusDot, setStatusTxt,
-           stocks, fiiInterp, setTickerStats, confCalibration, adaptWeights } = useApp();
+            setScanning, setStatusDot, setStatusTxt,
+           stocks, fiiInterp, setTickerStats, confCalibration, adaptWeights, mlModels } = useApp();
 
   const [mode, setMode]               = useState('picks');
   const [picksLoading, setPicksLoading] = useState(false);
@@ -906,6 +907,7 @@ export default function StocksPane() {
         conf=applyFIIBias(conf,preRec==='BUY'||preRec==='STRONG BUY',null);
         conf=applyCalibration(conf, confCalibration||null);
         // Layer 3: per-indicator learned adjustment from past signal outcomes
+        const reversal = detectReversal(ltp,t.rsi,patterns,sr,vixVal,pcr,nBull,chgPct,t.atr||0,high,low);
         const _indSnap = {
           macdBull: t.macdBull===true, macdBullCross: t.macd?.bullCross===true,
           macdBearCross: t.macd?.bearCross===true, bbSqueeze: t.bb?.squeeze===true,
@@ -916,22 +918,41 @@ export default function StocksPane() {
           aboveVWAP: aboveVWAP===true, vwapNearLower: vwapBands?.nearLowerBand===true,
           engulfing: patterns?.bullishEngulfing===true, hammer: patterns?.hammer===true,
           morningStar: patterns?.morningStar===true,
-          reversalFired: (detectReversal(ltp,t.rsi,patterns,sr,vixVal,pcr,nBull,chgPct,t.atr||0,high,low)?.type||'NONE')!=='NONE',
+          reversalFired: (reversal?.type||'NONE')!=='NONE',
           delivHigh: (delivPct??0)>=60, delivLow: (delivPct??100)<=25,
         };
         conf=applyAdaptWeights(conf, adaptWeights?.stock||null, _indSnap);
-        conf=Math.min(99,Math.max(1,Math.round(conf)));
 
         const risk2=(ltp-sl); const useS1=sl>0&&sr?.pivotS1>0&&Math.abs(sl-sr.pivotS1)<risk2*0.3;
         const slTargets={consMethod:useS1?'S1 support':'ATR+VIX',modMethod:'2:1 R:R'};
         const pot  = calcPotential(ltp,tgtMod,sl,numInds,preRec);
         const risk = calcRisk(ltp,sl,tgtMod,t.atr||0,vixVal);
+        const mlRank = applyMlRanking(conf, mlModels || null, {
+          type: 'STOCK',
+          confidence: conf,
+          numInds,
+          risk,
+          pot,
+          rec: preRec,
+          nearSupp,
+          aboveVWAP,
+          delivPct,
+          reversal,
+          _indSnap,
+        });
+        conf = mlRank.confidence;
+        conf=Math.min(99,Math.max(1,Math.round(conf)));
         const rec  = getRec(conf,pot.base,risk,pot.rr);
+        const aiThresholds = mlModels?.thresholds?.stock || null;
         // Raised minStockConf default 50→65 and excluded WATCH/AVOID — your data shows <30% WR below 65%
-        const passes = conf>=(cfg.minStockConf||65) && pot.base>=(cfg.pot||3) && risk<(cfg.risk||55) && pot.rr>=(cfg.rr||1.2) && rec!=='WATCH' && rec!=='AVOID';
+        const passes = !mlRank.aiBlock
+          && conf >= (aiThresholds?.minConfidence || cfg.minStockConf || 65)
+          && pot.base >= (cfg.pot || 3)
+          && risk < (aiThresholds?.maxRisk || cfg.risk || 55)
+          && pot.rr >= (aiThresholds?.minRR || cfg.rr || 1.2)
+          && rec !== 'WATCH' && rec !== 'AVOID';
 
         const entryTrigger=calcEntryTrigger(ltp,high,sr,t.atr||0,rec,vwap,chgPct);
-        const reversal=detectReversal(ltp,t.rsi,patterns,sr,vixVal,pcr,nBull,chgPct,t.atr||0,high,low);
         const macd=t.macd||{}, macdBull=t.macdBull, bb=t.bb, adx=t.adx, rsiDiv=t.rsiDiv;
         const a50=t.a50, a200=t.a200, nearSuppF=nearSupp;
         const scored = {
@@ -944,6 +965,11 @@ export default function StocksPane() {
           vwap, aboveVWAP, vwapType:'daily', vwapBands,
           vol, avgVol20, high, low, delivPct,
           _indSnap,
+          mlProbability: mlRank.mlProbability,
+          mlAdj: mlRank.mlAdj,
+          mlExplain: mlRank.explanation,
+          aiBlock: mlRank.aiBlock,
+          aiModel: mlRank.servingLabel,
           entryTrigger, reversal,
           recentCandles:(t.candles||[]).slice(0,20), closes:t.closes||[],
         };

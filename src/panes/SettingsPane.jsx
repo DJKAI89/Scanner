@@ -247,6 +247,107 @@ function AdaptWeightsSection({ adaptWeights }) {
   );
 }
 
+function MlRankerSection({ mlModels, mlSnapshots }) {
+  if (!mlModels) {
+    return (
+      <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '14px 16px' }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#92400e', marginBottom: 6 }}>Loading ML Ranker</div>
+        <div style={{ fontSize: 10, color: '#b45309', lineHeight: 1.7 }}>
+          The AI ranking layer turns on automatically after enough closed signals are available in GitHub history.
+        </div>
+      </div>
+    );
+  }
+
+  const cards = [
+    { key: 'stock', label: 'Stocks', data: mlModels.stock },
+    { key: 'option', label: 'Options', data: mlModels.option },
+  ];
+
+  return (
+    <div>
+      <div style={{ fontSize: 10, color: '#64748b', marginBottom: 12, lineHeight: 1.7 }}>
+        Model: <strong>{mlModels.modelName}</strong>. It learns win probability from your own logged signals and nudges confidence up or down before ranking.
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10 }}>
+        {cards.map(({ key, label, data }) => (
+          <div key={key} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px' }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: '#0f172a', marginBottom: 8 }}>{label}</div>
+            {!data ? (
+              <div style={{ fontSize: 10, color: '#94a3b8' }}>Need more closed signals</div>
+            ) : (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8 }}>
+                  <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Samples</div><div style={{ fontSize: 14, fontWeight: 800, color: '#1d4ed8' }}>{data.trainedOn}</div></div>
+                  <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Win Rate</div><div style={{ fontSize: 14, fontWeight: 800, color: '#16a34a' }}>{Math.round(data.baseRate * 100)}%</div></div>
+                  <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Accuracy</div><div style={{ fontSize: 14, fontWeight: 800, color: '#7c3aed' }}>{Math.round(data.accuracy * 100)}%</div></div>
+                  <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Edge</div><div style={{ fontSize: 14, fontWeight: 800, color: data.edge > 0 ? '#16a34a' : '#64748b' }}>{data.edge > 0 ? '+' : ''}{(data.edge * 100).toFixed(1)}</div></div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8, marginTop: 8 }}>
+                  <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Walk-Forward</div><div style={{ fontSize: 12, fontWeight: 800, color: '#0f766e' }}>{Math.round(((data.walkForward?.accuracy || 0) || 0) * 100)}%</div></div>
+                  <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Serving Model</div><div style={{ fontSize: 12, fontWeight: 800, color: '#334155' }}>{mlSnapshots?.[0]?.[key]?.servingLabel || 'global'}</div></div>
+                </div>
+                {data.topFeatures?.length > 0 && (
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid #e2e8f0' }}>
+                    <div style={{ fontSize: 8, color: '#94a3b8', marginBottom: 6 }}>TOP DRIVERS</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {data.topFeatures.slice(0, 4).map((f) => (
+                        <span key={f.feature} style={{ fontSize: 8, fontWeight: 700, color: '#334155', background: '#e2e8f0', borderRadius: 999, padding: '3px 7px' }}>
+                          {f.feature} {f.importance}%
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+      {!!mlSnapshots?.length && (
+        <div style={{ marginTop: 12, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px' }}>
+          <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', marginBottom: 8 }}>MODEL HISTORY</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {mlSnapshots.slice(0, 5).map((snap) => (
+              <div key={snap.computedAt} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 9, color: '#475569' }}>
+                <span style={{ color: '#64748b', fontSize:12, fontWeight: 700 }}>{new Date(snap.computedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                <span style={{ color: '#64748b', fontSize:12, fontWeight: 700 }}>Stock: {snap.stock?.trainedOn || 0}/{snap.stock ? Math.round((snap.stock.accuracy || 0) * 100) : 0}%</span>
+                <span style={{ color: '#64748b', fontSize:12, fontWeight: 700 }}>Option: {snap.option?.trainedOn || 0}/{snap.option ? Math.round((snap.option.accuracy || 0) * 100) : 0}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {(mlModels?.thresholds?.stock || mlModels?.thresholds?.option) && (
+        <div style={{ marginTop: 12, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px' }}>
+          <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', marginBottom: 8 }}>AI THRESHOLDS</div>
+          {['stock', 'option'].map((k) => mlModels?.thresholds?.[k] ? (
+            <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 9, color: '#475569', marginBottom: 5 }}>
+              <span style={{ fontWeight: 700 }}>{k.toUpperCase()}</span>
+              <span>Prob {Math.round((mlModels.thresholds[k].probability || 0) * 100)}%</span>
+              <span>RR {mlModels.thresholds[k].minRR}</span>
+              <span>Risk {mlModels.thresholds[k].maxRisk}</span>
+            </div>
+          ) : null)}
+        </div>
+      )}
+      {(mlModels?.drift?.stock || mlModels?.drift?.option) && (
+        <div style={{ marginTop: 12, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px' }}>
+          <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', marginBottom: 8 }}>DRIFT / ROLLBACK</div>
+          {['stock', 'option'].map((k) => mlModels?.drift?.[k] ? (
+            <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 9, color: '#475569', marginBottom: 5 }}>
+              <span style={{ fontWeight: 700 }}>{k.toUpperCase()}</span>
+              <span>WF {Math.round((mlModels.drift[k].walkForwardAccuracy || 0) * 100)}%</span>
+              <span style={{ color: mlModels.drift[k].stable ? '#16a34a' : '#dc2626', fontWeight: 700 }}>{mlModels.drift[k].stable ? 'Stable' : 'Drift'}</span>
+              <span>{mlModels.drift[k].rollbackTo || 'No rollback'}</span>
+            </div>
+          ) : null)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsPane() {
   const {
     cfg, saveCfg, resetCfg,
@@ -255,7 +356,7 @@ export default function SettingsPane() {
     stocksStatus, loadStocks,
     fiiInterp, loadFIIDII,
     ghSettingsPulled,
-    adaptWeights,
+    adaptWeights, mlModels, mlSnapshots,
   } = useApp();
 
   const [local, setLocal]           = useState({ ...cfg });
@@ -416,6 +517,11 @@ export default function SettingsPane() {
             Updates every time the app boots (reads last 60 days of closed signals).
           </div>
           <AdaptWeightsSection adaptWeights={adaptWeights} />
+        </div>
+
+        <div className="setting-card" style={{ gridColumn: '1 / -1' }}>
+          <h4>🤖 ML Ranker</h4>
+          <MlRankerSection mlModels={mlModels} mlSnapshots={mlSnapshots} />
         </div>
 
         {/* ── Stock Universe ── */}
