@@ -17,7 +17,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Run AI retrainer
         env:
@@ -25,4 +25,5 @@ jobs:
           GH_USER: ${{ secrets.AI_GH_USER }}
           GH_REPO: ${{ secrets.AI_GH_REPO }}
           AI_LOOKBACK_DAYS: ${{ vars.AI_LOOKBACK_DAYS || '90' }}
+          NODE_OPTIONS: "--max-old-space-size=2048"
         run: npm run ai:train
