@@ -359,11 +359,7 @@ export function AppProvider({ children }) {
     try {
       // Read index — only dates that index reports as having open > 0
       const { dates, dailyStats } = await ghReadIndex(g);
-      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-      const datesWithOpen = [...new Set([
-        ...dates.filter(d => (dailyStats[d]?.open || 0) > 0),
-        today,
-      ])];
+      const datesWithOpen = dates.filter(d => (dailyStats[d]?.open || 0) > 0);
       if (!datesWithOpen.length) { setOpenSignalCount(0); return; }
 
       // Read day files in parallel

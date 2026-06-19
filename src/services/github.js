@@ -17,17 +17,26 @@ function getLogDayPath(date) { return `${getLogFolder()}/${date}.json`; }
 function getLogIndexPath()   { return `${getLogFolder()}/index.json`; }
 
 // ── Base GitHub fetch ──
+const _ghInflight = new Map();
+
 async function _ghFetch(gh, path) {
   if (!gh.token || !gh.user || !gh.repo) return null;
-  try {
-    const r = await fetch(
-      `https://api.github.com/repos/${gh.user}/${gh.repo}/contents/${path}`,
-      { headers: { Authorization: 'token ' + gh.token, Accept: 'application/vnd.github.v3+json' } }
-    );
-    if (r.status === 404) return null;
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return r.json();
-  } catch (e) { return null; }
+  const reqKey = `${gh.user}/${gh.repo}:${path}`;
+  if (_ghInflight.has(reqKey)) return _ghInflight.get(reqKey);
+  const pending = (async () => {
+    try {
+      const r = await fetch(
+        `https://api.github.com/repos/${gh.user}/${gh.repo}/contents/${path}`,
+        { headers: { Authorization: 'token ' + gh.token, Accept: 'application/vnd.github.v3+json' } }
+      );
+      if (r.status === 404) return null;
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    } catch (e) { return null; }
+    finally { _ghInflight.delete(reqKey); }
+  })();
+  _ghInflight.set(reqKey, pending);
+  return pending;
 }
 
 // ── Base GitHub PUT ──

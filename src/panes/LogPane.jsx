@@ -260,14 +260,8 @@ export default function LogPane() {
     if (!gh.token||!gh.user||!gh.repo) { setError('GitHub not configured — go to ⚙ Settings to set it up.'); return; }
     setLoading(true); setError('');
     try {
-      // Build actual calendar dates (not just index entries)
-      const todayDate = new Date().toLocaleDateString('en-CA', { timeZone:'Asia/Kolkata' });
-      const calDates = [];
-      for (let i = 0; i < days; i++) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        calDates.push(d.toLocaleDateString('en-CA', { timeZone:'Asia/Kolkata' }));
-      }
+      const { dates } = await ghReadIndex(gh);
+      const calDates = [...dates].sort().slice(-days).reverse();
 
       const all = [];
       const shaMap = {};
@@ -282,13 +276,6 @@ export default function LogPane() {
           }
         });
       }
-      // Also read today explicitly if not already included
-      if (!calDates.includes(todayDate)) {
-        const { signals: todaySigs, sha: todaySha } = await ghReadDay(gh, todayDate);
-        all.push(...(todaySigs||[]));
-        if (todaySha) shaMap[todayDate] = todaySha;
-      }
-
       all.sort((a,b) => (b.date+b.time).localeCompare(a.date+a.time));
       setSignals(all);
       setSigShaMap(prev => ({ ...prev, ...shaMap })); // preserve existing SHAs + add new ones
@@ -305,10 +292,8 @@ export default function LogPane() {
     if (!token) { setError('No Upstox token — log in first.'); return; }
     setChecking(true); setError('');
     try {
-      const istDate = new Date().toLocaleDateString('en-CA', { timeZone:'Asia/Kolkata' });
       const { dates, dailyStats } = await ghReadIndex(gh);
       const datesWithOpen = dates.filter(d => dailyStats[d]?.open > 0);
-      if (!datesWithOpen.includes(istDate)) datesWithOpen.push(istDate);
       if (!datesWithOpen.length) { lg('No open signals found.', 'w'); setChecking(false); return; }
       lg(`checkAllOutcomes: checking ${datesWithOpen.length} day file(s)`, 'o');
       const dayMap = {};

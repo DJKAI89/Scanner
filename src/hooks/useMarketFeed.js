@@ -277,6 +277,7 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
   const retryRef    = useRef(0);
   const retryTimer  = useRef(null);
   const pollTimer   = useRef(null);
+  const blockedUntilRef = useRef(0);
   const keysRef     = useRef([]);
   const tokenRef    = useRef(token);
 
@@ -284,7 +285,9 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
   const [lastPrices,  setLastPrices]  = useState({});
   const [wsMode,      setWsMode]      = useState('connecting'); // 'ws'|'poll'|'connecting'
 
-  tokenRef.current = resolveAccessToken(token);
+  const resolvedToken = resolveAccessToken(token);
+  if (tokenRef.current !== resolvedToken) blockedUntilRef.current = 0;
+  tokenRef.current = resolvedToken;
 
   // ── Price update helper ──
   const applyPrices = useCallback((map) => {
@@ -349,6 +352,10 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
   const connect = useCallback(async () => {
     const accessToken = resolveAccessToken(token);
     if (!accessToken || !keysRef.current.length || !enabled) return;
+    if (Date.now() < blockedUntilRef.current) {
+      startPolling();
+      return;
+    }
     if (ws.current?.readyState === WebSocket.OPEN || ws.current?.readyState === WebSocket.CONNECTING) return;
 
     const seq = ++connectSeq.current;
@@ -416,6 +423,7 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
       socket.onerror = () => {
         if (seq !== connectSeq.current || ws.current !== socket) return;
         handshakeFailed = !opened;
+        if (handshakeFailed) blockedUntilRef.current = Date.now() + 300000;
         setConnected(false);
         setWsMode('poll');
         startPolling();
@@ -465,6 +473,7 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
   useEffect(() => {
     const accessToken = resolveAccessToken(token);
     keysRef.current = instrumentKeys;
+    if (!accessToken) blockedUntilRef.current = 0;
     if (!enabled || !accessToken || !instrumentKeys.length) { disconnect(); return; }
     if (ws.current?.readyState === WebSocket.OPEN) {
       subscribe(instrumentKeys);
@@ -476,4 +485,3 @@ export function useMarketFeed(token, instrumentKeys = [], enabled = true, option
 
   return { connected, lastPrices, wsMode, subscribe, disconnect };
 }
-
