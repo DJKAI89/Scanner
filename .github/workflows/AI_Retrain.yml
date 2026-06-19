@@ -1,0 +1,28 @@
+name: AI Retrain
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "45 12 * * 1-5"
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run AI retrainer
+        env:
+          GH_TOKEN: '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' #${{ secrets.AI_GH_TOKEN }}
+          GH_USER: 'djkai89' #${{ secrets.AI_GH_USER }}
+          GH_REPO: 'ScannerFile' #${{ secrets.AI_GH_REPO }}
+          AI_LOOKBACK_DAYS: '90' #${{ vars.AI_LOOKBACK_DAYS || '90' }}
+        run: npm run ai:train
