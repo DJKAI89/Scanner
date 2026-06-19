@@ -536,10 +536,12 @@ export function AppProvider({ children }) {
           const pulled = await pullGHSettings(currentGH);
           if (pulled) showToast('✅ Settings loaded from GitHub', '#16a34a', 4000);
         }
-        // 3. Load stocks + FII/DII
+        // 3. Load stocks + FII/DII + adaptive calibration
         if (currentGH.token) {
           loadStocks(currentGH);
           loadFIIDII(currentGH);
+          loadConfCalibration(currentGH);
+          ghMigrateIfNeeded(currentGH, lg);
         }
       }, 2000);
     }).catch((e) => {
