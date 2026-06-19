@@ -56,7 +56,49 @@ async function ghFetch(path, retries = 3) {
   }
 }
 
+// Create empty .gitkeep file in directory to ensure it exists
+async function ensureDirectoryExists(dirPath) {
+  const gitkeepPath = `${dirPath}/.gitkeep`;
+  const existing = await ghFetch(gitkeepPath);
+  
+  if (existing) {
+    // Directory already exists
+    return;
+  }
+  
+  // Create .gitkeep to create the directory
+  const body = {
+    message: `Create ${dirPath} directory`,
+    content: Buffer.from('', 'utf8').toString('base64'),
+  };
+  
+  const r = await fetch(`https://api.github.com/repos/${GH_USER}/${GH_REPO}/contents/${gitkeepPath}`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${GH_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    timeout: 10000,
+  });
+  
+  if (!r.ok && r.status !== 409) {
+    // 409 means file already exists, which is fine
+    console.warn(`[ensureDirectoryExists] Warning: Could not ensure ${dirPath} exists (status ${r.status}). Continuing anyway...`);
+  } else {
+    console.log(`[ensureDirectoryExists] Ensured directory exists: ${dirPath}`);
+  }
+}
+
 async function ghPut(path, payload, sha, message, retries = 3) {
+  // Ensure parent directory exists first
+  const dirPath = path.split('/').slice(0, -1).join('/');
+  if (dirPath) {
+    await ensureDirectoryExists(dirPath);
+  }
+
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
       const body = {
@@ -76,6 +118,12 @@ async function ghPut(path, payload, sha, message, retries = 3) {
         body: JSON.stringify(body),
         timeout: 10000,
       });
+      
+      if (r.status === 403) {
+        const responseText = await r.text().catch(() => '');
+        console.error(`[ghPut] 403 Forbidden for ${path}. Response: ${responseText}`);
+        throw new Error(`GitHub 403 for ${path} — Check token permissions. Ensure fine-grained PAT has 'Contents' read/write permission for this repo.`);
+      }
       
       if (!r.ok) throw new Error(`GitHub PUT ${r.status} for ${path}`);
       return r.json();
