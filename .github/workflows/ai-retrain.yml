@@ -21,7 +21,7 @@ jobs:
 
       - name: Run AI retrainer
         env:
-          GH_TOKEN: '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' #${{ secrets.AI_GH_TOKEN }}
+          GH_TOKEN: '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' #${{ secrets.AI_GH_TOKEN }}
           GH_USER: 'djkai89' #${{ secrets.AI_GH_USER }}
           GH_REPO: 'ScannerFile' #${{ secrets.AI_GH_REPO }}
           AI_LOOKBACK_DAYS: '90' #${{ vars.AI_LOOKBACK_DAYS || '90' }}
