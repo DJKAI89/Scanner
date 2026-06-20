@@ -3,7 +3,7 @@ import { DEF, CFG_VERSION } from '../constants/config';
 import { localIsOpen, getMarketStatusLocal, getIST } from '../utils/marketTime';
 import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken } from '../services/api';
 import { interpretFIIDII } from '../services/technical';
-import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded, ghReadIndex, ghReadDay, ghWriteDay, pullAiModelFromGH, pushAiModelToGH, appendAiHistoryToGH } from '../services/github';
+import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded, ghReadIndex, ghReadDay, ghWriteDay, pullAiModelFromGH, pushAiModelToGH, appendAiHistoryToGH, pullAiHistoryFromGH } from '../services/github';
 import { fetchQ, resolveAccessToken } from '../services/api';
 import { trainSignalMlModels, buildModelSnapshot } from '../services/mlRanking';
 
@@ -257,10 +257,30 @@ export function AppProvider({ children }) {
         let activeModels = null;
         const remoteModel = await pullAiModelFromGH(g).catch(() => null);
         if (remoteModel?.version) {
+          const prevComputedAt = (() => {
+            try { return JSON.parse(localStorage.getItem('friday_ml_models') || 'null')?.computedAt; } catch (_) { return null; }
+          })();
           activeModels = remoteModel;
           setMlModels(remoteModel);
           localStorage.setItem('friday_ml_models', JSON.stringify(remoteModel));
           lg('ML ranker loaded from GitHub', 'o');
+
+          if (remoteModel.computedAt && remoteModel.computedAt !== prevComputedAt) {
+            const remoteHistory = await pullAiHistoryFromGH(g, 20).catch(() => []);
+            if (remoteHistory?.length) {
+              setMlSnapshots((prev) => {
+                const merged = [...remoteHistory, ...prev];
+                const seen = new Set();
+                const deduped = merged.filter((s) => {
+                  if (!s?.computedAt || seen.has(s.computedAt)) return false;
+                  seen.add(s.computedAt);
+                  return true;
+                }).sort((a, b) => new Date(b.computedAt) - new Date(a.computedAt)).slice(0, 20);
+                localStorage.setItem('friday_ml_snapshots', JSON.stringify(deduped));
+                return deduped;
+              });
+            }
+          }
         } else {
           const cachedModel = (() => {
             try { return JSON.parse(localStorage.getItem('friday_ml_models') || 'null'); } catch (_) { return null; }
@@ -703,5 +723,3 @@ export function useApp() {
   if (!ctx) throw new Error('useApp must be used within AppProvider');
   return ctx;
 }
-
-
