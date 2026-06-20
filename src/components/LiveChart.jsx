@@ -118,7 +118,7 @@ export default function LiveChart({
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState('');
   const [viewOffset,   setViewOffset]   = useState(0);   // how many candles from right we've scrolled
-  const [visibleCount, setVisibleCount] = useState(40);  // zoom: how many candles to show
+  const [visibleCount, setVisibleCount] = useState(60);  // zoom: how many candles to show
   const [containerW,   setContainerW]   = useState(360);
   const [liveCandle,   setLiveCandle]   = useState(null);
   const [tickTime,     setTickTime]     = useState('');
@@ -254,7 +254,7 @@ export default function LiveChart({
   const VOL_H    = TOTAL_H - MAIN_H;
   const N = display.length;
   const slotW   = N > 0 ? CW / N : CW / 40;
-  const candleW = Math.max(1.5, Math.min(slotW * 0.72, 14));
+  const candleW = Math.max(2, Math.min(slotW * 0.86, 22));
   const cx = i => LEFT + (i + 0.5) * slotW;
 
   // ── Price range ───────────────────────────────────────────────
