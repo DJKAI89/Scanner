@@ -261,7 +261,14 @@ export default function LogPane() {
     setLoading(true); setError('');
     try {
       const { dates } = await ghReadIndex(gh);
-      const calDates = [...dates].sort().slice(-days).reverse();
+      const sorted = [...dates].sort();
+      let calDates;
+      if (days === 1) {
+        const todayStr = getISTDate();
+        calDates = sorted.includes(todayStr) ? [todayStr] : sorted.slice(-1);
+      } else {
+        calDates = sorted.slice(-days).reverse();
+      }
 
       const all = [];
       const shaMap = {};
@@ -281,7 +288,11 @@ export default function LogPane() {
       setSigShaMap(prev => ({ ...prev, ...shaMap })); // preserve existing SHAs + add new ones
       resolvedRef.current.clear();
       updateBadge('log', String(all.length));
-      lg(`Signal log: ${all.length} signals (${days === 1 ? 'Today' : `${days}d`})`, 'o');
+      if (days === 1 && calDates[0] && calDates[0] !== getISTDate()) {
+        lg(`Signal log: no entry for today yet — showing ${calDates[0]} (${all.length} signals)`, 'w');
+      } else {
+        lg(`Signal log: ${all.length} signals (${days === 1 ? 'Today' : `${days}d`})`, 'o');
+      }
     } catch(e) { setError(e.message); lg('Log error: '+e.message,'e'); }
     finally { setLoading(false); }
   }, [gh, days, updateBadge, lg]);
