@@ -11,6 +11,21 @@ import { applyMlRanking } from './mlRanking';
 
 export const VIX_KEY = 'NSE_INDEX|India VIX';
 
+// Filters a sorted list of expiry date strings (YYYY-MM-DD) to those falling
+// within the current calendar month (and not already past). Falls back to
+// the nearest available expiry if none fall in the current month (e.g. last
+// trading days of the month when only next-month expiries remain).
+export function expiriesInCurrentMonth(allExpiries) {
+  const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth();
+  const todayStr = now.toISOString().slice(0, 10);
+  const inMonth = allExpiries.filter(e => {
+    const d = new Date(e);
+    return d.getFullYear() === y && d.getMonth() === m && e >= todayStr;
+  }).sort();
+  return inMonth.length ? inMonth : (allExpiries[0] ? [allExpiries[0]] : []);
+}
+
 export function getChgPct(q) {
   if (!q) return 0;
   if (q.net_change_percentage != null) return +q.net_change_percentage;
@@ -181,20 +196,22 @@ export async function runOptionsScan(ctx, caches, callbacks) {
     const spotChg = getChgPct(q);
     const marketCtx = ctxMap[idx.name] || computeCtxFromCandles([], spot, spotChg, vixVal, null);
 
-    // Expiry
-    setProgress(`Step 2/${totalSteps}: ${idx.name} fetching expiry...`);
-    let expiry = '';
+    // Expiries — scan every expiry falling within the current calendar month
+    setProgress(`Step 2/${totalSteps}: ${idx.name} fetching expiries...`);
+    let allExpiries = [];
     try {
       const cd = await fetch(
         `https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent(idx.key)}`,
         { headers: { Authorization: 'Bearer ' + accessToken, Accept: 'application/json' } }
       ).then(r => r.json());
-      expiry = (cd?.data?.map(e => e.expiry).sort() || [])[0] || '';
+      allExpiries = (cd?.data?.map(e => e.expiry).filter(Boolean) || []).sort();
     } catch (e) { lg('Contract ' + idx.name + ': ' + e.message, 'w'); }
-    if (!expiry) continue;
+    if (!allExpiries.length) continue;
+    const expiriesToScan = expiriesInCurrentMonth(allExpiries);
+    const expiry = expiriesToScan[0]; // nearest — drives structural stats below
 
-    setProgress(`Step 2/${totalSteps}: ${idx.name} scanning ${spot} strikes...`);
-    // Full chain
+    setProgress(`Step 2/${totalSteps}: ${idx.name} scanning ${spot} strikes across ${expiriesToScan.length} expiry(s)...`);
+    // Nearest-expiry chain drives structural stats (Max Pain/OI walls/PCR/IV trend)
     const chain = await fetchOptions(idx.key, expiry, accessToken, onTokenExpired);
     if (!chain.length) { lg(idx.name + ': empty chain', 'w'); continue; }
 
@@ -225,14 +242,21 @@ export async function runOptionsScan(ctx, caches, callbacks) {
     // ATM strike
     const atm  = Math.round(spot / idx.step) * idx.step;
 
-    // Full scanChain — exact HTML port
-    const picks = scanChain(chain, atm, spot, idx.name, expiry, idx.lot, niftyBull, vixVal, maxPain, pcr, richCtx, cfg);
+    // Scan every expiry in the current month, merging picks (each pick carries its own .expiry)
+    const allIdxPicks = [];
+    for (const exp of expiriesToScan) {
+      const expChain = exp === expiry ? chain : await fetchOptions(idx.key, exp, accessToken, onTokenExpired).catch(() => []);
+      if (!expChain.length) { lg(`${idx.name} ${exp}: empty chain`, 'w'); continue; }
+      const expMaxPain = exp === expiry ? maxPain : calcMaxPain(expChain);
+      allIdxPicks.push(...scanChain(expChain, atm, spot, idx.name, exp, idx.lot, niftyBull, vixVal, expMaxPain, pcr, richCtx, cfg));
+      if (exp !== expiry) await sleep(300);
+    }
 
     // Apply FII bias + adaptive weights + ML ranking, then filter
-    const picksWithFII = scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, cfg, maxPain, spot });
+    const picksWithFII = scoreAndFilterPicks(allIdxPicks, { fiiData, adaptWeights, mlModels, cfg, maxPain, spot });
 
-    lg(`${idx.name}: ${chain.length} strikes → ${picks.length} raw → ${picksWithFII.length} ≥${cfg.minOptConf}% | composite=${richCtx.compositeScore} pcr=${pcr}`, 'o');
-    built.push({ name: idx.name, spot, spotChg, picks: picksWithFII, expiry, chain, maxPain, oiWalls, pcr, pcrTrend, ivTrend });
+    lg(`${idx.name}: ${expiriesToScan.length} expiry(s) → ${allIdxPicks.length} raw → ${picksWithFII.length} ≥${cfg.minOptConf}% | composite=${richCtx.compositeScore} pcr=${pcr}`, 'o');
+    built.push({ name: idx.name, spot, spotChg, picks: picksWithFII, expiry, expiries: expiriesToScan, chain, maxPain, oiWalls, pcr, pcrTrend, ivTrend });
   }
 
   // ── Step 3: Stock F&O options ────────────────────────────
@@ -288,9 +312,11 @@ export async function runOptionsScan(ctx, caches, callbacks) {
         stkCtx.spot = spot; stkCtx.dayChange = spotChg;
         stkCtx.bullish = stkCtx.compositeScore > 0;
         stkCtx.neutral = Math.abs(stkCtx.compositeScore || 0) < 0.5;
-        let expiry = '';
-        try { const cd = await fetch(`https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent(inst.key)}`, { headers:{ Authorization:'Bearer '+accessToken, Accept:'application/json' } }).then(r=>r.json()); expiry = (cd?.data?.map(e=>e.expiry).sort()||[])[0]||''; } catch(e) {}
-        if (!expiry) continue;
+        let allExpiries2 = [];
+        try { const cd = await fetch(`https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent(inst.key)}`, { headers:{ Authorization:'Bearer '+accessToken, Accept:'application/json' } }).then(r=>r.json()); allExpiries2 = (cd?.data?.map(e=>e.expiry).filter(Boolean)||[]).sort(); } catch(e) {}
+        if (!allExpiries2.length) continue;
+        const expiriesToScan2 = expiriesInCurrentMonth(allExpiries2);
+        const expiry = expiriesToScan2[0]; // nearest — drives structural stats below
         await sleep(300);
         const chain = await fetchOptions(inst.key, expiry, accessToken, onTokenExpired);
         if (!chain.length) continue;
@@ -305,9 +331,19 @@ export async function runOptionsScan(ctx, caches, callbacks) {
         const step2 = spot<200?5:spot<500?10:spot<2000?20:spot<5000?50:100;
         const atm2 = Math.round(spot/step2)*step2;
         const stkMaxPain = calcMaxPain(chain);
-        const picks2 = scanChain(chain, atm2, spot, inst.s, expiry, inst.lot, niftyBull, vixVal, stkMaxPain, pcr2, stkCtx, cfg);
-        const fPicks2 = scoreAndFilterPicks(picks2, { fiiData, adaptWeights, mlModels, cfg, maxPain: stkMaxPain, spot });
-        if (fPicks2.length) { built.push({ name:inst.s, spot, spotChg, picks:fPicks2, expiry, chain, maxPain:stkMaxPain, oiWalls:calcOIWalls(chain), pcr:pcr2, pcrTrend:stkCtx.pcrTrend, ivTrend:ivTrend2, type:'stock', fullName:inst.n }); lg(`${inst.s}: ${chain.length} strikes → ${fPicks2.length} signals`, 'o'); }
+
+        // Scan every expiry in the current month, merging picks (each pick carries its own .expiry)
+        const allStkPicks = [];
+        for (const exp of expiriesToScan2) {
+          const expChain = exp === expiry ? chain : await fetchOptions(inst.key, exp, accessToken, onTokenExpired).catch(() => []);
+          if (!expChain.length) continue;
+          const expMaxPain = exp === expiry ? stkMaxPain : calcMaxPain(expChain);
+          allStkPicks.push(...scanChain(expChain, atm2, spot, inst.s, exp, inst.lot, niftyBull, vixVal, expMaxPain, pcr2, stkCtx, cfg));
+          if (exp !== expiry) await sleep(300);
+        }
+
+        const fPicks2 = scoreAndFilterPicks(allStkPicks, { fiiData, adaptWeights, mlModels, cfg, maxPain: stkMaxPain, spot });
+        if (fPicks2.length) { built.push({ name:inst.s, spot, spotChg, picks:fPicks2, expiry, expiries:expiriesToScan2, chain, maxPain:stkMaxPain, oiWalls:calcOIWalls(chain), pcr:pcr2, pcrTrend:stkCtx.pcrTrend, ivTrend:ivTrend2, type:'stock', fullName:inst.n }); lg(`${inst.s}: ${expiriesToScan2.length} expiry(s) → ${allStkPicks.length} raw → ${fPicks2.length} signals`, 'o'); }
       } catch(e) { lg(inst.s + ' opts: ' + e.message, 'w'); }
     }
   }
