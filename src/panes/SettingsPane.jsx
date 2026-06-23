@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { DEF } from '../constants/config';
-import { pushSettingsToGH, pullSettingsFromGH } from '../services/github';
+import { sanitiseGH, testGitHubConnection, pushLocalSettingsToGH } from '../services/settingsService';
 import { getIST } from '../utils/marketTime';
 
 function SetRow({ label, sub, children }) {
@@ -377,28 +377,13 @@ export default function SettingsPane() {
 
   const set = (k, v) => setLocal(p => ({ ...p, [k]: v }));
 
-  function sanitiseGH(raw) {
-    let { token: tok, user, repo } = raw;
-    repo = (repo || '').trim(); user = (user || '').trim().toLowerCase();
-    const ghMatch = repo.match(/https?:\/\/github\.com\/([^/]+)\/([^/\s#?]+)/);
-    if (ghMatch) { if (!user) user = ghMatch[1].toLowerCase(); repo = ghMatch[2].replace(/\.git$/, ''); }
-    const pagesMatch = repo.match(/https?:\/\/([^.]+)\.github\.io(?:\/([^/\s#?]+))?/);
-    if (pagesMatch) { if (!user) user = pagesMatch[1]; repo = pagesMatch[2] || pagesMatch[1] + '.github.io'; }
-    repo = repo.replace(/^https?:\/\/[^/]+\//, '').replace(/^\/+|\/+$/g, '');
-    return { token: tok, user, repo };
-  }
-
   function handleSave() {
     const cleaned = sanitiseGH(ghLocal);
     saveCfg(local); saveGh(cleaned);
     setSaveStatus('✅ Saved · ' + getIST());
     showToast('✅ Settings saved!');
     setTimeout(() => setSaveStatus(''), 4000);
-    if (cleaned.token && cleaned.user && cleaned.repo) {
-      pushSettingsToGH(cleaned, local)
-        .then(ok => ok && setSaveStatus(s => s + ' · ☁ GitHub synced'))
-        .catch(() => {});
-    }
+    pushLocalSettingsToGH(cleaned, local).then(ok => ok && setSaveStatus(s => s + ' · ☁ GitHub synced'));
   }
 
   function handleReset() {
@@ -410,26 +395,17 @@ export default function SettingsPane() {
   async function handleTestGH() {
     const cleaned = sanitiseGH(ghLocal);
     setGhLocal(cleaned); setGhTesting(true); setGhStatus('🔄 Testing ' + cleaned.user + '/' + cleaned.repo + '...');
-    if (!cleaned.token) { setGhStatus('❌ GitHub token required'); setGhTesting(false); return; }
-    if (!cleaned.user)  { setGhStatus('❌ GitHub username required'); setGhTesting(false); return; }
-    if (!cleaned.repo)  { setGhStatus('❌ Repository name required'); setGhTesting(false); return; }
-    try {
-      const r = await fetch(`https://api.github.com/repos/${cleaned.user}/${cleaned.repo}`, {
-        headers: { Authorization: 'Bearer ' + cleaned.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
-      });
-      if (r.ok) {
-        saveGh(cleaned);
-        setGhStatus(`✅ Connected! ${cleaned.user}/${cleaned.repo} — Pulling settings...`);
-        const pulled = await pullSettingsFromGH(cleaned);
-        if (pulled) { saveCfg({ ...cfg, ...pulled }); setLocal({ ...cfg, ...pulled }); setGhStatus(s => s + ' ✅ Settings loaded!'); }
-        else setGhStatus(s => s + ' · No remote settings yet');
-        loadStocks(cleaned, true);
-        loadFIIDII(cleaned, true);
-      } else if (r.status === 401) setGhStatus('❌ Token invalid — regenerate with repo scope (or Contents permission for fine-grained tokens)');
-      else if (r.status === 403) setGhStatus('❌ Forbidden — fine-grained token missing repo access/Contents permission, or rate-limited');
-      else if (r.status === 404)   setGhStatus(`❌ Repo '${cleaned.user}/${cleaned.repo}' not found (check spelling/case, or token can't see it)`);
-      else setGhStatus('❌ GitHub error: HTTP ' + r.status);
-    } catch (e) { setGhStatus('❌ Network error: ' + e.message); }
+    const result = await testGitHubConnection(cleaned);
+    if (result.ok) {
+      saveGh(cleaned);
+      setGhStatus(result.message + ' — Pulling settings...');
+      if (result.pulledCfg) { saveCfg({ ...cfg, ...result.pulledCfg }); setLocal({ ...cfg, ...result.pulledCfg }); setGhStatus(s => s + ' ✅ Settings loaded!'); }
+      else setGhStatus(s => s + ' · No remote settings yet');
+      loadStocks(cleaned, true);
+      loadFIIDII(cleaned, true);
+    } else {
+      setGhStatus(result.message);
+    }
     setGhTesting(false);
   }
 
