@@ -3,8 +3,9 @@ import { DEF, CFG_VERSION } from '../constants/config';
 import { localIsOpen, getMarketStatusLocal, getIST } from '../utils/marketTime';
 import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken } from '../services/api';
 import { interpretFIIDII } from '../services/technical';
-import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded, ghReadIndex, ghReadDay, ghWriteDay } from '../services/github';
+import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded, ghReadIndex, ghReadDay, ghWriteDay, pullAiModelFromGH, pushAiModelToGH, appendAiHistoryToGH, pullAiHistoryFromGH } from '../services/github';
 import { fetchQ, resolveAccessToken } from '../services/api';
+import { trainSignalMlModels, buildModelSnapshot } from '../services/mlRanking';
 
 const AppContext = createContext(null);
 
@@ -62,9 +63,16 @@ export function AppProvider({ children }) {
   const [tickerStats, setTickerStats] = useState({ vix:0, pcr:null, sentiment:'—', sentSc:5, topSec:'—' });
   const [confCalibration, setConfCalibration] = useState(null);
   const [adaptWeights,    setAdaptWeights]    = useState(null); // per-indicator win-rate adjustments
+  const [mlModels,        setMlModels]        = useState(() => {
+    try { return JSON.parse(localStorage.getItem('friday_ml_models') || 'null'); } catch (_) { return null; }
+  });
+  const [mlSnapshots,     setMlSnapshots]     = useState(() => {
+    try { return JSON.parse(localStorage.getItem('friday_ml_snapshots') || '[]'); } catch (_) { return []; }
+  });
   const [openSignalCount, setOpenSignalCount] = useState(0);   // live OPEN signal count (global monitor)
   const signalMonitorRef  = useRef(null);  // interval ref for global signal monitor
   const resolvedSigIds    = useRef(new Set()); // in-memory set of already-resolved signal IDs — never re-checked
+  const mlRefreshTimerRef = useRef(null);
 
   // ── Settings-pulled-from-GH callback ref (so SettingsPane can react) ──
   const [ghSettingsPulled, setGhSettingsPulled] = useState(0);
@@ -78,6 +86,20 @@ export function AppProvider({ children }) {
     setToast({ msg, color });
     setTimeout(() => setToast(null), duration);
   }, []);
+
+  const scheduleMlRefresh = useCallback((ghCfg, delayMs = 12000) => {
+    const g = ghCfg || gh;
+    if (!g?.token || !g?.user || !g?.repo) return;
+    if (mlRefreshTimerRef.current) clearTimeout(mlRefreshTimerRef.current);
+    mlRefreshTimerRef.current = setTimeout(() => {
+      const run = () => loadConfCalibration(g);
+      if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+        window.requestIdleCallback(run, { timeout: 8000 });
+      } else {
+        setTimeout(run, 0);
+      }
+    }, delayMs);
+  }, [gh]); // eslint-disable-line
 
   const onTokenExpired = useCallback(() => {
     localStorage.removeItem('friday_token');
@@ -157,9 +179,11 @@ export function AppProvider({ children }) {
     try {
       const r = await fetch(
         `https://api.github.com/repos/${g.user}/${g.repo}/contents/stocks/stocks.json`,
-        { headers: { Authorization: 'token ' + g.token, Accept: 'application/vnd.github.v3+json' } }
+        { headers: { Authorization: 'Bearer ' + g.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } }
       );
       if (r.status === 404) { setStocksStatus('⚠ stocks/stocks.json not found in repo'); return; }
+      if (r.status === 401) { setStocksStatus('❌ Token invalid/expired — regenerate in Settings'); return; }
+      if (r.status === 403) { setStocksStatus('❌ Token lacks repo access (check fine-grained PAT permissions or rate limit)'); return; }
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const d      = await r.json();
       const parsed = JSON.parse(atob(d.content.replace(/\n/g, '')));
@@ -196,9 +220,11 @@ export function AppProvider({ children }) {
     try {
       const r = await fetch(
         `https://api.github.com/repos/${g.user}/${g.repo}/contents/fii-dii/latest.json`,
-        { headers: { Authorization: 'token ' + g.token, Accept: 'application/vnd.github.v3+json' } }
+        { headers: { Authorization: 'Bearer ' + g.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } }
       );
       if (r.status === 404) { lg('FII/DII: fii-dii/latest.json not found in repo', 'w'); return; }
+      if (r.status === 401) { lg('FII/DII: token invalid/expired', 'w'); return; }
+      if (r.status === 403) { lg('FII/DII: token lacks repo access or rate-limited', 'w'); return; }
       if (!r.ok) return;
       const d    = await r.json();
       const data = JSON.parse(atob(d.content.replace(/\n/g, '')));
@@ -219,13 +245,71 @@ export function AppProvider({ children }) {
   //   Layer 2 (adaptWeights): per-indicator win-rate adjustment — learns which
   //     indicators actually predict wins vs losses from YOUR signal history
   const loadConfCalibration = useCallback(async (ghCfg) => {
-    const g = ghCfg || gh;
-    if (!g?.token || !g?.user || !g?.repo) return;
-    try {
-      const signals = await ghReadMultipleDays(g, 60); // 60 days for better sample size
-      if (!signals?.length) return;
-      const closed = signals.filter(s => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
-      if (closed.length < 10) { lg(`Calibration: need 10+ closed signals, have ${closed.length}`, 'w'); return; }
+      const g = ghCfg || gh;
+      if (!g?.token || !g?.user || !g?.repo) return;
+      try {
+        const signals = await ghReadMultipleDays(g, 60); // 60 days for better sample size
+        if (!signals?.length) { setMlModels(null); localStorage.removeItem('friday_ml_models'); return; }
+        const closed = signals.filter(s => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
+        if (closed.length < 10) { setMlModels(null); localStorage.removeItem('friday_ml_models'); lg(`Calibration: need 10+ closed signals, have ${closed.length}`, 'w'); return; }
+        // Browser-safe mode:
+        // Use cached/remote AI model and avoid heavy on-page retraining that can freeze UI.
+        let activeModels = null;
+        const remoteModel = await pullAiModelFromGH(g).catch(() => null);
+        if (remoteModel?.version) {
+          const prevComputedAt = (() => {
+            try { return JSON.parse(localStorage.getItem('friday_ml_models') || 'null')?.computedAt; } catch (_) { return null; }
+          })();
+          activeModels = remoteModel;
+          setMlModels(remoteModel);
+          localStorage.setItem('friday_ml_models', JSON.stringify(remoteModel));
+          lg('ML ranker loaded from GitHub', 'o');
+
+          if (remoteModel.computedAt && remoteModel.computedAt !== prevComputedAt) {
+            const remoteHistory = await pullAiHistoryFromGH(g, 20).catch(() => []);
+            if (remoteHistory?.length) {
+              setMlSnapshots((prev) => {
+                const merged = [...remoteHistory, ...prev];
+                const seen = new Set();
+                const deduped = merged.filter((s) => {
+                  if (!s?.computedAt || seen.has(s.computedAt)) return false;
+                  seen.add(s.computedAt);
+                  return true;
+                }).sort((a, b) => new Date(b.computedAt) - new Date(a.computedAt)).slice(0, 20);
+                localStorage.setItem('friday_ml_snapshots', JSON.stringify(deduped));
+                return deduped;
+              });
+            }
+          }
+        } else {
+          const cachedModel = (() => {
+            try { return JSON.parse(localStorage.getItem('friday_ml_models') || 'null'); } catch (_) { return null; }
+          })();
+          if (cachedModel?.version) {
+            activeModels = cachedModel;
+            setMlModels(cachedModel);
+            lg('ML ranker loaded from local cache', 'o');
+          } else if (closed.length <= 25) {
+            // Only allow a tiny fallback training pass in-browser for small datasets.
+            const trainedModels = trainSignalMlModels(closed.slice(-25));
+            if (trainedModels) {
+              activeModels = trainedModels;
+              setMlModels(trainedModels);
+              localStorage.setItem('friday_ml_models', JSON.stringify(trainedModels));
+              const snap = buildModelSnapshot(trainedModels);
+              if (snap) {
+                setMlSnapshots((prev) => {
+                  const next = [snap, ...prev].slice(0, 20);
+                  localStorage.setItem('friday_ml_snapshots', JSON.stringify(next));
+                  return next;
+                });
+              }
+              lg('ML ranker trained locally on small sample fallback', 'o');
+            }
+          } else {
+            lg('ML ranker skipped in browser to keep UI responsive. Use GitHub Action retrainer.', 'w');
+          }
+        }
 
       // ── Layer 1: Bucket calibration (existing logic) ──
       const bands = {};
@@ -531,13 +615,19 @@ export function AppProvider({ children }) {
         if (currentGH.token && currentGH.user && currentGH.repo) {
           const pulled = await pullGHSettings(currentGH);
           if (pulled) showToast('✅ Settings loaded from GitHub', '#16a34a', 4000);
+          const remoteModel = await pullAiModelFromGH(currentGH);
+          if (remoteModel?.version) {
+            setMlModels(remoteModel);
+            localStorage.setItem('friday_ml_models', JSON.stringify(remoteModel));
+            lg('✅ AI model pulled from GitHub', 'o');
+          }
         }
-        // 3. Load stocks + FII/DII + adaptive calibration
+        // 3. Load light data immediately; defer heavy AI calibration until idle
         if (currentGH.token) {
           loadStocks(currentGH);
           loadFIIDII(currentGH);
-          loadConfCalibration(currentGH);
           ghMigrateIfNeeded(currentGH, lg);
+          scheduleMlRefresh(currentGH, mlModels ? 20000 : 12000);
         }
       }, 2000);
     }).catch((e) => {
@@ -549,7 +639,8 @@ export function AppProvider({ children }) {
       setTimeout(() => {
         const g = { token: localStorage.getItem('friday_gh_token') || '', user: localStorage.getItem('friday_gh_user') || '', repo: localStorage.getItem('friday_gh_repo') || '' };
         if (g.token) {
-          loadStocks(g); loadFIIDII(g); loadConfCalibration(g); ghMigrateIfNeeded(g, lg);
+          loadStocks(g); loadFIIDII(g); ghMigrateIfNeeded(g, lg);
+          scheduleMlRefresh(g, mlModels ? 20000 : 12000);
           // Start global signal monitor after 10s (give market feed time to settle)
           setTimeout(() => runSignalMonitor(g), 10000);
         }
@@ -563,6 +654,10 @@ export function AppProvider({ children }) {
     loadStocks(gh, true);
     loadFIIDII(gh, true);
   }, [gh.token, gh.user, gh.repo]); // eslint-disable-line
+
+  useEffect(() => () => {
+    if (mlRefreshTimerRef.current) clearTimeout(mlRefreshTimerRef.current);
+  }, []);
 
   // ── Market status poll every 60s ──
   useEffect(() => {
@@ -612,7 +707,7 @@ export function AppProvider({ children }) {
     // data
     stocks,   setStocks,   stocksStatus, loadStocks,
     fiiData,  fiiInterp,   loadFIIDII,
-    userName, userId, adaptWeights,
+      userName, userId, adaptWeights, mlModels, mlSnapshots,
     tickerStats, setTickerStats,
     confCalibration, setConfCalibration, loadConfCalibration,
     openSignalCount, runSignalMonitor,
@@ -628,5 +723,3 @@ export function useApp() {
   if (!ctx) throw new Error('useApp must be used within AppProvider');
   return ctx;
 }
-
-

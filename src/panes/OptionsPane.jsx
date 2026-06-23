@@ -10,6 +10,7 @@ import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBia
 import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote } from '../components/cardKit';
 import { useIndexFeed } from '../hooks/useIndexFeed.js';
 import { logSignals, buildOptionSignal } from '../services/github';
+import { applyMlRanking } from '../services/mlRanking';
 
 function getChgPct(q) {
   if (!q) return 0;
@@ -261,7 +262,7 @@ function OptionCard({ pick, cfg: cardCfg }) {
 
 export default function OptionsPane() {
   const {
-    token, cfg, marketStatus, lg, onTokenExpired, updateBadge, fiiInterp, fiiData, gh, adaptWeights,
+    token, cfg, marketStatus, lg, onTokenExpired, updateBadge, fiiInterp, fiiData, gh, adaptWeights, mlModels,
     activeTab, setScanning, setStatusDot, setStatusTxt, stocks,
   } = useApp();
   const accessToken = resolveAccessToken(token);
@@ -447,8 +448,9 @@ export default function OptionsPane() {
           };
           let c = applyFIIBias(p.confidence, p.action === 'BUY', fiiData);
           c = applyAdaptWeights(c, adaptWeights?.option||null, _iSnap);
-          return { ...p, confidence: Math.min(99,Math.max(1,Math.round(c))), _indSnap:_iSnap, _dte: p._dte??null, nearMaxPain: maxPain>0&&Math.abs(p.strike-maxPain)/spot<0.01 };
-        }).filter(p => p.confidence >= cfg.minOptConf && (cfg.maxOptCapital != 0 ? p.amtRequired <= cfg.maxOptCapital : p.amtRequired = p.amtRequired));
+          const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap: _iSnap });
+          return { ...p, confidence: Math.min(99,Math.max(1,Math.round(mlRank.confidence))), _indSnap:_iSnap, _dte: p._dte??null, nearMaxPain: maxPain>0&&Math.abs(p.strike-maxPain)/spot<0.01, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj, mlExplain: mlRank.explanation, aiBlock: mlRank.aiBlock, aiModel: mlRank.servingLabel };
+        }).filter(p => !p.aiBlock && p.confidence >= (mlModels?.thresholds?.option?.minConfidence || cfg.minOptConf) && (mlModels?.thresholds?.option?.maxCapital ? p.amtRequired <= mlModels.thresholds.option.maxCapital : (cfg.maxOptCapital != 0 ? p.amtRequired <= cfg.maxOptCapital : p.amtRequired = p.amtRequired)));
 
         lg(`${idx.name}: ${chain.length} strikes → ${picks.length} raw → ${picksWithFII.length} ≥${cfg.minOptConf}% | composite=${richCtx.compositeScore} pcr=${pcr}`, 'o');
         built.push({ name: idx.name, spot, spotChg, picks: picksWithFII, expiry, chain, maxPain, oiWalls, pcr, pcrTrend, ivTrend });
@@ -529,8 +531,9 @@ export default function OptionsPane() {
               const _iSnap2 = { trendAligned:p.trendAligned||false, emaBull:p.emaTrendBull===true, emaBearish:p.emaTrendBull===false, freshCross:p.emaCross==='bullish_cross'||p.emaCross==='bearish_cross', momentumFresh:p.momentumFresh||false, volSpike:(p.volRatio??0)>=1.5, lowVol:(p.volRatio??1)<0.7, nearPDH:p.priceZone==='PDH_BREAK'||p.priceZone==='NEAR_PDH', nearPDL:p.priceZone==='PDL_BREAK'||p.priceZone==='NEAR_PDL', oiBuildUp:p.oiBuildType==='CE_BUILD'||p.oiBuildType==='PE_BUILD', compositeHigh:Math.abs(p.compositeScore??0)>=2, compositeMed:Math.abs(p.compositeScore??0)>=1, atm:p.atm||false };
               let c2 = applyFIIBias(p.confidence, p.action==='BUY', fiiData);
               c2 = applyAdaptWeights(c2, adaptWeights?.option||null, _iSnap2);
-              return { ...p, confidence:Math.min(99,Math.max(1,Math.round(c2))), _indSnap:_iSnap2 };
-            }).filter(p=>p.confidence>=cfg.minOptConf&&(cfg.maxOptCapital<=0||p.amtRequired<=cfg.maxOptCapital));
+              const mlRank2 = applyMlRanking(c2, mlModels || null, { ...p, confidence: c2, _indSnap:_iSnap2 });
+              return { ...p, confidence:Math.min(99,Math.max(1,Math.round(mlRank2.confidence))), _indSnap:_iSnap2, mlProbability: mlRank2.mlProbability, mlAdj: mlRank2.mlAdj, mlExplain: mlRank2.explanation, aiBlock: mlRank2.aiBlock, aiModel: mlRank2.servingLabel };
+            }).filter(p=>!p.aiBlock&&p.confidence>=(mlModels?.thresholds?.option?.minConfidence||cfg.minOptConf)&&((mlModels?.thresholds?.option?.maxCapital||cfg.maxOptCapital)<=0||p.amtRequired<=(mlModels?.thresholds?.option?.maxCapital||cfg.maxOptCapital)));
             if (fPicks2.length) { built.push({ name:inst.s, spot, spotChg, picks:fPicks2, expiry, chain, maxPain:stkMaxPain, oiWalls:calcOIWalls(chain), pcr:pcr2, pcrTrend:stkCtx.pcrTrend, ivTrend:ivTrend2, type:'stock', fullName:inst.n }); lg(`${inst.s}: ${chain.length} strikes → ${fPicks2.length} signals`, 'o'); }
           } catch(e) { lg(inst.s + ' opts: ' + e.message, 'w'); }
         }

@@ -15,6 +15,12 @@ function getSettingsFilePath() {
 function getLogFolder()      { return `signal-logs/${_uid()}`; }
 function getLogDayPath(date) { return `${getLogFolder()}/${date}.json`; }
 function getLogIndexPath()   { return `${getLogFolder()}/index.json`; }
+function getAiFolder()       { return `ai-models/${_uid()}`; }
+function getAiLatestPath()   { return `${getAiFolder()}/latest.json`; }
+function getAiHistoryIndexPath()        { return `${getAiFolder()}/history/index.json`; }
+function getAiHistoryDayPath(date)      { return `${getAiFolder()}/history/${date}.json`; }
+function getPaperFolder()    { return `paper-trades/${_uid()}`; }
+function getPaperDayPath(date) { return `${getPaperFolder()}/${date}.json`; }
 
 // ── Base GitHub fetch ──
 const _ghInflight = new Map();
@@ -27,7 +33,7 @@ async function _ghFetch(gh, path) {
     try {
       const r = await fetch(
         `https://api.github.com/repos/${gh.user}/${gh.repo}/contents/${path}`,
-        { headers: { Authorization: 'token ' + gh.token, Accept: 'application/vnd.github.v3+json' } }
+        { headers: { Authorization: 'Bearer ' + gh.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } }
       );
       if (r.status === 404) return null;
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -50,8 +56,9 @@ async function _ghPut(gh, path, content, sha, message) {
     {
       method: 'PUT',
       headers: {
-        Authorization: 'token ' + gh.token,
-        Accept: 'application/vnd.github.v3+json',
+        Authorization: 'Bearer ' + gh.token,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
@@ -100,6 +107,83 @@ export async function pullSettingsFromGH(gh) {
     if (!payload?.settings) return null;
     return payload.settings; // return just the settings object (same as HTML)
   } catch (e) { return null; }
+}
+
+export async function pullAiModelFromGH(gh) {
+  try {
+    const d = await _ghFetch(gh, getAiLatestPath());
+    if (!d) return null;
+    return _decode(d.content);
+  } catch (_) { return null; }
+}
+
+export async function pushAiModelToGH(gh, modelPayload) {
+  if (!gh.token || !gh.user || !gh.repo || !modelPayload) return false;
+  try {
+    const existing = await _ghFetch(gh, getAiLatestPath());
+    const sha = existing?.sha || null;
+    const payload = {
+      ...modelPayload,
+      savedAt: new Date().toISOString(),
+      upstoxId: _uid(),
+    };
+    const r = await _ghPut(gh, getAiLatestPath(), payload, sha, `FRIDAY AI model · ${_uid()}`);
+    return r?.ok ?? false;
+  } catch (_) { return false; }
+}
+
+export async function appendAiHistoryToGH(gh, snapshot) {
+  if (!gh.token || !gh.user || !gh.repo || !snapshot) return false;
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const dayPath = getAiHistoryDayPath(today);
+    const dayExisting = await _ghFetch(gh, dayPath);
+    const dayR = await _ghPut(gh, dayPath, { date: today, snapshot, upstoxId: _uid() }, dayExisting?.sha || null, `FRIDAY AI history · ${_uid()} · ${today}`);
+
+    const indexPath = getAiHistoryIndexPath();
+    const indexExisting = await _ghFetch(gh, indexPath);
+    const prevIndex = indexExisting ? _decode(indexExisting.content) : { dates: [] };
+    const dates = Array.from(new Set([...(prevIndex?.dates || []), today])).sort().slice(-100);
+    const indexR = await _ghPut(gh, indexPath, { dates, updatedAt: new Date().toISOString() }, indexExisting?.sha || null, `FRIDAY AI history index · ${_uid()}`);
+
+    return (dayR?.ok ?? false) && (indexR?.ok ?? false);
+  } catch (_) { return false; }
+}
+
+export async function pullAiHistoryFromGH(gh, limit = 100) {
+  if (!gh.token || !gh.user || !gh.repo) return [];
+  try {
+    const indexExisting = await _ghFetch(gh, getAiHistoryIndexPath());
+    if (!indexExisting) return [];
+    const index = _decode(indexExisting.content);
+    const dates = (index?.dates || []).slice(-limit).reverse();
+    const items = [];
+    for (const date of dates) {
+      const day = await _ghFetch(gh, getAiHistoryDayPath(date));
+      if (!day) continue;
+      const payload = _decode(day.content);
+      if (payload?.snapshot) items.push(payload.snapshot);
+    }
+    return items;
+  } catch (_) { return []; }
+}
+
+export async function pullPaperTradesFromGH(gh, date) {
+  try {
+    const d = await _ghFetch(gh, getPaperDayPath(date));
+    if (!d) return { trades: [], sha: null };
+    const content = _decode(d.content);
+    return { trades: content.trades || [], sha: d.sha || null };
+  } catch (_) { return { trades: [], sha: null }; }
+}
+
+export async function pushPaperTradesToGH(gh, date, trades, sha = null) {
+  if (!gh.token || !gh.user || !gh.repo) return false;
+  try {
+    const payload = { trades: trades || [], date, savedAt: new Date().toISOString(), upstoxId: _uid() };
+    const r = await _ghPut(gh, getPaperDayPath(date), payload, sha, `FRIDAY paper trades · ${_uid()} · ${date}`);
+    return r?.ok ?? false;
+  } catch (_) { return false; }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -284,6 +368,8 @@ export function buildStockSignal(p, vixVal) {
     tgtMethod:      p.slTargets?.modMethod || '2:1 R:R',
     compositeScore: p.compositeScore || null,
     momentumScore:  p.momentumScore  ?? null,
+    mlProbability:  p.mlProbability ?? null,
+    mlAdj:          p.mlAdj ?? null,
     // ── Indicator snapshot — used by adaptWeights to learn which signals predict wins ──
     indicators: {
       macdBull:         p.macdBull              === true,
@@ -350,6 +436,8 @@ export function buildOptionSignal(p, vixVal) {
     slTgtMethod:    p.slTgtMethod  || null,
     compositeScore: p.compositeScore  ?? null,
     momentumScore:  p.momentumScore   ?? null,
+    mlProbability:  p.mlProbability ?? null,
+    mlAdj:          p.mlAdj ?? null,
     emaCross:       p.emaCross        ?? null,
     priceZone:      p.priceZone       || '',
     oiBuildType:    p.oiBuildType     || '',

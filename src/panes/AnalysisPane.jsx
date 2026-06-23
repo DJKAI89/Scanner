@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, EmptyState } from '../components/common.jsx';
 import { ghReadMultipleDays } from '../services/github';
+import { runMlBacktest } from '../services/mlRanking';
 
 // ── helpers ───────────────────────────────────────────────────
 function wr(arr) {
@@ -265,7 +266,7 @@ function DayDetailPopup({ date, signals, onClose }) {
             {[{l:'WIN RATE',v:pct(wr2),c:wrColor},{l:'TOTAL',v:total,c:'#0f172a'},{l:'AVG WIN',v:avgWin?`+${avgWin}%`:'—',c:'#10b981'},{l:'AVG LOSS',v:avgLoss?`${avgLoss}%`:'—',c:'#ef4444'}]
               .map(st=>(
                 <div key={st.l} style={{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:9, padding:'8px 6px', textAlign:'center' }}>
-                  <div style={{ fontSize:7, color:'#94a3b8', fontWeight:700, marginBottom:3, letterSpacing:.5 }}>{st.l}</div>
+                  <div style={{ fontSize:15, color:'#94a3b8', fontWeight:700, marginBottom:3, letterSpacing:.5 }}>{st.l}</div>
                   <div style={{ fontSize:15, fontWeight:900, color:st.c }}>{st.v}</div>
                 </div>
               ))}
@@ -477,9 +478,78 @@ function SignalFeed({ signals }) {
   );
 }
 
+function MlBacktestCards({ backtest }) {
+  const entries = [
+    { key: 'stock', label: 'Stocks', data: backtest?.stock },
+    { key: 'option', label: 'Options', data: backtest?.option },
+  ];
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10 }}>
+      {entries.map(({ key, label, data }) => (
+        <div key={key} style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: '12px 14px' }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: '#0f172a', marginBottom: 8 }}>{label}</div>
+          {!data ? (
+            <div style={{ fontSize: 10, color: '#94a3b8' }}>Not enough closed signals</div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8 }}>
+              <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Overall</div><div style={{ fontSize: 16, fontWeight: 900, color: clr(data.overallWr) }}>{pct(data.overallWr)}</div></div>
+              <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Top Quartile</div><div style={{ fontSize: 16, fontWeight: 900, color: clr(data.topQuartileWr) }}>{pct(data.topQuartileWr)}</div></div>
+              <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Uplift</div><div style={{ fontSize: 14, fontWeight: 800, color: data.upliftTopVsAll >= 0 ? '#10b981' : '#ef4444' }}>{data.upliftTopVsAll >= 0 ? '+' : ''}{data.upliftTopVsAll} pts</div></div>
+              <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Spread</div><div style={{ fontSize: 14, fontWeight: 800, color: data.spreadTopVsBottom >= 0 ? '#10b981' : '#ef4444' }}>{data.spreadTopVsBottom >= 0 ? '+' : ''}{data.spreadTopVsBottom} pts</div></div>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MlFeatureBoard({ mlModels }) {
+  const blocks = [
+    { key: 'stock', label: 'Stock Drivers', items: mlModels?.stock?.topFeatures || [] },
+    { key: 'option', label: 'Option Drivers', items: mlModels?.option?.topFeatures || [] },
+  ];
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10 }}>
+      {blocks.map((b) => (
+        <div key={b.key} style={{ background: '#fff', border: '1px solid #64748b',fontSize:12, borderRadius: 12, padding: '12px 14px' }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: '#0f172a', marginBottom: 8 }}>{b.label}</div>
+          {!b.items.length ? <div style={{ fontSize: 10, color: '#94a3b8' }}>Accumulating data</div> : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {b.items.slice(0, 5).map((f) => (
+                <div key={f.feature} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ minWidth: 110, fontSize: 9, fontWeight: 700, color: '#475569' }}>{f.feature}</div>
+                  <SparkBar value={f.importance} max={100} color="#0ea5e9" height={10} />
+                  <div style={{ minWidth: 40, textAlign: 'right', fontSize: 9, fontWeight: 800, color: '#0ea5e9' }}>{f.importance}%</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MlHistory({ mlSnapshots }) {
+  if (!mlSnapshots?.length) return <div style={{ fontSize: 10, color: '#94a3b8' }}>No model history yet</div>;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {mlSnapshots.slice(0, 6).map((snap) => (
+        <div key={snap.computedAt} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '7px 0', borderBottom: '1px solid #f1f5f9', fontSize: 9 }}>
+          <span style={{ color: '#64748b', fontSize:12, fontWeight: 700 }}>{new Date(snap.computedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+          <span style={{ color: '#64748b', fontSize:12, fontWeight: 700 }}>Stock: {snap.stock?.trainedOn || 0}</span>
+          <span style={{ color: '#64748b', fontSize:12, fontWeight: 700 }}>Option: {snap.option?.trainedOn || 0}</span>
+          <span style={{ color: '#10b981', fontSize:12, fontWeight: 700 }}>{snap.stock ? Math.round((snap.stock.accuracy || 0) * 100) : 0}% / {snap.option ? Math.round((snap.option.accuracy || 0) * 100) : 0}%</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────
 export default function AnalysisPane() {
-  const { gh, cfg, updateBadge, lg } = useApp();
+  const { gh, cfg, updateBadge, lg, mlModels, mlSnapshots } = useApp();
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
   const [data,    setData]    = useState(null);
@@ -505,6 +575,7 @@ export default function AnalysisPane() {
       const avgPnlAll = avgOf(closed);
       const avgPnlTgt = avgOf(closed.filter(s => s.status === 'TARGET_HIT'));
       const avgPnlSL  = avgOf(closed.filter(s => s.status === 'SL_HIT'));
+      const mlBacktest = runMlBacktest(closed, mlModels);
 
       // Streak
       const recent = [...closed].reverse();
@@ -615,14 +686,14 @@ export default function AnalysisPane() {
         byUnderlying, ceSignals, peSignals,
         ceWR: wr(ceSignals), peWR: wr(peSignals),
         sigTypes, confBands, timeBreak, dailyRows,
-        csRows, scoredSignals, alerts,
+        csRows, scoredSignals, alerts, mlBacktest,
       });
     } catch (e) {
       setError(e.message); lg('Analysis error: ' + e.message, 'e');
     } finally { setLoading(false); }
-  }, [gh, days, updateBadge, lg]);
+  }, [gh, days, updateBadge, lg, mlModels]);
 
-  useEffect(() => { if (gh.token) load(); }, [gh.token, days]); // eslint-disable-line
+  useEffect(() => { if (gh.token) load(); }, [gh.token, days, mlModels]); // eslint-disable-line
 
   return (
     <div>
@@ -767,6 +838,14 @@ export default function AnalysisPane() {
               </Section>
             )}
 
+            <Section title="AI Backtest" accent="#0ea5e9">
+              <MlBacktestCards backtest={d.mlBacktest} />
+            </Section>
+
+            <Section title="AI Feature Drivers" accent="#7c3aed">
+              <MlFeatureBoard mlModels={mlModels} />
+            </Section>
+
             {/* Daily timeline */}
             {d.dailyRows.length >= 3 && (
               <Section title="Daily Performance" accent="#10b981">
@@ -779,6 +858,10 @@ export default function AnalysisPane() {
                 />
               </Section>
             )}
+
+            <Section title="AI Version History" accent="#1d4ed8">
+              <MlHistory mlSnapshots={mlSnapshots} />
+            </Section>
             {dayPopup && (
               <DayDetailPopup
                 date={dayPopup.date}
