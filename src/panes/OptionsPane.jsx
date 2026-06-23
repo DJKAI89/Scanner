@@ -398,7 +398,7 @@ export default function OptionsPane() {
             ? <EmptyState>{marketStatus.open ? '🔄 No signals meet confidence ≥' + cfg.minOptConf + '% · Try lowering in ⚙ Settings' : '📅 NSE Market Closed · Mon–Fri 9:15–15:30 IST'}</EmptyState>
             : filtered.map(g => (
               <div key={g.name}>
-                <div className="opt-group-hdr">{g.fullName||g.name}{g.type==='stock'?' 📊':''} — ₹{fmt(g.spot)} ({fmtC(g.spotChg)}) · Exp: {g.expiry} · {g.picks.filter(p=>p.trendAligned).length} with-trend · {g.picks.length} total</div>
+                <div className="opt-group-hdr">{g.fullName||g.name}{g.type==='stock'?' 📊':''} — ₹{fmt(g.spot)} ({fmtC(g.spotChg)}) · Exp: {g.expiries?.length > 1 ? `${g.expiries.length} expiries (${g.expiries[0]} → ${g.expiries[g.expiries.length-1]})` : g.expiry} · {g.picks.filter(p=>p.trendAligned).length} with-trend · {g.picks.length} total</div>
                 {/* With-trend first */}
                 {g.picks.filter(p=>p.trendAligned).length > 0 && (
                   <div style={{ background:'#f0fdf4', border:'1px solid #bbf7d0', borderRadius:6, padding:'6px 10px', marginBottom:8, fontSize:10, fontWeight:700, color:'#15803d' }}>
