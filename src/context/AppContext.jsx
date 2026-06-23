@@ -3,7 +3,7 @@ import { DEF, CFG_VERSION } from '../constants/config';
 import { localIsOpen, getMarketStatusLocal, getIST } from '../utils/marketTime';
 import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken } from '../services/api';
 import { interpretFIIDII } from '../services/technical';
-import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded, ghReadIndex, ghReadDay, ghWriteDay, pullAiModelFromGH, pushAiModelToGH, appendAiHistoryToGH, pullAiHistoryFromGH } from '../services/github';
+import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded, ghReadIndex, ghReadDay, ghWriteDay, pullAiModelFromGH, pushAiModelToGH, appendAiHistoryToGH, pullAiHistoryFromGH, isBullSignal } from '../services/github';
 import { fetchQ, resolveAccessToken } from '../services/api';
 import { trainSignalMlModels, buildModelSnapshot } from '../services/mlRanking';
 
@@ -525,7 +525,12 @@ export function AppProvider({ children }) {
           if (!q?.last_price) return s;
           const ltp = q.last_price;
 
-          if (s.target > 0 && ltp >= s.target) {
+          // Direction-aware: SELL signals have inverted SL/Target (SL above entry, target below)
+          const isBuy  = isBullSignal(s);
+          const tgtHit = s.target > 0 && (isBuy ? ltp >= s.target : ltp <= s.target);
+          const slHit  = s.sl     > 0 && (isBuy ? ltp <= s.sl     : ltp >= s.sl);
+
+          if (tgtHit) {
             const pnlPct = s.entry > 0 ? +((ltp - s.entry) / s.entry * 100).toFixed(2) : null;
             lg(`🎯 TARGET HIT: ${s.stock || s.sym} @ ₹${ltp} (tgt ₹${s.target})`, 'o');
             showToast(`🎯 ${s.stock || s.sym} target hit! ${pnlPct !== null ? '+' + pnlPct + '%' : ''}`, '#16a34a', 8000);
@@ -534,7 +539,7 @@ export function AppProvider({ children }) {
             return { ...s, status: 'TARGET_HIT', exitPrice: ltp, exitTime: now, pnlPct };
           }
 
-          if (s.sl > 0 && ltp <= s.sl) {
+          if (slHit) {
             const pnlPct = s.entry > 0 ? +((ltp - s.entry) / s.entry * 100).toFixed(2) : null;
             lg(`❌ SL HIT: ${s.stock || s.sym} @ ₹${ltp} (SL ₹${s.sl})`, 'w');
             showToast(`❌ ${s.stock || s.sym} SL hit ${pnlPct !== null ? pnlPct + '%' : ''}`, '#dc2626', 8000);
