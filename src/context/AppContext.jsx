@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { DEF, CFG_VERSION } from '../constants/config';
-import { localIsOpen, getMarketStatusLocal, getIST } from '../utils/marketTime';
+import { localIsOpen, getMarketStatusLocal, getIST, getISTDate } from '../utils/marketTime';
 import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken } from '../services/api';
 import { interpretFIIDII } from '../services/technical';
 import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded, ghReadIndex, ghReadDay, ghWriteDay, pullAiModelFromGH, pushAiModelToGH, appendAiHistoryToGH, pullAiHistoryFromGH, isBullSignal } from '../services/github';
@@ -495,7 +495,8 @@ export function AppProvider({ children }) {
             .catch(() => {})
         )
       );
-      if (!Object.keys(quotes).length) return;
+      // Note: don't early-return if quotes is empty — expired option contracts
+      // legitimately return no quote at all, and those still need to be marked EXPIRED below.
 
       const now = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
       let totalResolved = 0;
@@ -520,6 +521,18 @@ export function AppProvider({ children }) {
 
           // Already resolved this session — leave as-is in file (will be written on next full check)
           if (resolvedSigIds.current.has(sigId)) return s;
+
+          // Option expired without hitting SL/Target — check this BEFORE the quote
+          // lookup below, since an expired contract often returns no live quote at all.
+          const istToday = getISTDate();
+          if (s.type === 'OPTION' && s.expiry && istToday > s.expiry) {
+            const ltp = quotes[instrK]?.last_price ?? null;
+            const pnlPct = (ltp != null && s.entry > 0) ? +((ltp - s.entry) / s.entry * 100).toFixed(2) : null;
+            lg(`⌛ EXPIRED: ${s.stock || s.sym} (exp ${s.expiry})${ltp != null ? ` @ ₹${ltp}` : ' · no final quote'}`, 'w');
+            resolvedSigIds.current.add(sigId);
+            changed = true; totalResolved++;
+            return { ...s, status: 'EXPIRED', exitPrice: ltp, exitTime: now, exitDate: istToday, pnlPct };
+          }
 
           const q = quotes[instrK];
           if (!q?.last_price) return s;
