@@ -428,7 +428,11 @@ export async function runPicksScan(ctx, callbacks) {
   const topSec=Object.entries(secMap).filter(([,v])=>v.c>0).sort((a,b)=>(b[1].g/b[1].c)-(a[1].g/a[1].c))[0]?.[0]||'Mixed';
   const scanId = Date.now();
   const nextPicks = finalPicks.map((pick) => ({ ...pick, _scanId: scanId }));
-  const scanStats = {pcr,pcrTxt,sent,sentSc,topSec,cnt:finalPicks.length,totalScanned:byVol.length};
+  const secMapNormalized = {};
+  for (const [sec, v] of Object.entries(secMap)) {
+    if (v.c > 0) secMapNormalized[sec] = +(((v.g / v.c) - 0.5) * 2).toFixed(2);
+  }
+  const scanStats = {pcr,pcrTxt,sent,sentSc,topSec,cnt:finalPicks.length,totalScanned:byVol.length,secMap:secMapNormalized};
 
   lg(`✅ Picks: ${finalPicks.length} from ${byVol.length} stocks`,'o');
   if (!finalPicks.length) lg(`⚠ 0 picks — lower Conf(${cfg.minStockConf}%)/Pot(${cfg.pot}%)/Risk(${cfg.risk}%) in ⚙ Settings`,'w');
