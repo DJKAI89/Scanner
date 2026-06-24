@@ -64,6 +64,17 @@ export function resolveSignalsAgainstLivePrices(signals, lastPrices, resolvedIds
     const feedKey = getSignalFeedKey(sig);
     if (sig.status !== 'OPEN' || !feedKey) return sig;
     if (resolvedIds.has(sig.id)) return sig;
+
+    // Option expired without hitting SL/Target — check BEFORE the live-price
+    // early-return below, since an expired contract's WS feed may stop ticking.
+    if (sig.type === 'OPTION' && sig.expiry && istDate > sig.expiry) {
+      changed = true;
+      newlyResolved.push(sig.id);
+      const expLtp = lastPrices[feedKey]?.ltp ?? null;
+      const pnlPct = (expLtp != null && sig.entry > 0) ? +((expLtp - sig.entry) / sig.entry * 100).toFixed(2) : null;
+      return { ...sig, status: 'EXPIRED', exitPrice: expLtp, exitTime: istTime, exitDate: istDate, pnlPct, livePrice: null, livePnlPct: null };
+    }
+
     const live = lastPrices[feedKey];
     // If signal was resolved this session by global monitor, strip live fields and return clean
     if (!live?.ltp) return sig.status !== 'OPEN' ? (({ livePrice: _, livePnlPct: __, ...clean }) => clean)(sig) : { ...sig };
@@ -91,7 +102,7 @@ export function resolveSignalsAgainstLivePrices(signals, lastPrices, resolvedIds
 export async function persistResolvedSignals(gh, updated, resolvedIds, lg, onShaUpdate) {
   const byDate = {};
   updated.forEach(s => {
-    if (s.status !== 'OPEN' && s.status !== 'TARGET_HIT' && s.status !== 'SL_HIT') return;
+    if (!['OPEN', 'TARGET_HIT', 'SL_HIT', 'EXPIRED'].includes(s.status)) return;
     (byDate[s.date] = byDate[s.date] || []).push(s);
   });
   for (const [date, dateSigs] of Object.entries(byDate)) {
@@ -143,9 +154,20 @@ export async function checkAllOutcomes(ctx) {
     const newSigs = daySigs.map(s => {
       if (s.status !== 'OPEN') return s;
       const instrK = s.instrKey || s.key; if (!instrK) return s;
+      const exitTime = new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour12:false});
+
+      // Option expired without hitting SL/Target — check BEFORE quote lookup,
+      // since an expired contract often returns no live quote at all.
+      const istToday = getISTDate();
+      if (s.type === 'OPTION' && s.expiry && istToday > s.expiry) {
+        const ltp = quotes[instrK]?.last_price ?? null;
+        lg(`⌛ EXPIRED: ${s.sym || s.stock} (exp ${s.expiry})${ltp != null ? ` @ ₹${ltp}` : ' · no final quote'}`, 'w');
+        changed = true; updated++;
+        return { ...s, status:'EXPIRED', exitPrice:ltp, exitTime, exitDate: istToday };
+      }
+
       const q = quotes[instrK]; if (!q?.last_price) return s;
       const ltp = q.last_price;
-      const exitTime = new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour12:false});
       // Direction-aware: SELL signals have inverted SL/Target (SL above entry, target below)
       const isBuy  = isBullSignal(s);
       const tgtHit = s.target > 0 && (isBuy ? ltp >= s.target : ltp <= s.target);
