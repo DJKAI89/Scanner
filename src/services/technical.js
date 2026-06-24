@@ -799,8 +799,8 @@ export function boScore(ema, pdhl, st, vol, wk52, mom, nr7, bb, weeklyMTF, gap, 
   if (pdhl?.bullBreakout && wick?.bearRejected) bull  = Math.max(0, bull - 2);
   if (pdhl?.bearBreakout && wick?.bullRejected) bear  = Math.max(0, bear - 2);
   // EMA below all but trying to breakout bull = trend fight
-  if (ema?.belowAll && pdhl?.bullBreakout) bull = Math.max(0, bull - 3);
-  if (ema?.aboveAll && pdhl?.bearBreakout) bear = Math.max(0, bear - 3);
+  if (ema && !ema.uptrend && pdhl?.bullBreakout) bull = Math.max(0, bull - 3);
+  if (ema?.uptrend && pdhl?.bearBreakout) bear = Math.max(0, bear - 3);
 
   // ── Time-of-day penalty ────────────────────────────────
   const dominant = Math.max(bull, bear);
