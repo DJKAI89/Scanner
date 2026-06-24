@@ -305,6 +305,10 @@ export function AppProvider({ children }) {
                 });
               }
               lg('ML ranker trained locally on small sample fallback', 'o');
+              if (g.token && g.user && g.repo) {
+                pushAiModelToGH(g, trainedModels).catch(() => {});
+                if (snap) appendAiHistoryToGH(g, snap).catch(() => {});
+              }
             }
           } else {
             lg('ML ranker skipped in browser to keep UI responsive. Use GitHub Action retrainer.', 'w');
