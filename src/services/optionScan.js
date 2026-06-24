@@ -16,14 +16,15 @@ export const VIX_KEY = 'NSE_INDEX|India VIX';
 // the nearest available expiry if none fall in the current month (e.g. last
 // trading days of the month when only next-month expiries remain).
 export function expiriesInCurrentMonth(allExpiries) {
+  const unique = [...new Set(allExpiries)].sort();
   const now = new Date();
   const y = now.getFullYear(), m = now.getMonth();
   const todayStr = now.toISOString().slice(0, 10);
-  const inMonth = allExpiries.filter(e => {
+  const inMonth = unique.filter(e => {
     const d = new Date(e);
     return d.getFullYear() === y && d.getMonth() === m && e >= todayStr;
-  }).sort();
-  return inMonth.length ? inMonth : (allExpiries[0] ? [allExpiries[0]] : []);
+  });
+  return inMonth.length ? inMonth : (unique[0] ? [unique[0]] : []);
 }
 
 export function getChgPct(q) {
@@ -204,7 +205,7 @@ export async function runOptionsScan(ctx, caches, callbacks) {
         `https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent(idx.key)}`,
         { headers: { Authorization: 'Bearer ' + accessToken, Accept: 'application/json' } }
       ).then(r => r.json());
-      allExpiries = (cd?.data?.map(e => e.expiry).filter(Boolean) || []).sort();
+      allExpiries = (cd?.data?.map(e => e.expiry).filter(Boolean) || []);
     } catch (e) { lg('Contract ' + idx.name + ': ' + e.message, 'w'); }
     if (!allExpiries.length) continue;
     const expiriesToScan = expiriesInCurrentMonth(allExpiries);
@@ -244,7 +245,8 @@ export async function runOptionsScan(ctx, caches, callbacks) {
 
     // Scan every expiry in the current month, merging picks (each pick carries its own .expiry)
     const allIdxPicks = [];
-    for (const exp of expiriesToScan) {
+    for (const [ei, exp] of expiriesToScan.entries()) {
+      setProgress(`Step 2/${totalSteps}: ${idx.name} expiry ${ei+1}/${expiriesToScan.length} (${exp})...`);
       const expChain = exp === expiry ? chain : await fetchOptions(idx.key, exp, accessToken, onTokenExpired).catch(() => []);
       if (!expChain.length) { lg(`${idx.name} ${exp}: empty chain`, 'w'); continue; }
       const expMaxPain = exp === expiry ? maxPain : calcMaxPain(expChain);
@@ -313,7 +315,7 @@ export async function runOptionsScan(ctx, caches, callbacks) {
         stkCtx.bullish = stkCtx.compositeScore > 0;
         stkCtx.neutral = Math.abs(stkCtx.compositeScore || 0) < 0.5;
         let allExpiries2 = [];
-        try { const cd = await fetch(`https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent(inst.key)}`, { headers:{ Authorization:'Bearer '+accessToken, Accept:'application/json' } }).then(r=>r.json()); allExpiries2 = (cd?.data?.map(e=>e.expiry).filter(Boolean)||[]).sort(); } catch(e) {}
+        try { const cd = await fetch(`https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent(inst.key)}`, { headers:{ Authorization:'Bearer '+accessToken, Accept:'application/json' } }).then(r=>r.json()); allExpiries2 = (cd?.data?.map(e=>e.expiry).filter(Boolean)||[]); } catch(e) {}
         if (!allExpiries2.length) continue;
         const expiriesToScan2 = expiriesInCurrentMonth(allExpiries2);
         const expiry = expiriesToScan2[0]; // nearest — drives structural stats below
@@ -334,7 +336,8 @@ export async function runOptionsScan(ctx, caches, callbacks) {
 
         // Scan every expiry in the current month, merging picks (each pick carries its own .expiry)
         const allStkPicks = [];
-        for (const exp of expiriesToScan2) {
+        for (const [ei, exp] of expiriesToScan2.entries()) {
+          if (expiriesToScan2.length > 1) setProgress(`Step 3/${totalSteps}: ${inst.s} expiry ${ei+1}/${expiriesToScan2.length} (${exp})...`);
           const expChain = exp === expiry ? chain : await fetchOptions(inst.key, exp, accessToken, onTokenExpired).catch(() => []);
           if (!expChain.length) continue;
           const expMaxPain = exp === expiry ? stkMaxPain : calcMaxPain(expChain);
