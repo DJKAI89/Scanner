@@ -491,7 +491,7 @@ export async function runPicksScan(ctx, callbacks) {
 }
 
 // Local VIX-score interpreter (mirrors formatters.interpVIX's `sc` field without UI text)
-function interpVIXSc(vix) {
+export function interpVIXSc(vix) {
   if (vix >= 25) return { sc: 20 };
   if (vix >= 20) return { sc: 35 };
   if (vix >= 15) return { sc: 60 };
