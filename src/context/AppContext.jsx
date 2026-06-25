@@ -285,13 +285,24 @@ export function AppProvider({ children }) {
           const cachedModel = (() => {
             try { return JSON.parse(localStorage.getItem('friday_ml_models') || 'null'); } catch (_) { return null; }
           })();
+          
+          // Check model staleness (warn if >7 days old)
+          if (cachedModel?.computedAt) {
+            const ageDays = (Date.now() - new Date(cachedModel.computedAt).getTime()) / (1000 * 60 * 60 * 24);
+            if (ageDays > 7) {
+              lg(`⚠️ ML model is ${Math.round(ageDays)} days old — consider retraining`, 'w');
+            }
+          }
+          
           if (cachedModel?.version) {
             activeModels = cachedModel;
             setMlModels(cachedModel);
             lg('ML ranker loaded from local cache', 'o');
-          } else if (closed.length <= 25) {
-            // Only allow a tiny fallback training pass in-browser for small datasets.
-            const trainedModels = trainSignalMlModels(closed.slice(-25));
+          } else if (closed.length <= 80) {
+            // Allow browser training for datasets up to 80 samples (increased from 25)
+            // This provides better model quality while keeping UI responsive
+            // Datasets >80 should use GitHub Actions retrainer for optimal performance
+            const trainedModels = trainSignalMlModels(closed.slice(-80));
             if (trainedModels) {
               activeModels = trainedModels;
               setMlModels(trainedModels);
@@ -304,14 +315,16 @@ export function AppProvider({ children }) {
                   return next;
                 });
               }
-              lg('ML ranker trained locally on small sample fallback', 'o');
+              lg(`✅ ML ranker trained locally on ${closed.length} closed signals`, 'o');
               if (g.token && g.user && g.repo) {
                 pushAiModelToGH(g, trainedModels).catch(() => {});
                 if (snap) appendAiHistoryToGH(g, snap).catch(() => {});
               }
+            } else {
+              lg('⚠️ ML training failed (insufficient closed signals or unbalanced data)', 'w');
             }
           } else {
-            lg('ML ranker skipped in browser to keep UI responsive. Use GitHub Action retrainer.', 'w');
+            lg(`ML ranker skipped in browser (${closed.length} signals) — use GitHub Actions for better models`, 'w');
           }
         }
 

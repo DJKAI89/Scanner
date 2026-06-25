@@ -363,7 +363,8 @@ export async function runOptionsScan(ctx, caches, callbacks) {
   }));
   const allPicks = built.flatMap(g => g.picks);
   // Don't log WATCH options — no direction conviction, contaminates calibration
-  const loggableOpts = allPicks.filter(p => p.action !== 'WATCH');
+  const minConfThreshold = mlModels?.thresholds?.option?.minConfidence || cfg.minOptConf;
+  const loggableOpts = allPicks.filter(p => p.action !== 'WATCH' && p.confidence >= minConfThreshold);
   if (loggableOpts.length && gh?.token) logSignals(gh, loggableOpts.map(p => buildOptionSignal(p, vixVal)), vixVal, lg);
   lg(`✅ Options: ${total} signals (${withTrend} with-trend)`, 'o');
 

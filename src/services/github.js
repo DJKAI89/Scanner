@@ -111,7 +111,18 @@ export async function pullAiModelFromGH(gh) {
   try {
     const d = await _ghFetch(gh, getAiLatestPath());
     if (!d) return null;
-    return _decode(d.content);
+    const model = _decode(d.content);
+    if (!model) return null;
+    
+    // Check model staleness
+    if (model.computedAt) {
+      const ageDays = (Date.now() - new Date(model.computedAt).getTime()) / (1000 * 60 * 60 * 24);
+      if (ageDays > 7) {
+        console.warn(`[AI] Model from GitHub is ${Math.round(ageDays)} days old`);
+      }
+    }
+    
+    return model;
   } catch (_) { return null; }
 }
 
