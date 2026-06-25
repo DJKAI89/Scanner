@@ -3,7 +3,7 @@ name: FRIDAY — Deploy to GitHub Pages
 on:
   push:
   workflow_dispatch:
-
+  
 permissions:
   contents: read
   pages: write
