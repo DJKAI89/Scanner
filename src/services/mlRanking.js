@@ -744,9 +744,13 @@ export function getPortfolioAiGuidance(openSignals = [], candidateSignals = [], 
     const penalty = portfolioPenalty(sig) + ((underlyingCounts[sig.stock || sig.und] || 0) >= 2 ? 5 : 0);
     const sizePct = clamp(2.2 - penalty * 0.12, 0.4, 2.2);
     const dailyStopPct = sig.type === 'OPTION' ? 2.8 : 1.8;
+    const baseLabel = sig.stock || sig.und || sig.name;
+    const symbol = sig.type === 'OPTION' && sig.strike != null
+      ? `${baseLabel} ${sig.strike}${sig.optType || ''}`
+      : baseLabel;
     return {
-      id: sig.id || `${sig.stock}_${sig.time}`,
-      symbol: sig.stock || sig.und || sig.name,
+      id: sig.id || `${baseLabel}_${sig.strike || ''}_${sig.optType || ''}_${sig.time}`,
+      symbol,
       suggestedRiskPct: +sizePct.toFixed(2),
       dailyStopPct,
       clusterPenalty: penalty,
@@ -764,13 +768,7 @@ export function getPortfolioAiGuidance(openSignals = [], candidateSignals = [], 
 
 export function applyMlRanking(confidence, models, sigLike) {
   const model = models?.featureNames ? models : selectServingModel(models, sigLike);
-  if (!model || !sigLike) return { confidence, mlProbability: null, mlAdj: 0, aiBlock: false, explanation: [], blockReason: null };
-  
-  // Validate signal has required fields
-  if (!validateSignal(sigLike)) {
-    return { confidence, mlProbability: null, mlAdj: 0, aiBlock: false, explanation: [], blockReason: 'invalid_signal_data' };
-  }
-
+  if (!model || !sigLike) return { confidence, mlProbability: null, mlAdj: 0, aiBlock: false, explanation: [] };
   const familyThresholds = sigLike.type === 'STOCK' ? models?.thresholds?.stock : models?.thresholds?.option;
   const features = getFeatureVector(sigLike, sigLike.type);
   const vector = vectorize(features, model.featureNames);
@@ -789,11 +787,7 @@ export function applyMlRanking(confidence, models, sigLike) {
 
   const nextConfidence = clamp(Math.round(confidence + adj), 1, 99);
   const explanation = explainMlPrediction(sigLike, { ...models, featureNames: model.featureNames });
-  
-  // Configurable AI block threshold (default 0.52 = 62% - 10%)
-  const blockThreshold = (familyThresholds?.probability || 0.62) - 0.1;
-  const aiBlock = probability < blockThreshold;
-  
+  const aiBlock = probability < ((familyThresholds?.probability || 0.62) - 0.1);
   return {
     confidence: nextConfidence,
     mlProbability: Math.round(probability * 100),
@@ -801,311 +795,5 @@ export function applyMlRanking(confidence, models, sigLike) {
     aiBlock,
     explanation,
     servingLabel: model.label,
-    blockReason: aiBlock ? `ml_probability_${Math.round(probability * 100)}%_below_${Math.round(blockThreshold * 100)}%` : null,
-    trustScore: +trust.toFixed(3),
   };
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// MODEL VALIDATION & HEALTH CHECK
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Validates a signal object has minimum required fields for ML prediction.
- * @param {Object} sig - Signal object
- * @returns {boolean} - true if signal is valid
- */
-export function validateSignal(sig) {
-  if (!sig || typeof sig !== 'object') return false;
-  if (!sig.type || !['STOCK', 'OPTION'].includes(sig.type)) return false;
-  if (sig.type === 'STOCK' && typeof sig.confidence !== 'number') return false;
-  if (sig.type === 'OPTION' && typeof sig.confidence !== 'number') return false;
-  return true;
-}
-
-/**
- * Validates a trained ML model for production use.
- * Checks accuracy, edge, training data size, and model staleness.
- * @param {Object} model - Trained model object
- * @param {Object} options - Validation options {minAccuracy, minEdge, minSamples, maxAgeDays}
- * @returns {Object} - {valid: boolean, issues: string[]}
- */
-export function validateAiModel(model, options = {}) {
-  const {
-    minAccuracy = 0.48,
-    minEdge = 0.01,
-    minSamples = 25,
-    maxAgeDays = 7,
-  } = options;
-
-  const issues = [];
-
-  if (!model) {
-    issues.push('Model is null or undefined');
-    return { valid: false, issues };
-  }
-
-  if (!model.version || !model.modelName) {
-    issues.push('Missing model metadata (version, modelName)');
-  }
-
-  if (model.accuracy == null || model.accuracy < minAccuracy) {
-    issues.push(`Accuracy ${(model.accuracy || 0).toFixed(3)} below threshold ${minAccuracy}`);
-  }
-
-  if (model.edge == null || model.edge < minEdge) {
-    issues.push(`Edge ${(model.edge || 0).toFixed(4)} below threshold ${minEdge}`);
-  }
-
-  if (model.trainedOn == null || model.trainedOn < minSamples) {
-    issues.push(`Training samples ${model.trainedOn || 0} below minimum ${minSamples}`);
-  }
-
-  if (model.computedAt) {
-    const age = (Date.now() - new Date(model.computedAt).getTime()) / (1000 * 60 * 60 * 24);
-    if (age > maxAgeDays) {
-      issues.push(`Model is ${Math.round(age)} days old (max ${maxAgeDays} days recommended)`);
-    }
-  }
-
-  if (model.walkForward?.accuracy != null && model.walkForward.accuracy < 0.4) {
-    issues.push(`Walk-forward accuracy ${model.walkForward.accuracy.toFixed(3)} indicates potential overfitting`);
-  }
-
-  return {
-    valid: issues.length === 0,
-    issues,
-    metadata: {
-      accuracy: model.accuracy,
-      edge: model.edge,
-      trainedOn: model.trainedOn,
-      computedAt: model.computedAt,
-      age: model.computedAt ? Math.round((Date.now() - new Date(model.computedAt).getTime()) / (1000 * 60 * 60 * 24)) : null,
-      walkForward: model.walkForward?.accuracy,
-    },
-  };
-}
-
-/**
- * Checks if models are ensemble valid (both stock and option or at least one present).
- * @param {Object} models - Full ensemble models object
- * @returns {Object} - {valid: boolean, stockModel: boolean, optionModel: boolean, issues: string[]}
- */
-export function validateEnsemble(models) {
-  const issues = [];
-  const stockValid = !!(models?.stock && models.stock.version);
-  const optionValid = !!(models?.option && models.option.version);
-
-  if (!stockValid && !optionValid) {
-    issues.push('No valid models found (both stock and option are missing)');
-  }
-
-  if (models?.drift?.stock?.stable === false) {
-    issues.push('Stock model shows drift (walk-forward accuracy degraded)');
-  }
-
-  if (models?.drift?.option?.stable === false) {
-    issues.push('Option model shows drift (walk-forward accuracy degraded)');
-  }
-
-  return {
-    valid: issues.length === 0,
-    stockModel: stockValid,
-    optionModel: optionValid,
-    issues,
-  };
-}
-
-/**
- * Gets human-readable AI decision log entry.
- * @param {Object} result - Result from applyMlRanking
- * @param {Object} signal - Original signal
- * @returns {string} - Formatted log entry
- */
-export function logAiDecision(result, signal) {
-  const {
-    confidence,
-    mlProbability,
-    mlAdj,
-    aiBlock,
-    blockReason,
-    trustScore,
-    servingLabel,
-  } = result;
-
-  const action = aiBlock ? 'BLOCKED' : mlAdj > 0 ? 'BOOSTED' : mlAdj < 0 ? 'REDUCED' : 'UNCHANGED';
-  const symbol = signal?.stock || signal?.und || '?';
-  const type = signal?.type || '?';
-
-  return `[AI] ${action} ${symbol} ${type} | Conf: ${confidence}% (base was ${signal?.confidence || '?'}%) | ML: ${mlProbability}% (adj ±${Math.abs(mlAdj).toFixed(1)}) | Trust: ${(trustScore * 100).toFixed(0)}% | Model: ${servingLabel}${aiBlock ? ` | REASON: ${blockReason}` : ''}`;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// A/B TEST FRAMEWORK
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Initializes A/B test tracking state (stored in localStorage).
- * Tracks AI-adjusted vs base confidence effectiveness.
- */
-export function initAbTestState() {
-  const key = 'friday_ab_test_state';
-  const existing = (() => {
-    try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (_) { return null; }
-  })();
-
-  if (existing && existing.version === 1) return existing;
-
-  const state = {
-    version: 1,
-    startedAt: new Date().toISOString(),
-    control: { predictions: 0, hits: 0, losses: 0, avgPnl: 0, signals: [] },
-    treatment: { predictions: 0, hits: 0, losses: 0, avgPnl: 0, signals: [] },
-  };
-
-  localStorage.setItem(key, JSON.stringify(state));
-  return state;
-}
-
-/**
- * Records A/B test outcome when signal closes.
- * @param {Object} signal - Closed signal with status and pnlPct
- * @param {Object} mlRankResult - Result from applyMlRanking
- */
-export function recordAbTestOutcome(signal, mlRankResult) {
-  if (!signal?.id || !mlRankResult || signal.status !== 'TARGET_HIT' && signal.status !== 'SL_HIT') return;
-
-  const key = 'friday_ab_test_state';
-  let state = (() => {
-    try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (_) { return null; }
-  })();
-
-  if (!state) state = initAbTestState();
-
-  const outcome = signal.status === 'TARGET_HIT' ? 1 : 0;
-  const pnl = toNum(signal.pnlPct, 0);
-  const group = mlRankResult.mlAdj !== 0 ? 'treatment' : 'control';
-
-  state[group].predictions++;
-  if (outcome === 1) state[group].hits++;
-  else state[group].losses++;
-
-  const prevAvg = state[group].avgPnl;
-  const n = state[group].predictions;
-  state[group].avgPnl = (prevAvg * (n - 1) + pnl) / n;
-
-  state[group].signals = (state[group].signals || []).slice(-100).concat([{
-    id: signal.id,
-    confidence: signal.confidence,
-    mlAdj: mlRankResult.mlAdj,
-    outcome,
-    pnl,
-    recordedAt: new Date().toISOString(),
-  }]);
-
-  localStorage.setItem(key, JSON.stringify(state));
-}
-
-/**
- * Gets A/B test results and statistical summary.
- * @returns {Object} - Test results with win rates, P&L, and significance
- */
-export function getAbTestResults() {
-  const key = 'friday_ab_test_state';
-  const state = (() => {
-    try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (_) { return null; }
-  })();
-
-  if (!state || !state.control.predictions) return null;
-
-  const control = state.control;
-  const treatment = state.treatment;
-
-  const controlWr = control.predictions ? Math.round(control.hits / control.predictions * 100) : 0;
-  const treatmentWr = treatment.predictions ? Math.round(treatment.hits / treatment.predictions * 100) : 0;
-  const controlPnl = +(control.avgPnl).toFixed(2);
-  const treatmentPnl = +(treatment.avgPnl).toFixed(2);
-
-  return {
-    duration: {
-      startedAt: state.startedAt,
-      days: Math.round((Date.now() - new Date(state.startedAt).getTime()) / (1000 * 60 * 60 * 24)),
-    },
-    control: {
-      predictions: control.predictions,
-      hits: control.hits,
-      losses: control.losses,
-      winRate: controlWr,
-      avgPnl: controlPnl,
-      sampleSize: control.predictions,
-    },
-    treatment: {
-      predictions: treatment.predictions,
-      hits: treatment.hits,
-      losses: treatment.losses,
-      winRate: treatmentWr,
-      avgPnl: treatmentPnl,
-      sampleSize: treatment.predictions,
-    },
-    lift: {
-      winRate: treatmentWr - controlWr,
-      avgPnl: treatmentPnl - controlPnl,
-      direction: treatmentWr > controlWr ? 'positive' : treatmentWr < controlWr ? 'negative' : 'neutral',
-      significant: Math.abs(treatmentWr - controlWr) >= 5 && Math.max(control.predictions, treatment.predictions) >= 20,
-    },
-  };
-}
-
-/**
- * Improves segment model selection using gradient-based confidence scoring.
- * Instead of hard label match, compute soft confidence for each segment.
- * @param {Object} models - Family of models
- * @param {Object} sigLike - Signal-like object
- * @returns {Object} - Selected model with confidence
- */
-export function selectSegmentModelWithConfidence(models, sigLike) {
-  const fam = sigLike?.type === 'STOCK' ? models?.families?.stock : models?.families?.option;
-  if (!fam || !fam.segments) return { model: fam?.global, confidence: 0.5, reason: 'global_fallback' };
-
-  const label = getSegmentLabel(sigLike, sigLike?.type);
-  const seg = fam.segments[label];
-
-  // Hard match: use segment if trained on enough samples
-  if (seg && seg.trainedOn >= 25) {
-    return { model: seg, confidence: clamp(seg.trainedOn / 100, 0.5, 1), reason: `segment_direct_match_${label}` };
-  }
-
-  // Soft match: find nearest segment by similarity metrics
-  const targetPhase = sigLike?.type === 'STOCK' ? getPhaseValue(sigLike) : null;
-  const targetBullish = isBullishSignal(sigLike);
-
-  let bestSeg = null;
-  let bestScore = 0;
-
-  for (const [segLabel, segModel] of Object.entries(fam.segments || {})) {
-    if (!segModel || segModel.trainedOn < 15) continue;
-    
-    let score = segModel.accuracy * 0.5; // Base on accuracy
-    
-    // Bonus if label matches
-    if (segLabel === label) score += 0.2;
-    
-    // Bonus if similar phase (for stocks)
-    if (targetPhase != null && sigLike?.type === 'STOCK') {
-      const labelMatch = segLabel.includes(label.split('_')[1] || '');
-      if (labelMatch) score += 0.15;
-    }
-    
-    if (score > bestScore) {
-      bestScore = score;
-      bestSeg = segModel;
-    }
-  }
-
-  if (bestSeg) {
-    return { model: bestSeg, confidence: clamp(bestScore, 0.3, 0.95), reason: 'segment_soft_match' };
-  }
-
-  // Fallback to global
-  return { model: fam?.global, confidence: 0.4, reason: 'global_fallback_no_match' };
 }
