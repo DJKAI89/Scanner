@@ -885,30 +885,6 @@ export function boSLTarget(ltp, atr, isBull, pdh, pdl, ema200) {
   return { sl, target, rr, method: 'ATR SL · 2:1 R:R' };
 }
 
-// ── Fibonacci Levels ──────────────────────────────────────────
-export function calcFibLevels(swingLow, swingHigh) {
-  const range = swingHigh - swingLow;
-  if (range <= 0) return null;
-  return { range, swingLow, swingHigh, fib236: +(swingHigh - range * 0.236).toFixed(2), fib382: +(swingHigh - range * 0.382).toFixed(2), fib500: +(swingHigh - range * 0.500).toFixed(2), fib618: +(swingHigh - range * 0.618).toFixed(2), ext618: +(swingHigh + range * 0.618).toFixed(2), ext100: +(swingHigh + range * 1.000).toFixed(2) };
-}
-
-// ── calcOptConfidence — port from HTML calcOptConfidence ──────
-export function calcOptConfidence(delta, iv, oiChg, theta, spot, strike, optType, niftyBullish, vix, maxPain, pcr = 1.0) {
-  const absD = Math.abs(delta), isCE = optType === 'CE';
-  const cs = niftyBullish ? 1.5 : -1.5, aligned = (isCE && cs > 0) || (!isCE && cs < 0), absCs = Math.abs(cs);
-  const dirMult = aligned ? (absCs >= 3 ? 1.05 : absCs >= 2 ? 1.0 : 0.95) : (absCs >= 3 ? 0.25 : absCs >= 2 ? 0.35 : 0.45);
-  const deltaScore = absD >= 0.7 ? 90 : absD >= 0.5 ? 78 : absD >= 0.3 ? 60 : absD >= 0.15 ? 42 : 25;
-  const ivScore    = iv >= 60 ? 20 : iv >= 40 ? 35 : iv >= 25 ? 60 : iv >= 15 ? 80 : 55;
-  const pcrBullish = pcr > 1.2, pcrAligned = (isCE && pcrBullish) || (!isCE && !pcrBullish);
-  const oiScore    = pcrAligned ? 72 : 45;
-  const moneyness  = spot > 0 ? Math.abs((strike - spot) / spot * 100) : 10;
-  const atmScore   = moneyness <= 1 ? 90 : moneyness <= 3 ? 80 : moneyness <= 6 ? 65 : moneyness <= 10 ? 45 : 25;
-  const thetaScore = theta < -10 ? 20 : theta < -3 ? 40 : theta < -1 ? 62 : theta < -0.3 ? 75 : 85;
-  let raw = deltaScore*0.30 + ivScore*0.20 + oiScore*0.25 + atmScore*0.15 + thetaScore*0.10;
-  if      (vix > 30) raw -= 15; else if (vix > 25) raw -= 8; else if (vix > 20) raw -= 4; else if (vix < 14) raw += 5;
-  return Math.round(Math.min(100, Math.max(0, raw * dirMult)));
-}
-
 // ── Max Pain & OI Walls ───────────────────────────────────────
 export function calcMaxPain(chain) {
   if (!chain || chain.length < 3) return 0;
@@ -1022,13 +998,6 @@ export function interpretFIIDII(d) {
     fiiNet, diiNet, netFlow,
     fiiBuying, fiiSelling, diiBuying, diiSelling,
   };
-}
-
-// ── getChgPct helper ──────────────────────────────────────────
-export function getChgPctFromQ(q) {
-  if (!q) return 0;
-  const ltp = q.last_price || 0, prev = (q.ohlc && q.ohlc.close) || ltp;
-  return prev > 0 ? ((ltp - prev) / prev) * 100 : 0;
 }
 
 // ── isWeeklyExpiryDay — EXACT port from HTML ─────────────────

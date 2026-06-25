@@ -19,8 +19,6 @@ function getAiFolder()       { return `ai-models/${_uid()}`; }
 function getAiLatestPath()   { return `${getAiFolder()}/latest.json`; }
 function getAiHistoryIndexPath()        { return `${getAiFolder()}/history/index.json`; }
 function getAiHistoryDayPath(date)      { return `${getAiFolder()}/history/${date}.json`; }
-function getPaperFolder()    { return `paper-trades/${_uid()}`; }
-function getPaperDayPath(date) { return `${getPaperFolder()}/${date}.json`; }
 
 // ── Base GitHub fetch ──
 const _ghInflight = new Map();
@@ -166,24 +164,6 @@ export async function pullAiHistoryFromGH(gh, limit = 100) {
     }
     return items;
   } catch (_) { return []; }
-}
-
-export async function pullPaperTradesFromGH(gh, date) {
-  try {
-    const d = await _ghFetch(gh, getPaperDayPath(date));
-    if (!d) return { trades: [], sha: null };
-    const content = _decode(d.content);
-    return { trades: content.trades || [], sha: d.sha || null };
-  } catch (_) { return { trades: [], sha: null }; }
-}
-
-export async function pushPaperTradesToGH(gh, date, trades, sha = null) {
-  if (!gh.token || !gh.user || !gh.repo) return false;
-  try {
-    const payload = { trades: trades || [], date, savedAt: new Date().toISOString(), upstoxId: _uid() };
-    const r = await _ghPut(gh, getPaperDayPath(date), payload, sha, `FRIDAY paper trades · ${_uid()} · ${date}`);
-    return r?.ok ?? false;
-  } catch (_) { return false; }
 }
 
 // ══════════════════════════════════════════════════════════

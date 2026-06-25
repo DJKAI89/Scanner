@@ -13,6 +13,7 @@ import {
   countIndicatorsEx, getRec, autoSLTarget, calcEntryTrigger, detectReversal,
   calcMACD, isNearSupport, calcRSIDivergence, getSector, calcConfidence, calcVWAP,
   calcVWAPBands, applyFIIBias, applyCalibration, applyAdaptWeights, calcEMA, calcIVPercentile,
+  applyIntradayBoost,
 } from './technical';
 import { applyMlRanking } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
@@ -573,7 +574,7 @@ export async function runBreakoutScan(ctx, callbacks) {
     const sectorScore = secMapEntry != null
       ? (secMapEntry > 0.5 ? 1 : secMapEntry < -0.5 ? -1 : 0)
       : (secChgPct > 1 ? 1 : secChgPct < -1 ? -1 : 0);
-    const {score}=boScore(ema,pdhl,st,vol,wk52,mom,nr7,bb,wMTF,gap,adx,rs,wick,sectorScore,phase);
+    const {bullScore,bearScore,score}=boScore(ema,pdhl,st,vol,wk52,mom,nr7,bb,wMTF,gap,adx,rs,wick,sectorScore,phase);
     const minScore=(phase==='holiday'||phase==='closed'||phase==='pre')?1:2;
     if (score<minScore) continue;
     const trade=boSLTarget(ltp,t.atr,isBull,pdhl?.pdh||0,pdhl?.pdl||0,ema?.ema200||0);
@@ -587,7 +588,7 @@ export async function runBreakoutScan(ctx, callbacks) {
       :pdhl?.bullBreakout?'PDH_BREAK':pdhl?.bearBreakout?'PDL_BREAK'
       :st?.crossed?(st.trend==='UP'?'ST_CROSS_UP':'ST_CROSS_DOWN'):'GENERIC';
     results.push({
-      ...item, ltp, chgPct:getChgPct(q), ema, pdhl, st, vol, score, dir, wk52, mom, nr7, bb, gap, adx, rs, wMTF, wick,
+      ...item, ltp, chgPct:getChgPct(q), ema, pdhl, st, vol, score, bullScore, bearScore, dir, wk52, mom, nr7, bb, gap, adx, rs, wMTF, wick,
       trade, atr:t.atr, isBull, phase, sectorScore, sec:item.sec||item.s||'NSE',
       ivPct, primaryType,
       rec:isBull?(score>=7?'STRONG BUY':'BUY'):(score>=7?'SELL':'WATCH'),
@@ -695,16 +696,13 @@ export async function runBreakoutScan(ctx, callbacks) {
         const intraConfirm = r.pdhl?.pdh > 0 && intraHigh > r.pdhl.pdh ? 'PDH_CONFIRMED'
           : r.pdhl?.pdl > 0 && intraLow < r.pdhl.pdl ? 'PDL_CONFIRMED' : null;
 
-        // 5. Intraday score boost — add to existing score
-        let intraBoost = 0;
-        if (intraConfirm) intraBoost += 2; // breakout confirmed intraday
-        if (intraVolRatio >= 2) intraBoost += 2;      // volume surge intraday
-        else if (intraVolRatio >= 1.5) intraBoost += 1;
-        if (intraMomentum?.bullish && r.isBull)  intraBoost += 1;
-        if (intraMomentum?.accelerating) intraBoost += 1;
-
-        const newScore = Math.min(10, r.score + (intraBoost > 0 ? Math.floor(intraBoost / 2) : 0));
-        const newConf  = Math.min(95, r.conf + intraBoost * 3);
+        // 5. Intraday score boost — via shared applyIntradayBoost (was duplicated inline before)
+        const boosted = applyIntradayBoost(
+          { bullScore: r.bullScore, bearScore: r.bearScore, score: r.score },
+          { confirm: !!intraConfirm, volRatio: intraVolRatio, emaBull: intraMomentum?.bullish, accelerating: intraMomentum?.accelerating, aboveVWAP: vwapSignal?.aboveVWAP }
+        );
+        const newScore = boosted.score;
+        const newConf  = Math.min(95, r.conf + (boosted.intraBoost || 0) * 3);
 
         // 6. Build intraday _whyLines additions
         const intraWhy = [

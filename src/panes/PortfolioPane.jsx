@@ -7,11 +7,11 @@ import { getIST } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import {
   getInstrumentKey, loadPortfolio, enrichPortfolioRows,
-  computeSectorMap, computeConcentrationWarnings, sortRows,
+  computeSectorMap, computeConcentrationWarnings, sortRows, loadPortfolioAiGuidance,
 } from '../services/portfolioService';
 
 export default function PortfolioPane() {
-  const { token, onTokenExpired, lg, updateBadge, marketStatus } = useApp();
+  const { token, onTokenExpired, lg, updateBadge, marketStatus, gh, mlModels } = useApp();
   const accessToken = resolveAccessToken(token);
 
   const [loading, setLoading]     = useState(false);
@@ -22,6 +22,7 @@ export default function PortfolioPane() {
   const [tab, setTab]             = useState('holdings');
   const [sortCol, setSortCol]     = useState('sym');
   const [sortDir, setSortDir]     = useState('asc');
+  const [aiGuidance, setAiGuidance] = useState(null);
 
   function toggleSort(col) {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -67,6 +68,12 @@ export default function PortfolioPane() {
   const invested   = portfolioRows.reduce((s, i) => s + (i.avg * i.qty), 0);
   const todayPnl   = portfolioRows.reduce((s, i) => s + (i.todayPnl|| 0), 0);
   const totalValue = portfolioRows.reduce((s, i) => s + (i.value   || 0), 0);
+
+  // AI guidance — only refires on raw data reload, not on every WS price tick
+  useEffect(() => {
+    if (!gh?.token || !mlModels || (!positions.length && !holdings.length)) { setAiGuidance(null); return; }
+    loadPortfolioAiGuidance({ gh, mlModels, portfolioRows: [...positions, ...holdings] }).then(setAiGuidance);
+  }, [positions, holdings, gh?.token, gh?.user, gh?.repo, mlModels?.computedAt]); // eslint-disable-line
 
   const sectorMap = useMemo(() => computeSectorMap(enrichedHld.concat(enrichedPos)), [enrichedHld, enrichedPos]);
 
@@ -235,6 +242,24 @@ export default function PortfolioPane() {
             <div style={{ background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 8, padding: '10px 13px', marginBottom: 10 }}>
               <div style={{ fontSize: 10, fontWeight: 800, color: '#92400e', marginBottom: 4 }}>⚠ Concentration Risk</div>
               {correlationWarnings.map((w, i) => <div key={i} style={{ fontSize: 10, color: '#78350f' }}>{w}</div>)}
+            </div>
+          )}
+
+          {/* AI portfolio guidance */}
+          {aiGuidance?.suggestions?.length > 0 && (
+            <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px', marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: '#0f172a', marginBottom: 8 }}>🤖 AI Guidance — today's candidates vs your exposure (max {aiGuidance.maxConcurrent} concurrent)</div>
+              {aiGuidance.suggestions.map(s => (
+                <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f1f5f9', fontSize: 10 }}>
+                  <div>
+                    <span style={{ fontWeight: 700 }}>{s.symbol}</span>
+                    {s.clusterPenalty > 0 && <span style={{ color: '#d97706', marginLeft: 6 }}>⚠ cluster penalty {s.clusterPenalty}</span>}
+                  </div>
+                  <div style={{ textAlign: 'right', color: '#374151' }}>
+                    risk {s.suggestedRiskPct}% · stop {s.dailyStopPct}%
+                  </div>
+                </div>
+              ))}
             </div>
           )}
 

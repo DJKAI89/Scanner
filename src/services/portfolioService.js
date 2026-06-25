@@ -3,6 +3,31 @@
 // All calculation and API-call logic for the Portfolio tab lives here.
 
 import { fetchPortfolio } from './api';
+import { ghReadDay } from './github';
+import { getPortfolioAiGuidance } from './mlRanking';
+import { getISTDate } from '../utils/marketTime';
+
+// Maps enriched portfolio rows (real broker exposure) into the lightweight
+// {type, stock} shape getPortfolioAiGuidance expects for exposure counting.
+function toExposureSignals(enrichedRows) {
+  return enrichedRows.map(r => {
+    const sym = r.tradingsymbol || r.symbol || '';
+    const isOption = /\d{4,}(CE|PE)$/.test(sym);
+    return { type: isOption ? 'OPTION' : 'STOCK', stock: sym.replace(/\d{2}[A-Z]{3}\d{2,4}(CE|PE)?$/, '') || sym };
+  });
+}
+
+// ctx: { gh, mlModels, portfolioRows } — portfolioRows = enriched positions+holdings (real exposure).
+// candidateSignals come from today's GitHub signal log (scanner ideas not yet acted on).
+export async function loadPortfolioAiGuidance({ gh, mlModels, portfolioRows }) {
+  if (!gh?.token || !gh?.user || !gh?.repo || !mlModels) return null;
+  try {
+    const { signals: todaySignals } = await ghReadDay(gh, getISTDate());
+    const candidateSignals = (todaySignals || []).filter(s => s.status === 'OPEN');
+    const openExposure = toExposureSignals(portfolioRows);
+    return getPortfolioAiGuidance(openExposure, candidateSignals, mlModels);
+  } catch (_) { return null; }
+}
 
 export function getInstrumentKey(item) {
   return item.instrument_key || item.instrumentKey || item.instrument_token || item.instrumentToken || item.token || '';
