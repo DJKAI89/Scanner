@@ -4,15 +4,16 @@
 
 import { fetchQ, fetchCandles, fetchIntraday, fetchOptions, fetchOptionContracts } from './api';
 import {
-  calcRSI, calcEMACrossover, calcATR, calcBBSqueeze, calcSR, calcVWAP,
+  calcRSI, calcEMACrossover, calcATR, calcBBSqueeze, calcSR, calcVWAP, calcVWAPBands,
   detectPatterns, calcRisk, calcPotential, calcConfidence, countIndicatorsEx,
   getRec, autoSLTarget, calcEntryTrigger, detectReversal, calcMACD,
   isNearSupport, calcRSIDivergence, getSignalStrength,
   calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain,
-  applyFIIBias, applyAdaptWeights, calcVolumeSurge, calcEMA, calcADX,
+  applyFIIBias, applyAdaptWeights, applyCalibration, calcVolumeSurge, calcEMA, calcADX,
 } from './technical';
 import { applyMlRanking } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
+import { interpVIXSc, interpPCR, getDeliveryPct } from './stockScan';
 
 export function getChgPct(q) {
   if (!q) return 0;
@@ -24,7 +25,7 @@ export function getChgPct(q) {
 // ctx: { symbol, token, stocks, cfg, fiiData, adaptWeights, mlModels, onTokenExpired, lg }
 // callbacks: { setProgress }
 export async function lookupInstrument(ctx, callbacks) {
-  const { symbol, token, stocks, cfg, fiiData, adaptWeights, mlModels, onTokenExpired, lg } = ctx;
+  const { symbol, token, stocks, cfg, fiiData, adaptWeights, mlModels, confCalibration, onTokenExpired, lg } = ctx;
   const { setProgress } = callbacks;
   const s = (symbol || '').trim().toUpperCase();
   if (!s) return null;
@@ -54,6 +55,31 @@ export async function lookupInstrument(ctx, callbacks) {
 
   if (!q?.last_price) throw new Error(s + ' not found. Verify symbol or refresh token in settings.');
 
+  // Market-wide context — same macro inputs StocksPane/OptionsPane factor into confidence.
+  // Without this, calcConfidence below silently falls back to a neutral 50 score for
+  // vixSc/pcrSc regardless of actual market regime, causing Lookup's rec to diverge
+  // from Stocks/Options on days where real VIX/PCR meaningfully shift the picture.
+  let vixSc = 50, marketPcr = null;
+  try {
+    const vQ = await fetchQ('NSE_INDEX|India VIX', token, onTokenExpired);
+    const vixVal = vQ['NSE_INDEX|India VIX']?.last_price || 0;
+    if (vixVal > 0) vixSc = interpVIXSc(vixVal).sc;
+  } catch (e) {}
+  try {
+    const expRes = await fetch(
+      `https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent('NSE_INDEX|Nifty 50')}`,
+      { headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' } }
+    ).then(r => r.json());
+    const exps = (expRes?.data?.map(e => e.expiry) || []).sort();
+    if (exps.length) {
+      const niftyChain = await fetchOptions('NSE_INDEX|Nifty 50', exps[0], token, onTokenExpired);
+      const ceOI = niftyChain.reduce((sum, x) => sum + (x.call_options?.market_data?.oi || 0), 0);
+      const peOI = niftyChain.reduce((sum, x) => sum + (x.put_options?.market_data?.oi || 0), 0);
+      marketPcr = ceOI > 0 ? +(peOI / ceOI).toFixed(2) : 1;
+    }
+  } catch (e) {}
+  const pcrSc = marketPcr != null ? interpPCR(marketPcr).sc : 50;
+
   const ltp = q.last_price;
   const chgPct = getChgPct(q);
   const chgPts = q.net_change != null ? +q.net_change : ltp - (q.ohlc?.close || ltp);
@@ -77,6 +103,8 @@ export async function lookupInstrument(ctx, callbacks) {
       const sr = calcSR(candles);
       const pats = detectPatterns(candles);
       const rsiDiv = calcRSIDivergence(closes);
+      const vwapBands = calcVWAPBands(candles);
+      const delivPct = getDeliveryPct(q);
       const a50 = closes.length >= 50 ? ltp > (ema?.e50 || 0) : null;
       const a200 = closes.length >= 200 ? ltp > (ema?.e200 || 0) : null;
       const volOk = (q.volume || 0) > (volObj?.avgVol || 1) * cfg.vol;
@@ -86,7 +114,27 @@ export async function lookupInstrument(ctx, callbacks) {
       const preRec = preRR>=2.0?'BUY':preRR>=1.5?'MODERATE':'WATCH';
       const numInds = countIndicatorsEx(rsi, macd.bull, a50, a200, volOk, nearS, pats, preRec, macd, bb, adx, rsiDiv);
       const rec = numInds >= 4 ? 'BUY' : numInds >= 3 ? 'MODERATE' : numInds >= 2 ? 'WATCH' : 'AVOID';
-      let conf = calcConfidence(null, 0, 0, chgPct > 0, 0, q.volume || 0, volObj?.avgVol || 1, pats, preRec, numInds);
+      let conf = calcConfidence(null, vixSc, pcrSc, chgPct > 0, 0, q.volume || 0, volObj?.avgVol || 1, pats, preRec, numInds);
+      // Enhancements (parity with stockScan.js — same indicators, same weights)
+      if(macd?.bullCross)                      conf=Math.min(99,conf+6);
+      if(macd?.histRising&&macd?.bullish)       conf=Math.min(99,conf+3);
+      if(macd?.bearCross)                       conf=Math.max(1, conf-8);
+      if(bb?.squeeze)                           conf=Math.min(99,conf+5);
+      if(bb?.nearLowerBand)                     conf=Math.min(99,conf+4);
+      if(bb?.percentB>1.0)                      conf=Math.max(1, conf-5);
+      if(adx?.bullTrend)                        conf=Math.min(99,conf+5);
+      if(adx?.bearTrend)                        conf=Math.max(1, conf-6);
+      if(adx&&!adx.trending&&!adx.weakTrend)    conf=Math.max(1,conf-3);
+      if(rsiDiv?.bullish)         conf=Math.min(99,conf+7+Math.min(5,rsiDiv.strength||0));
+      if(rsiDiv?.hidden_bullish)  conf=Math.min(99,conf+4);
+      if(rsiDiv?.bearish)         conf=Math.max(1, conf-8);
+      if(rsiDiv?.hidden_bearish)  conf=Math.max(1, conf-4);
+      if(vwapBands?.nearLowerBand)              conf=Math.min(99,conf+3);
+      if(vwapBands?.position==='FAR_ABOVE'||vwapBands?.position==='ABOVE_1SD') conf=Math.max(1,conf-4);
+      const delivBoost = delivPct!=null?(delivPct>=60?1:delivPct<=25?-1:0):0;
+      conf=Math.min(100,Math.max(0,conf+delivBoost*5));
+      conf=applyFIIBias(conf, preRec==='BUY'||preRec==='STRONG BUY', null);
+      conf=applyCalibration(conf, confCalibration||null);
       const risk = calcRisk(ltp, sl, target, atr, 0);
       const pot = calcPotential(ltp, target, sl, numInds, rec);
       const reversal = detectReversal(ltp, rsi, pats, sr, 0, 1.0, chgPct > 0, chgPct, atr, q.ohlc?.high || ltp, q.ohlc?.low || ltp);
