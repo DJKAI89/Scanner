@@ -1372,6 +1372,9 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       if (iv === 0 && absD0 > 0.95) continue;
       if (iv === 0 && ltp < 1)      continue;
       const oi = md?.oi || 0, prevOI = md?.prev_oi || oi;
+      // Liquidity gate — a calculated SL is meaningless if the contract barely trades;
+      // thin OI means price can gap straight through the SL before it's ever caught.
+      if (oi < (cfg?.minOptOI ?? 500)) continue;
       const oiChg = prevOI > 0 ? ((oi - prevOI) / prevOI * 100) : 0;
       const absD  = Math.abs(delta);
 
@@ -1447,8 +1450,12 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       const trendAligned = effectiveNeutral ? false : (isCE ? compositeScore > 0 : compositeScore < 0);
       const momentumDir  = isNeutral ? 'NEUTRAL' : compositeScore > 2 ? 'STRONGLY BULLISH' : compositeScore > 0 ? 'BULLISH' : compositeScore < -2 ? 'STRONGLY BEARISH' : 'BEARISH';
 
-      // Action
-      const aligned = (isCE && niftyBullish) || (!isCE && !niftyBullish);
+      // Action — use THIS instrument's own compositeScore (same as trendAligned above),
+      // not the cross-index niftyBullish flag. Using niftyBullish here meant every
+      // non-NIFTY underlying (SENSEX/BANKNIFTY/FINNIFTY/stocks) had its BUY/SELL
+      // decision driven by NIFTY's move instead of its own — a major source of
+      // wrong-direction entries whenever the two diverged.
+      const aligned = (isCE && compositeScore > 0) || (!isCE && compositeScore < 0);
       let action = 'WATCH';
       if (!aligned && !isNeutral) { if (absD >= delta_thresh && oiChg <= -oi_thresh) action = 'SELL'; }
       else                        { if (absD >= delta_thresh) action = 'BUY'; }
