@@ -5,7 +5,7 @@
 import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api';
 import { getIST, sleep } from '../utils/marketTime';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config';
-import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias, applyAdaptWeights } from './technical';
+import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias, applyAdaptWeights, applyCalibration } from './technical';
 import { logSignals, buildOptionSignal } from './github';
 import { applyMlRanking } from './mlRanking';
 
@@ -102,10 +102,11 @@ function buildIndicatorSnapshot(p) {
 
 // Applies FII bias + adaptive weights + ML ranking to a raw scanChain pick,
 // then filters by confidence/capital thresholds. Shared by index + stock passes.
-function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, cfg, maxPain = 0, spot = 0 }) {
+function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalibration, cfg, maxPain = 0, spot = 0 }) {
   return picks.map(p => {
     const indSnap = buildIndicatorSnapshot(p);
     let c = applyFIIBias(p.confidence, p.action === 'BUY', fiiData);
+    c = applyCalibration(c, confCalibration || null);
     c = applyAdaptWeights(c, adaptWeights?.option || null, indSnap);
     const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap: indSnap });
     return {
@@ -134,7 +135,7 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, cfg, maxP
 // caches: { prevAvgIVCache, prevPCRCache } — refs persisted across scans for trend deltas
 // callbacks: { setProgress, setMarketCtxMap, setVix }
 export async function runOptionsScan(ctx, caches, callbacks) {
-  const { accessToken, cfg, stocks, fiiData, adaptWeights, mlModels, gh, onTokenExpired, lg } = ctx;
+  const { accessToken, cfg, stocks, fiiData, adaptWeights, mlModels, confCalibration, gh, onTokenExpired, lg } = ctx;
   const { prevAvgIVCache, prevPCRCache } = caches;
   const { setProgress, setMarketCtxMap, setVix } = callbacks;
 
@@ -255,7 +256,7 @@ export async function runOptionsScan(ctx, caches, callbacks) {
     }
 
     // Apply FII bias + adaptive weights + ML ranking, then filter
-    const picksWithFII = scoreAndFilterPicks(allIdxPicks, { fiiData, adaptWeights, mlModels, cfg, maxPain, spot });
+    const picksWithFII = scoreAndFilterPicks(allIdxPicks, { fiiData, adaptWeights, mlModels, confCalibration, cfg, maxPain, spot });
 
     lg(`${idx.name}: ${expiriesToScan.length} expiry(s) → ${allIdxPicks.length} raw → ${picksWithFII.length} ≥${cfg.minOptConf}% | composite=${richCtx.compositeScore} pcr=${pcr}`, 'o');
     built.push({ name: idx.name, spot, spotChg, picks: picksWithFII, expiry, expiries: expiriesToScan, chain, maxPain, oiWalls, pcr, pcrTrend, ivTrend });
@@ -345,7 +346,7 @@ export async function runOptionsScan(ctx, caches, callbacks) {
           if (exp !== expiry) await sleep(300);
         }
 
-        const fPicks2 = scoreAndFilterPicks(allStkPicks, { fiiData, adaptWeights, mlModels, cfg, maxPain: stkMaxPain, spot });
+        const fPicks2 = scoreAndFilterPicks(allStkPicks, { fiiData, adaptWeights, mlModels, confCalibration, cfg, maxPain: stkMaxPain, spot });
         if (fPicks2.length) { built.push({ name:inst.s, spot, spotChg, picks:fPicks2, expiry, expiries:expiriesToScan2, chain, maxPain:stkMaxPain, oiWalls:calcOIWalls(chain), pcr:pcr2, pcrTrend:stkCtx.pcrTrend, ivTrend:ivTrend2, type:'stock', fullName:inst.n }); lg(`${inst.s}: ${expiriesToScan2.length} expiry(s) → ${allStkPicks.length} raw → ${fPicks2.length} signals`, 'o'); }
       } catch(e) { lg(inst.s + ' opts: ' + e.message, 'w'); }
     }
@@ -363,8 +364,7 @@ export async function runOptionsScan(ctx, caches, callbacks) {
   }));
   const allPicks = built.flatMap(g => g.picks);
   // Don't log WATCH options — no direction conviction, contaminates calibration
-  const minConfThreshold = mlModels?.thresholds?.option?.minConfidence || cfg.minOptConf;
-  const loggableOpts = allPicks.filter(p => p.action !== 'WATCH' && p.confidence >= minConfThreshold);
+  const loggableOpts = allPicks.filter(p => p.action !== 'WATCH');
   if (loggableOpts.length && gh?.token) logSignals(gh, loggableOpts.map(p => buildOptionSignal(p, vixVal)), vixVal, lg);
   lg(`✅ Options: ${total} signals (${withTrend} with-trend)`, 'o');
 
