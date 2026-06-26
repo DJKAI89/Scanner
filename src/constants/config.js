@@ -21,6 +21,7 @@ export const DEF = {
   optSL:        25,
   optTgt:       50,
   minOptConf:   65,
+  minOptOI:     500,
   maxOptCapital: 0,
   portSize:     500000,
   riskPct:      2,
