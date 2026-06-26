@@ -483,6 +483,7 @@ export default function SettingsPane() {
           <SetRow label="Options SL %"      sub="% below entry = stop loss"><Inp value={local.optSL} onChange={v => set('optSL', v)} min={5} max={60} /></SetRow>
           <SetRow label="Options Target %"  sub="% above entry = target"><Inp value={local.optTgt} onChange={v => set('optTgt', v)} min={10} max={200} /></SetRow>
           <SetRow label="Max Capital ₹"     sub="Hide options above this · 0 = no limit"><Inp value={local.maxOptCapital} onChange={v => set('maxOptCapital', v)} min={0} step={1000} width={90} /></SetRow>
+          <SetRow label="Min Open Interest" sub="Skip illiquid strikes — SL can't be honored if it barely trades"><Inp value={local.minOptOI} onChange={v => set('minOptOI', v)} min={0} step={100} width={90} /></SetRow>
         </div>
 
         {/* ── Adaptive Weights ── */}
