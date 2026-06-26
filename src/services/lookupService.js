@@ -138,21 +138,22 @@ export async function lookupInstrument(ctx, callbacks) {
       const risk = calcRisk(ltp, sl, target, atr, 0);
       const pot = calcPotential(ltp, target, sl, numInds, rec);
       const reversal = detectReversal(ltp, rsi, pats, sr, 0, 1.0, chgPct > 0, chgPct, atr, q.ohlc?.high || ltp, q.ohlc?.low || ltp);
+      const vwap = calcVWAP(candles);
+      const aboveVWAP = vwap > 0 ? ltp >= vwap : null;
       const _indSnap = {
         macdBull: macd.bull===true, macdBullCross: macd?.bullCross===true, macdBearCross: macd?.bearCross===true,
         bbSqueeze: bb?.squeeze===true, bbNearLower: bb?.nearLowerBand===true, adxBull: adx?.bullTrend===true,
         adxBear: adx?.bearTrend===true, rsiDiv: rsiDiv?.bullish===true, rsiDivHidden: rsiDiv?.hidden_bullish===true,
         rsiBearDiv: rsiDiv?.bearish===true, a50: a50===true, a200: a200===true, nearSupp: !!nearS,
-        aboveVWAP: false, vwapNearLower: false, engulfing: pats?.bullishEngulfing===true, hammer: pats?.hammer===true,
+        aboveVWAP: aboveVWAP===true, vwapNearLower: vwapBands?.nearLowerBand===true, engulfing: pats?.bullishEngulfing===true, hammer: pats?.hammer===true,
         morningStar: pats?.morningStar===true, reversalFired: (reversal?.type || 'NONE') !== 'NONE',
-        delivHigh: false, delivLow: false,
+        delivHigh: (delivPct??0)>=60, delivLow: (delivPct??100)<=25,
       };
       conf = applyAdaptWeights(conf, adaptWeights?.stock || null, _indSnap);
       const mlRank = applyMlRanking(conf, mlModels || null, { type:'STOCK', confidence: conf, numInds, risk, pot, rec: preRec, reversal, _indSnap });
       conf = mlRank.confidence;
       const finalRec = getRec(conf, pot.base, risk, pot.rr);
       const strength = getSignalStrength(numInds, conf, reversal);
-      const vwap = calcVWAP(candles);
       const entry = calcEntryTrigger(ltp, q.ohlc?.high || ltp, sr, atr, finalRec, vwap, chgPct);
       tech = { rsi, ema, macd, bb, atr, adx, sr, pats, rsiDiv, a50, a200, volOk, nearS, numInds, rec: finalRec, conf, sl, target, targets, pot, risk, strength, vwap, entry, reversal, avgVol: volObj?.avgVol || 0, volRatio: volObj?.ratio || 1, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj };
     }
@@ -246,6 +247,7 @@ export async function lookupInstrument(ctx, callbacks) {
               compositeHigh: Math.abs(p.compositeScore??0)>=2, compositeMed: Math.abs(p.compositeScore??0)>=1, atm: p.atm||false,
             };
             let c = applyFIIBias(p.confidence, p.action === 'BUY', fiiData);
+            c = applyCalibration(c, confCalibration || null);
             c = applyAdaptWeights(c, adaptWeights?.option || null, _indSnap);
             const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap });
             return { ...p, confidence: mlRank.confidence, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj };
