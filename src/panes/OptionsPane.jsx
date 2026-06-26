@@ -205,7 +205,7 @@ function OptionCard({ pick, cfg: cardCfg }) {
 
 export default function OptionsPane() {
   const {
-    token, cfg, marketStatus, lg, onTokenExpired, updateBadge, fiiInterp, fiiData, gh, adaptWeights, mlModels,
+    token, cfg, marketStatus, lg, onTokenExpired, updateBadge, fiiInterp, fiiData, gh, adaptWeights, mlModels, confCalibration,
     activeTab, setScanning, setStatusDot, setStatusTxt, stocks,
   } = useApp();
   const accessToken = resolveAccessToken(token);
@@ -270,7 +270,7 @@ export default function OptionsPane() {
     setGroups([]);
     setUpdTime('');
     try {
-      const ctx = { accessToken, cfg, stocks, fiiData, adaptWeights, mlModels, gh, onTokenExpired, lg };
+      const ctx = { accessToken, cfg, stocks, fiiData, adaptWeights, mlModels, confCalibration, gh, onTokenExpired, lg };
       const caches = { prevAvgIVCache, prevPCRCache };
       const callbacks = { setProgress, setMarketCtxMap, setVix };
       const { groups: nextGroups, scanId, withTrend } = await runOptionsScan(ctx, caches, callbacks);
