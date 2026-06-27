@@ -26,6 +26,11 @@ export const DEF = {
   portSize:     500000,
   riskPct:      2,
   optStockScanCount: 20,
+  // ── Trade management: partial exits + trailing stop ──
+  t1ClosePct:   50,    // % of position closed at T1
+  t2ClosePct:   30,    // % of position closed at T2 (remainder closes at T3)
+  atrTrailMult: 1.5,   // stocks: trailing distance = ATR × this, once break-even active
+  optionTrailMult: 0.6, // options: trailing distance = entry-SL risk distance × this
 };
 
 export const INDEX_OPTS = [
