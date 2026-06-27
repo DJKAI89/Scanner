@@ -111,18 +111,7 @@ export async function pullAiModelFromGH(gh) {
   try {
     const d = await _ghFetch(gh, getAiLatestPath());
     if (!d) return null;
-    const model = _decode(d.content);
-    if (!model) return null;
-    
-    // Check model staleness
-    if (model.computedAt) {
-      const ageDays = (Date.now() - new Date(model.computedAt).getTime()) / (1000 * 60 * 60 * 24);
-      if (ageDays > 7) {
-        console.warn(`[AI] Model from GitHub is ${Math.round(ageDays)} days old`);
-      }
-    }
-    
-    return model;
+    return _decode(d.content);
   } catch (_) { return null; }
 }
 
@@ -388,7 +377,17 @@ export function buildStockSignal(p, vixVal) {
     },
     status:         'OPEN',
     holdDays,
-    exitPrice: null, exitTime: null, exitDate: null, pnlPct: null, note: '',
+    atr:            p.atr || 0,
+    // ── Trade management: multi-target partial exits + ATR trailing stop ──
+    targetT1:       +(p.pot?.cons || p.target || 0).toFixed(2),
+    targetT2:       +(p.target   || p.pot?.mod || 0).toFixed(2),
+    targetT3:       +(p.pot?.agg || p.target || 0).toFixed(2),
+    partials:       [],
+    remainingPct:   100,
+    beActive:       false,
+    trailSL:        null,
+    maxFavPrice:    +p.ltp.toFixed(2),
+    exitPrice: null, exitTime: null, exitDate: null, pnlPct: null, exitReason: null, note: '',
   };
 }
 
@@ -450,11 +449,22 @@ export function buildOptionSignal(p, vixVal) {
       atm:            p.atm             || false,
     },
     status:         'OPEN',
-    holdDays:       1,
+    holdDays:       strengthLabel === 'STRONG' ? 3 : strengthLabel === 'MODERATE' ? 2 : 1,
+    riskDist:       +Math.abs((p.entry || 0) - (p.sl || 0)).toFixed(2),
+    // ── Trade management: multi-target partial exits + R-multiple trailing stop ──
+    targetT1:       +(p.t1 ?? p.tgt ?? 0).toFixed(2),
+    targetT2:       +(p.t2 ?? p.tgt ?? 0).toFixed(2),
+    targetT3:       +(p.t3 ?? p.tgt ?? 0).toFixed(2),
+    partials:       [],
+    remainingPct:   100,
+    beActive:       false,
+    trailSL:        null,
+    maxFavPrice:    +(p.entry || 0).toFixed(2),
     exitPrice:      null,
     exitTime:       null,
     exitDate:       null,
     pnlPct:         null,
+    exitReason:     null,
     note:           '',
   };
 }

@@ -1471,13 +1471,22 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
         slTgtMethod += ' · SELL (flipped)';
       }
 
+      // Multi-target levels (T1/T2/T3) for partial-exit trade management.
+      // T2 = the existing risk-validated target; T1/T3 are R-multiple steps
+      // around it in the same direction (SL/Target already flipped above for SELL).
+      const dir      = action === 'SELL' ? -1 : 1;
+      const riskDist = Math.abs(entry - sl);
+      const t1 = riskDist > 0 ? +(entry + dir * riskDist * 1.0).toFixed(2) : tgt;
+      const t2 = tgt;
+      const t3 = riskDist > 0 ? +(entry + dir * riskDist * (Math.abs(rr || 2) * 1.5)).toFixed(2) : tgt;
+
       const lot       = lotSize || 1;
       const maxLoss   = +(action === 'SELL' ? (sl - entry) * lot : (entry - sl) * lot).toFixed(0);
       const maxProfit = +(action === 'SELL' ? (entry - tgt) * lot : (tgt - entry) * lot).toFixed(0);
 
       picks.push({
         instrKey,
-        strike: sp, type: optType, entry, sl, tgt, rr,
+        strike: sp, type: optType, entry, sl, tgt, rr, t1, t2, t3,
         iv, delta, theta, oi, oiChg, action, signals,
         score: signals.reduce((a, s) => a + s.s, 0),
         confidence, atm: sp === atm, spot, expiry, und: name,

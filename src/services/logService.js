@@ -2,9 +2,10 @@
 // Extracted from LogPane.jsx so the pane only handles UI/state wiring.
 // All calculation and GitHub/API-call logic for the Signal Log tab lives here.
 
-import { ghReadMultipleDays, ghWriteDay, ghUpdateIndex, ghReadDay, ghReadIndex, isBullSignal } from './github';
+import { ghReadMultipleDays, ghWriteDay, ghUpdateIndex, ghReadDay, ghReadIndex } from './github';
 import { fetchQ } from './api';
 import { getISTDate } from '../utils/marketTime';
+import { evaluateSignalExit } from './tradeManagement';
 
 export function computeDayStats(sigs) {
   const closed  = sigs.filter(s => s.status==='TARGET_HIT'||s.status==='SL_HIT');
@@ -57,71 +58,74 @@ export async function loadSignalLog(ctx) {
 
 // Real-time WS-driven SL/Target resolution — direction-aware (BUY vs SELL).
 // Returns the updated signals array and a list of newly-resolved signal ids.
-export function resolveSignalsAgainstLivePrices(signals, lastPrices, resolvedIds, istDate, istTime) {
+export function resolveSignalsAgainstLivePrices(signals, lastPrices, resolvedIds, istDate, istTime, cfg) {
   let changed = false;
   const newlyResolved = [];
+  const touchedIds = []; // resolved OR partial-exit/trailing-stop updated — both need persisting
   const updated = signals.map(sig => {
     const feedKey = getSignalFeedKey(sig);
     if (sig.status !== 'OPEN' || !feedKey) return sig;
     if (resolvedIds.has(sig.id)) return sig;
 
-    // Option expired without hitting SL/Target — check BEFORE the live-price
-    // early-return below, since an expired contract's WS feed may stop ticking.
-    if (sig.type === 'OPTION' && sig.expiry && istDate > sig.expiry) {
-      changed = true;
-      newlyResolved.push(sig.id);
-      const expLtp = lastPrices[feedKey]?.ltp ?? null;
-      const pnlPct = (expLtp != null && sig.entry > 0) ? +((expLtp - sig.entry) / sig.entry * 100).toFixed(2) : null;
-      return { ...sig, status: 'EXPIRED', exitPrice: expLtp, exitTime: istTime, exitDate: istDate, pnlPct, livePrice: null, livePnlPct: null };
-    }
-
     const live = lastPrices[feedKey];
-    // If signal was resolved this session by global monitor, strip live fields and return clean
-    if (!live?.ltp) return sig.status !== 'OPEN' ? (({ livePrice: _, livePnlPct: __, ...clean }) => clean)(sig) : { ...sig };
-
-    const ltp    = live.ltp;
-    const isBuy  = isBullSignal(sig);
-    const slHit  = sig.sl     && (isBuy ? ltp <= sig.sl     : ltp >= sig.sl);
-    const tgtHit = sig.target && (isBuy ? ltp >= sig.target : ltp <= sig.target);
-
-    if (slHit || tgtHit) {
-      changed = true;
-      newlyResolved.push(sig.id);
-      const pnlPct = +((ltp - sig.entry) / sig.entry * 100).toFixed(2);
-      return { ...sig, status: tgtHit ? 'TARGET_HIT' : 'SL_HIT', exitPrice:+ltp.toFixed(2), exitTime:istTime, exitDate:istDate, pnlPct, livePrice:null, livePnlPct:null };
+    const isExpiryCandidate = sig.type === 'OPTION' && sig.expiry && istDate > sig.expiry;
+    // Expiry checks fire even with no live tick (expired contracts often stop ticking);
+    // everything else needs a real price.
+    if (!live?.ltp && !isExpiryCandidate) {
+      return sig.status !== 'OPEN' ? (({ livePrice: _, livePnlPct: __, ...clean }) => clean)(sig) : { ...sig };
     }
 
-    // Update live fields
-    const pnlPct = +((ltp - sig.entry) / sig.entry * 100).toFixed(2);
-    return { ...sig, livePrice:+ltp.toFixed(2), livePnlPct:pnlPct };
+    const result = evaluateSignalExit(sig, live?.ltp ?? sig.entry, istDate, istTime, cfg);
+    if (!result) return sig;
+
+    if (result.status) {
+      changed = true;
+      newlyResolved.push(sig.id);
+      touchedIds.push(sig.id);
+      return { ...sig, ...result };
+    }
+    if (result.partials || result.trailSL != null || result.beActive) {
+      changed = true;
+      touchedIds.push(sig.id);
+    }
+    return { ...sig, ...result };
   });
-  return { updated, changed, newlyResolved };
+  return { updated, changed, newlyResolved, touchedIds };
 }
 
-// Persists newly-resolved signals back to GitHub, grouped by date, with SHA-conflict-safe merge.
-export async function persistResolvedSignals(gh, updated, resolvedIds, lg, onShaUpdate) {
+// Persists touched signals (fully resolved OR partial-exit/trailing-stop updated)
+// back to GitHub, grouped by date, with SHA-conflict-safe merge.
+export async function persistResolvedSignals(gh, updated, touchedIds, lg, onShaUpdate) {
   const byDate = {};
   updated.forEach(s => {
     if (!['OPEN', 'TARGET_HIT', 'SL_HIT', 'EXPIRED'].includes(s.status)) return;
     (byDate[s.date] = byDate[s.date] || []).push(s);
   });
   for (const [date, dateSigs] of Object.entries(byDate)) {
-    if (!dateSigs.some(s => resolvedIds.has(s.id))) continue;
+    if (!dateSigs.some(s => touchedIds.has(s.id))) continue;
     try {
       // Always read latest SHA from GitHub — prevents conflicts when logSignals
       // created the file but the local SHA cache doesn't know about it yet
       const { signals: latestSigs, sha: latestSha } = await ghReadDay(gh, date);
-      // Merge: apply our resolved statuses on top of the latest GitHub state
+      // Merge: apply our updated trade-management state on top of the latest GitHub state
       const merged = latestSigs.length > 0
         ? latestSigs.map(s => {
-            const resolved = dateSigs.find(u => u.id === s.id && resolvedIds.has(u.id));
-            return resolved ? { ...s, status:resolved.status, exitPrice:resolved.exitPrice, exitTime:resolved.exitTime, exitDate:resolved.exitDate, pnlPct:resolved.pnlPct } : s;
+            const touched = dateSigs.find(u => u.id === s.id && touchedIds.has(u.id));
+            if (!touched) return s;
+            return {
+              ...s,
+              status: touched.status, exitPrice: touched.exitPrice, exitTime: touched.exitTime,
+              exitDate: touched.exitDate, pnlPct: touched.pnlPct, exitReason: touched.exitReason ?? s.exitReason,
+              partials: touched.partials ?? s.partials, remainingPct: touched.remainingPct ?? s.remainingPct,
+              beActive: touched.beActive ?? s.beActive, trailSL: touched.trailSL ?? s.trailSL,
+              maxFavPrice: touched.maxFavPrice ?? s.maxFavPrice,
+            };
           })
         : dateSigs.map(s => { const { livePrice:_, livePnlPct:__, ...clean } = s; return clean; }); // strip live fields
       const newSha = await ghWriteDay(gh, merged, latestSha, date);
       if (newSha) onShaUpdate(date, newSha);
       await ghUpdateIndex(gh, date, computeDayStats(merged));
-      lg(`⚡ WS resolved — written to GitHub (${date}) SHA:${newSha?.slice(0,7)})`, 'o');
+      lg(`⚡ WS update — written to GitHub (${date}) SHA:${newSha?.slice(0,7)})`, 'o');
     } catch(e) { lg('WS write: ' + e.message, 'w'); }
   }
 }
@@ -130,7 +134,7 @@ export async function persistResolvedSignals(gh, updated, resolvedIds, lg, onSha
 // SL/Target hits — direction-aware (BUY vs SELL), unlike a naive single-direction check.
 // ctx: { gh, token, onTokenExpired, lg }
 export async function checkAllOutcomes(ctx) {
-  const { gh, token, onTokenExpired, lg } = ctx;
+  const { gh, token, cfg, onTokenExpired, lg } = ctx;
   if (!gh.token || !gh.user || !gh.repo) throw new Error('GitHub not configured.');
   if (!token) throw new Error('No Upstox token — log in first.');
 
@@ -155,26 +159,24 @@ export async function checkAllOutcomes(ctx) {
       if (s.status !== 'OPEN') return s;
       const instrK = s.instrKey || s.key; if (!instrK) return s;
       const exitTime = new Date().toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour12:false});
-
-      // Option expired without hitting SL/Target — check BEFORE quote lookup,
-      // since an expired contract often returns no live quote at all.
       const istToday = getISTDate();
-      if (s.type === 'OPTION' && s.expiry && istToday > s.expiry) {
-        const ltp = quotes[instrK]?.last_price ?? null;
-        lg(`⌛ EXPIRED: ${s.sym || s.stock} (exp ${s.expiry})${ltp != null ? ` @ ₹${ltp}` : ' · no final quote'}`, 'w');
-        changed = true; updated++;
-        return { ...s, status:'EXPIRED', exitPrice:ltp, exitTime, exitDate: istToday };
-      }
+      const ltp = quotes[instrK]?.last_price ?? null;
+      // Expiry/time-stop checks inside the evaluator fire even without a live quote
+      // (expired contracts often stop returning one) — everything else needs a real ltp.
+      if (!ltp && !(s.type === 'OPTION' && s.expiry && istToday > s.expiry)) return s;
 
-      const q = quotes[instrK]; if (!q?.last_price) return s;
-      const ltp = q.last_price;
-      // Direction-aware: SELL signals have inverted SL/Target (SL above entry, target below)
-      const isBuy  = isBullSignal(s);
-      const tgtHit = s.target > 0 && (isBuy ? ltp >= s.target : ltp <= s.target);
-      const slHit  = s.sl     > 0 && (isBuy ? ltp <= s.sl     : ltp >= s.sl);
-      if (tgtHit) { lg(`✅ TARGET HIT: ${s.sym} @ ₹${ltp}`, 'o'); changed = true; updated++; return { ...s, status:'TARGET_HIT', exitPrice:ltp, exitTime }; }
-      if (slHit)  { lg(`❌ SL HIT: ${s.sym} @ ₹${ltp}`, 'w'); changed = true; updated++; return { ...s, status:'SL_HIT',     exitPrice:ltp, exitTime }; }
-      return s;
+      const result = evaluateSignalExit(s, ltp ?? s.entry, istToday, exitTime, cfg);
+      if (!result) return s;
+
+      if (result.status) {
+        const isWin = result.status === 'TARGET_HIT';
+        const label = result.exitReason === 'EXPIRY' ? 'EXPIRED' : result.exitReason === 'TIME_STOP' ? 'TIME STOP' : result.exitReason === 'TRAIL_STOP' ? 'TRAIL STOP' : isWin ? 'TARGET HIT' : 'SL HIT';
+        lg(`${isWin?'✅':'❌'} ${label}: ${s.sym || s.stock}${result.exitPrice!=null?` @ ₹${result.exitPrice}`:''} (blended ${result.pnlPct ?? 0}%)`, isWin ? 'o' : 'w');
+        changed = true; updated++;
+        return { ...s, ...result };
+      }
+      if (result.partials || result.trailSL != null || result.beActive) { changed = true; updated++; }
+      return { ...s, ...result };
     });
     if (changed) await ghWriteDay(gh, newSigs, sha, date);
   }
