@@ -3,7 +3,8 @@ import { DEF, CFG_VERSION } from '../constants/config';
 import { localIsOpen, getMarketStatusLocal, getIST, getISTDate } from '../utils/marketTime';
 import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken } from '../services/api';
 import { interpretFIIDII } from '../services/technical';
-import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded, ghReadIndex, ghReadDay, ghWriteDay, pullAiModelFromGH, pushAiModelToGH, appendAiHistoryToGH, pullAiHistoryFromGH, isBullSignal } from '../services/github';
+import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded, ghReadIndex, ghReadDay, ghWriteDay, pullAiModelFromGH, pushAiModelToGH, appendAiHistoryToGH, pullAiHistoryFromGH } from '../services/github';
+import { evaluateSignalExit } from '../services/tradeManagement';
 import { fetchQ, resolveAccessToken } from '../services/api';
 import { trainSignalMlModels, buildModelSnapshot } from '../services/mlRanking';
 
@@ -285,24 +286,13 @@ export function AppProvider({ children }) {
           const cachedModel = (() => {
             try { return JSON.parse(localStorage.getItem('friday_ml_models') || 'null'); } catch (_) { return null; }
           })();
-          
-          // Check model staleness (warn if >7 days old)
-          if (cachedModel?.computedAt) {
-            const ageDays = (Date.now() - new Date(cachedModel.computedAt).getTime()) / (1000 * 60 * 60 * 24);
-            if (ageDays > 7) {
-              lg(`⚠️ ML model is ${Math.round(ageDays)} days old — consider retraining`, 'w');
-            }
-          }
-          
           if (cachedModel?.version) {
             activeModels = cachedModel;
             setMlModels(cachedModel);
             lg('ML ranker loaded from local cache', 'o');
-          } else if (closed.length <= 80) {
-            // Allow browser training for datasets up to 80 samples (increased from 25)
-            // This provides better model quality while keeping UI responsive
-            // Datasets >80 should use GitHub Actions retrainer for optimal performance
-            const trainedModels = trainSignalMlModels(closed.slice(-80));
+          } else if (closed.length <= 25) {
+            // Only allow a tiny fallback training pass in-browser for small datasets.
+            const trainedModels = trainSignalMlModels(closed.slice(-25));
             if (trainedModels) {
               activeModels = trainedModels;
               setMlModels(trainedModels);
@@ -315,16 +305,14 @@ export function AppProvider({ children }) {
                   return next;
                 });
               }
-              lg(`✅ ML ranker trained locally on ${closed.length} closed signals`, 'o');
+              lg('ML ranker trained locally on small sample fallback', 'o');
               if (g.token && g.user && g.repo) {
                 pushAiModelToGH(g, trainedModels).catch(() => {});
                 if (snap) appendAiHistoryToGH(g, snap).catch(() => {});
               }
-            } else {
-              lg('⚠️ ML training failed (insufficient closed signals or unbalanced data)', 'w');
             }
           } else {
-            lg(`ML ranker skipped in browser (${closed.length} signals) — use GitHub Actions for better models`, 'w');
+            lg('ML ranker skipped in browser to keep UI responsive. Use GitHub Action retrainer.', 'w');
           }
         }
 
@@ -539,46 +527,37 @@ export function AppProvider({ children }) {
           // Already resolved this session — leave as-is in file (will be written on next full check)
           if (resolvedSigIds.current.has(sigId)) return s;
 
-          // Option expired without hitting SL/Target — check this BEFORE the quote
-          // lookup below, since an expired contract often returns no live quote at all.
           const istToday = getISTDate();
-          if (s.type === 'OPTION' && s.expiry && istToday > s.expiry) {
-            const ltp = quotes[instrK]?.last_price ?? null;
-            const pnlPct = (ltp != null && s.entry > 0) ? +((ltp - s.entry) / s.entry * 100).toFixed(2) : null;
-            lg(`⌛ EXPIRED: ${s.stock || s.sym} (exp ${s.expiry})${ltp != null ? ` @ ₹${ltp}` : ' · no final quote'}`, 'w');
+          const ltp = quotes[instrK]?.last_price ?? null;
+          // Option-expiry / time-stop checks inside the evaluator fire even with no live
+          // quote at all (expired contracts often stop returning one) — but everything
+          // else needs a real ltp, so only skip out here for the price-dependent checks.
+          const isExpiryOrTimeOnly = !ltp;
+          if (isExpiryOrTimeOnly) {
+            const expiredNow = s.type === 'OPTION' && s.expiry && istToday > s.expiry;
+            if (!expiredNow) return s; // no quote and not past expiry — nothing to do
+          }
+
+          const result = evaluateSignalExit(s, ltp ?? s.entry, istToday, now, cfg);
+          if (!result) return s;
+
+          if (result.status) {
+            // Terminal close (TARGET_HIT / SL_HIT / EXPIRED)
+            const isWin = result.status === 'TARGET_HIT';
+            const label = result.exitReason === 'EXPIRY' ? '⌛ EXPIRED' : result.exitReason === 'TIME_STOP' ? '⏱ TIME STOP' : result.exitReason === 'TRAIL_STOP' ? '📈 TRAIL STOP' : isWin ? '🎯 TARGET HIT' : '❌ SL HIT';
+            lg(`${label}: ${s.stock || s.sym} @ ₹${result.exitPrice ?? '—'} (blended ${result.pnlPct ?? 0}%)`, isWin ? 'o' : 'w');
+            if (result.exitReason !== 'EXPIRY' || result.exitPrice != null) {
+              showToast(`${label.split(' ').slice(1).join(' ')}: ${s.stock || s.sym} ${result.pnlPct != null ? (result.pnlPct>=0?'+':'')+result.pnlPct+'%' : ''}`, isWin ? '#16a34a' : '#dc2626', 8000);
+            }
             resolvedSigIds.current.add(sigId);
             changed = true; totalResolved++;
-            return { ...s, status: 'EXPIRED', exitPrice: ltp, exitTime: now, exitDate: istToday, pnlPct };
+            return { ...s, ...result };
           }
 
-          const q = quotes[instrK];
-          if (!q?.last_price) return s;
-          const ltp = q.last_price;
-
-          // Direction-aware: SELL signals have inverted SL/Target (SL above entry, target below)
-          const isBuy  = isBullSignal(s);
-          const tgtHit = s.target > 0 && (isBuy ? ltp >= s.target : ltp <= s.target);
-          const slHit  = s.sl     > 0 && (isBuy ? ltp <= s.sl     : ltp >= s.sl);
-
-          if (tgtHit) {
-            const pnlPct = s.entry > 0 ? +((ltp - s.entry) / s.entry * 100).toFixed(2) : null;
-            lg(`🎯 TARGET HIT: ${s.stock || s.sym} @ ₹${ltp} (tgt ₹${s.target})`, 'o');
-            showToast(`🎯 ${s.stock || s.sym} target hit! ${pnlPct !== null ? '+' + pnlPct + '%' : ''}`, '#16a34a', 8000);
-            resolvedSigIds.current.add(sigId); // mark so we never re-check this signal
-            changed = true; totalResolved++;
-            return { ...s, status: 'TARGET_HIT', exitPrice: ltp, exitTime: now, pnlPct };
-          }
-
-          if (slHit) {
-            const pnlPct = s.entry > 0 ? +((ltp - s.entry) / s.entry * 100).toFixed(2) : null;
-            lg(`❌ SL HIT: ${s.stock || s.sym} @ ₹${ltp} (SL ₹${s.sl})`, 'w');
-            showToast(`❌ ${s.stock || s.sym} SL hit ${pnlPct !== null ? pnlPct + '%' : ''}`, '#dc2626', 8000);
-            resolvedSigIds.current.add(sigId); // mark so we never re-check this signal
-            changed = true; totalResolved++;
-            return { ...s, status: 'SL_HIT', exitPrice: ltp, exitTime: now, pnlPct };
-          }
-
-          return s; // still open, will be re-checked next cycle
+          // Non-terminal update — partial exit recorded and/or trailing stop ratcheted,
+          // still OPEN. Persist so it survives a refresh, but don't mark as resolved.
+          if (result.partials || result.trailSL != null || result.beActive) changed = true;
+          return { ...s, ...result };
         });
 
         if (changed) await ghWriteDay(g, updated, sha, date).catch(() => {});
@@ -596,7 +575,7 @@ export function AppProvider({ children }) {
     } catch (e) {
       lg('Signal monitor error: ' + e.message, 'w');
     }
-  }, [gh, token, lg, showToast]); // eslint-disable-line
+  }, [gh, token, lg, showToast, cfg]); // eslint-disable-line
 
   // ── pullGHSettings — pull settings from GitHub (same as HTML: on boot after profile fetch) ──
   const pullGHSettings = useCallback(async (ghCfg) => {
@@ -716,7 +695,7 @@ export function AppProvider({ children }) {
       clearTimeout(bootTimer);
       clearInterval(signalMonitorRef.current);
     };
-  }, [booted, gh.token, gh.user, gh.repo, marketStatus.open]); // eslint-disable-line
+  }, [booted, gh.token, gh.user, gh.repo, marketStatus.open, runSignalMonitor]); // eslint-disable-line
 
   const value = {
     // auth
