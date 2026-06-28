@@ -5,7 +5,7 @@
 import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api';
 import { getIST, sleep } from '../utils/marketTime';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config';
-import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias, applyAdaptWeights, applyCalibration } from './technical';
+import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment } from './technical';
 import { logSignals, buildOptionSignal } from './github';
 import { applyMlRanking } from './mlRanking';
 
@@ -102,16 +102,18 @@ function buildIndicatorSnapshot(p) {
 
 // Applies FII bias + adaptive weights + ML ranking to a raw scanChain pick,
 // then filters by confidence/capital thresholds. Shared by index + stock passes.
-function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalibration, cfg, maxPain = 0, spot = 0 }) {
+function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalibration, regime, cfg, maxPain = 0, spot = 0 }) {
   return picks.map(p => {
     const indSnap = buildIndicatorSnapshot(p);
     let c = applyFIIBias(p.confidence, p.action === 'BUY', fiiData);
     c = applyCalibration(c, confCalibration || null);
+    c = applyRegimeAdjustment(c, regime, cfg);
     c = applyAdaptWeights(c, adaptWeights?.option || null, indSnap);
     const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap: indSnap });
     return {
       ...p,
       confidence: Math.min(99, Math.max(1, Math.round(mlRank.confidence))),
+      regime,
       _indSnap: indSnap,
       _dte: p._dte ?? null,
       nearMaxPain: maxPain > 0 && spot > 0 && Math.abs(p.strike - maxPain) / spot < 0.01,
@@ -256,7 +258,8 @@ export async function runOptionsScan(ctx, caches, callbacks) {
     }
 
     // Apply FII bias + adaptive weights + ML ranking, then filter
-    const picksWithFII = scoreAndFilterPicks(allIdxPicks, { fiiData, adaptWeights, mlModels, confCalibration, cfg, maxPain, spot });
+    const idxRegime = classifyMarketRegime(Math.abs(richCtx.compositeScore || 0) / 3.5, vixVal);
+    const picksWithFII = scoreAndFilterPicks(allIdxPicks, { fiiData, adaptWeights, mlModels, confCalibration, regime: idxRegime, cfg, maxPain, spot });
 
     lg(`${idx.name}: ${expiriesToScan.length} expiry(s) → ${allIdxPicks.length} raw → ${picksWithFII.length} ≥${cfg.minOptConf}% | composite=${richCtx.compositeScore} pcr=${pcr}`, 'o');
     built.push({ name: idx.name, spot, spotChg, picks: picksWithFII, expiry, expiries: expiriesToScan, chain, maxPain, oiWalls, pcr, pcrTrend, ivTrend });
@@ -346,7 +349,8 @@ export async function runOptionsScan(ctx, caches, callbacks) {
           if (exp !== expiry) await sleep(300);
         }
 
-        const fPicks2 = scoreAndFilterPicks(allStkPicks, { fiiData, adaptWeights, mlModels, confCalibration, cfg, maxPain: stkMaxPain, spot });
+        const stkRegime = classifyMarketRegime(Math.abs(stkCtx.compositeScore || 0) / 3.5, vixVal);
+        const fPicks2 = scoreAndFilterPicks(allStkPicks, { fiiData, adaptWeights, mlModels, confCalibration, regime: stkRegime, cfg, maxPain: stkMaxPain, spot });
         if (fPicks2.length) { built.push({ name:inst.s, spot, spotChg, picks:fPicks2, expiry, expiries:expiriesToScan2, chain, maxPain:stkMaxPain, oiWalls:calcOIWalls(chain), pcr:pcr2, pcrTrend:stkCtx.pcrTrend, ivTrend:ivTrend2, type:'stock', fullName:inst.n }); lg(`${inst.s}: ${expiriesToScan2.length} expiry(s) → ${allStkPicks.length} raw → ${fPicks2.length} signals`, 'o'); }
       } catch(e) { lg(inst.s + ' opts: ' + e.message, 'w'); }
     }

@@ -9,7 +9,7 @@ import {
   getRec, autoSLTarget, calcEntryTrigger, detectReversal, calcMACD,
   isNearSupport, calcRSIDivergence, getSignalStrength,
   calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain,
-  applyFIIBias, applyAdaptWeights, applyCalibration, calcVolumeSurge, calcEMA, calcADX,
+  applyFIIBias, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, calcVolumeSurge, calcEMA, calcADX,
 } from './technical';
 import { applyMlRanking } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
@@ -59,10 +59,10 @@ export async function lookupInstrument(ctx, callbacks) {
   // Without this, calcConfidence below silently falls back to a neutral 50 score for
   // vixSc/pcrSc regardless of actual market regime, causing Lookup's rec to diverge
   // from Stocks/Options on days where real VIX/PCR meaningfully shift the picture.
-  let vixSc = 50, marketPcr = null;
+  let vixSc = 50, marketPcr = null, vixVal = 0;
   try {
     const vQ = await fetchQ('NSE_INDEX|India VIX', token, onTokenExpired);
-    const vixVal = vQ['NSE_INDEX|India VIX']?.last_price || 0;
+    vixVal = vQ['NSE_INDEX|India VIX']?.last_price || 0;
     if (vixVal > 0) vixSc = interpVIXSc(vixVal).sc;
   } catch (e) {}
   try {
@@ -135,6 +135,8 @@ export async function lookupInstrument(ctx, callbacks) {
       conf=Math.min(100,Math.max(0,conf+delivBoost*5));
       conf=applyFIIBias(conf, preRec==='BUY'||preRec==='STRONG BUY', null);
       conf=applyCalibration(conf, confCalibration||null);
+      const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(chgPct) / 1.0), vixVal);
+      conf=applyRegimeAdjustment(conf, stockRegime, cfg);
       const risk = calcRisk(ltp, sl, target, atr, 0);
       const pot = calcPotential(ltp, target, sl, numInds, rec);
       const reversal = detectReversal(ltp, rsi, pats, sr, 0, 1.0, chgPct > 0, chgPct, atr, q.ohlc?.high || ltp, q.ohlc?.low || ltp);
@@ -155,7 +157,7 @@ export async function lookupInstrument(ctx, callbacks) {
       const finalRec = getRec(conf, pot.base, risk, pot.rr);
       const strength = getSignalStrength(numInds, conf, reversal);
       const entry = calcEntryTrigger(ltp, q.ohlc?.high || ltp, sr, atr, finalRec, vwap, chgPct);
-      tech = { rsi, ema, macd, bb, atr, adx, sr, pats, rsiDiv, a50, a200, volOk, nearS, numInds, rec: finalRec, conf, sl, target, targets, pot, risk, strength, vwap, entry, reversal, avgVol: volObj?.avgVol || 0, volRatio: volObj?.ratio || 1, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj };
+      tech = { rsi, ema, macd, bb, atr, adx, sr, pats, rsiDiv, a50, a200, volOk, nearS, numInds, rec: finalRec, conf, sl, target, targets, pot, risk, strength, vwap, entry, reversal, avgVol: volObj?.avgVol || 0, volRatio: volObj?.ratio || 1, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj, regime: stockRegime };
     }
   } catch (e) {
     lg('Daily candles: ' + e.message, 'w');
@@ -236,6 +238,7 @@ export async function lookupInstrument(ctx, callbacks) {
         const step = inst.step || (ltp < 200 ? 5 : ltp < 500 ? 10 : ltp < 2000 ? 20 : ltp < 5000 ? 50 : 100);
         const atm = Math.round(ltp / step) * step;
         const ctxForChain = marketCtx || computeCtxFromCandles([], ltp, chgPct, 0, null);
+        const optRegime = classifyMarketRegime(Math.abs(ctxForChain?.compositeScore || 0) / 3.5, vixVal);
         const picks = scanChain(chain, atm, ltp, s, expiry, inst.lot, chgPct > 0, 0, maxPain, pcr, ctxForChain, cfg);
         const filteredPicks = picks
           .map((p) => {
@@ -248,9 +251,10 @@ export async function lookupInstrument(ctx, callbacks) {
             };
             let c = applyFIIBias(p.confidence, p.action === 'BUY', fiiData);
             c = applyCalibration(c, confCalibration || null);
+            c = applyRegimeAdjustment(c, optRegime, cfg);
             c = applyAdaptWeights(c, adaptWeights?.option || null, _indSnap);
             const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap });
-            return { ...p, confidence: mlRank.confidence, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj };
+            return { ...p, regime: optRegime, confidence: mlRank.confidence, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj };
           })
           .filter((p) => p.confidence >= cfg.minOptConf);
 

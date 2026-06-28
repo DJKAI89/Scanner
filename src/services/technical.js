@@ -402,6 +402,38 @@ export function calcNR7(candles) {
   return { isNR7: todayR === Math.min(...ranges), isNR4: todayR === Math.min(...ranges.slice(0, 4)), range: +todayR.toFixed(2), avgRange: +(ranges.reduce((s,v)=>s+v,0)/7).toFixed(2) };
 }
 
+// ── Market regime detection ───────────────────────────────────
+// Classifies the current market into a regime bucket from a normalized
+// trend-strength signal (0 = no clear direction, 1 = strongly trending) and
+// VIX, then suppresses confidence in choppy/high-vol conditions — where false
+// breakouts cluster — and gives a small boost to calm trending conditions.
+// normTrendStrength should already be 0-1 by the time it reaches here; each
+// caller normalizes its own best-available trend signal (compositeScore where
+// computed, day-change % as a lighter proxy where it isn't).
+export function classifyMarketRegime(normTrendStrength, vix) {
+  const ts = Math.max(0, Math.min(1, normTrendStrength || 0));
+  const highVol = (vix || 0) >= 22;
+  const lowVol  = (vix || 0) > 0 && vix <= 13;
+  const choppy   = ts < 0.3;
+  const trending = ts >= 0.6;
+  if (choppy && highVol) return 'CHOPPY_HIGH_VOL';
+  if (choppy)             return 'CHOPPY';
+  if (trending && lowVol) return 'TRENDING_CALM';
+  if (trending)            return 'TRENDING';
+  return 'NEUTRAL';
+}
+
+export function applyRegimeAdjustment(conf, regime, cfg = {}) {
+  const adj = {
+    CHOPPY_HIGH_VOL: cfg.regimeChoppyHighVolPenalty ?? -18,
+    CHOPPY:          cfg.regimeChoppyPenalty ?? -8,
+    TRENDING_CALM:   cfg.regimeTrendingBonus ?? 4,
+    TRENDING:        Math.round((cfg.regimeTrendingBonus ?? 4) * 0.5),
+    NEUTRAL: 0,
+  }[regime] ?? 0;
+  return Math.min(99, Math.max(1, Math.round((conf || 0) + adj)));
+}
+
 export function calcRelativeStrength(closes, niftyCloses) {
   if (!closes || !niftyCloses || closes.length < 6 || niftyCloses.length < 6) return null;
   const n = Math.min(closes.length, niftyCloses.length, 20);

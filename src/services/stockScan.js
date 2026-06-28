@@ -13,7 +13,7 @@ import {
   countIndicatorsEx, getRec, autoSLTarget, calcEntryTrigger, detectReversal,
   calcMACD, isNearSupport, calcRSIDivergence, getSector, calcConfidence, calcVWAP,
   calcVWAPBands, applyFIIBias, applyCalibration, applyAdaptWeights, calcEMA, calcIVPercentile,
-  applyIntradayBoost,
+  applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment,
 } from './technical';
 import { applyMlRanking } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
@@ -300,6 +300,8 @@ export async function runPicksScan(ctx, callbacks) {
     conf=Math.min(100,Math.max(0,conf+delivBoost*5));
     conf=applyFIIBias(conf,preRec==='BUY'||preRec==='STRONG BUY',null);
     conf=applyCalibration(conf, confCalibration||null);
+    const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(nChgPct) / 1.0), vixVal);
+    conf=applyRegimeAdjustment(conf, stockRegime, cfg);
     // Layer 3: per-indicator learned adjustment from past signal outcomes
     const reversal = detectReversal(ltp,t.rsi,patterns,sr,vixVal,pcr,nBull,chgPct,t.atr||0,high,low);
     const _indSnap = {
@@ -357,7 +359,7 @@ export async function runPicksScan(ctx, callbacks) {
       macd, macdBull, bb, adx, rsiDiv,
       a50, a200, nearSupp:nearSuppF, patterns,
       vwap, aboveVWAP, vwapType:'daily', vwapBands,
-      vol, avgVol20, high, low, delivPct,
+      vol, avgVol20, high, low, delivPct, regime: stockRegime,
       _indSnap,
       mlProbability: mlRank.mlProbability,
       mlAdj: mlRank.mlAdj,
@@ -503,7 +505,7 @@ export function interpVIXSc(vix) {
 // ctx: { token, stocks, cfg, scanStats, onTokenExpired, lg, marketStatus }
 // callbacks: { setBoProgress, setBoCards }
 export async function runBreakoutScan(ctx, callbacks) {
-  const { token, stocks, onTokenExpired, lg, marketStatus, scanStats } = ctx;
+  const { token, stocks, cfg, onTokenExpired, lg, marketStatus, scanStats } = ctx;
   const { setBoProgress, setBoCards } = callbacks;
 
   if (!stocks?.length) {
@@ -515,6 +517,13 @@ export async function runBreakoutScan(ctx, callbacks) {
   const from52=new Date(Date.now()-375*86400000).toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
   let niftyCloses=[];
   try { niftyCloses=(await fetchCandles('NSE_INDEX|Nifty 50',from52,today,'day',token,onTokenExpired)).map(c=>+c[4]).reverse(); } catch(e){}
+  let vixVal = 0;
+  try { vixVal = (await fetchQ('NSE_INDEX|India VIX', token, onTokenExpired))['NSE_INDEX|India VIX']?.last_price || 0; } catch(e){}
+  // Market regime — 5-day Nifty trend strength + VIX. Reuses niftyCloses already
+  // fetched above for relative-strength, so this costs only the one extra VIX quote.
+  const niftyTrendPct = niftyCloses.length >= 6
+    ? Math.abs((niftyCloses.at(-1) - niftyCloses.at(-6)) / niftyCloses.at(-6) * 100) : 0;
+  const marketRegime = classifyMarketRegime(Math.min(1, niftyTrendPct / 2.5), vixVal);
   const scanList=stocks.filter(s=>s.scan!==false);
   // WebSocket quotes — same as picks scan
   setBoProgress('Fetching quotes via WebSocket...');
@@ -592,7 +601,8 @@ export async function runBreakoutScan(ctx, callbacks) {
       trade, atr:t.atr, isBull, phase, sectorScore, sec:item.sec||item.s||'NSE',
       ivPct, primaryType,
       rec:isBull?(score>=7?'STRONG BUY':'BUY'):(score>=7?'SELL':'WATCH'),
-      conf:Math.min(95,score*10), sl:trade.sl, target:trade.target,
+      conf:applyRegimeAdjustment(Math.min(95,score*10), marketRegime, cfg), sl:trade.sl, target:trade.target,
+      regime: marketRegime,
       pot:{cons:trade.sl,mod:trade.target,agg:trade.target,rr:trade.rr,wr:0,base:0,adj:0,ev:0},
       numInds:score, risk:50, rsi:null, high:q.ohlc?.high||ltp, low:q.ohlc?.low||ltp,
       rawVol:boVol, avgVol20:0, macd:{}, rsiDiv:null, patterns:{},
