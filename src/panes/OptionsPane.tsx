@@ -1,0 +1,437 @@
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useApp } from '../context/AppContext';
+import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
+import { resolveAccessToken } from '../services/api';
+import { fmt, fmtC, interpVIX } from '../utils/formatters';
+import { getIST } from '../utils/marketTime';
+import { INDEX_OPTS, isWeeklyExpiryDay } from '../constants/config';
+import { useMarketFeed } from '../hooks/useMarketFeed';
+import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote } from '../components/cardKit';
+import { runOptionsScan, getOptionKey, withLiveOI, calcStructure, VIX_KEY } from '../services/optionScan';
+
+const OPT_FILTERS = [
+  { id:'all',label:'All' },{ id:'nifty',label:'Nifty' },{ id:'banknifty',label:'BankNifty' },
+  { id:'sensex',label:'Sensex' },{ id:'finnifty',label:'FinNifty' },{ id:'stocks',label:'📊 Stocks' },
+  { id:'buy',label:'📈 BUY' },{ id:'sell',label:'📉 SELL' },
+  { id:'aligned',label:'✅ With-Trend' },{ id:'counter',label:'⚠ Counter-Trend' },
+];
+
+function IndexLiveCard({ group, live, ctx }) {
+  const spot = live?.ltp || group.spot || 0;
+  const cp = live?.cp || (group.spotChg != null ? group.spot / (1 + group.spotChg / 100) : group.spot) || spot;
+  const pts = spot - cp;
+  const pct = cp > 0 ? (pts / cp) * 100 : group.spotChg || 0;
+  const positive = pts >= 0;
+  return (
+    <div style={{ background:'#fff', border:'1px solid #dbe3ee', borderRadius:8, padding:'11px 13px', boxShadow:'0 1px 3px rgba(15,23,42,.06)' }}>
+      <div style={{ fontSize:9, color:'#94a3b8', letterSpacing:.7, marginBottom:5 }}>{group.name} SPOT · LIVE</div>
+      <div style={{ fontSize:20, lineHeight:1, fontWeight:850, color:positive ? '#16a34a' : '#dc2626' }}>₹{fmt(spot, 0)}</div>
+      <div style={{ fontSize:10, color:positive ? '#16a34a' : '#dc2626', marginTop:5 }}>{positive ? '+' : ''}{pts.toFixed(2)} pts</div>
+      <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center', fontSize:9, marginTop:7 }}>
+        <span>PCR <b>{group.pcr?.toFixed(2) || '—'}</b></span>
+        <span style={{ color:positive ? '#16a34a' : '#dc2626' }}>{fmtC(pct)}</span>
+        {live && <span style={{ color:'#16a34a', fontWeight:700 }}>LIVE</span>}
+      </div>
+      <div style={{ fontSize:9, color:'#64748b', marginTop:4 }}>
+        🎯₹{fmt(group.maxPain || 0, 0)} · 📉₹{fmt(group.oiWalls?.callWall || 0, 0)} · 📈₹{fmt(group.oiWalls?.putWall || 0, 0)}
+      </div>
+      <div style={{ fontSize:9, color:ctx?.neutral ? '#d97706' : ctx?.bullish ? '#16a34a' : '#dc2626', marginTop:4, fontWeight:700 }}>
+        {ctx?.neutral ? 'Neutral' : ctx?.bullish ? 'With-trend' : 'Weak trend'}  · WS
+      </div>
+    </div>
+  );
+}
+
+function OptionCard({ pick, cfg: cardCfg }) {
+  const isBuy   = pick.action === 'BUY';
+  const dir     = isBuy ? 'bull' : pick.action === 'SELL' ? 'bear' : 'neutral';
+  const dc      = Math.abs(pick.delta || 0) >= 0.5 ? '#16a34a' : Math.abs(pick.delta || 0) >= 0.3 ? '#d97706' : '#dc2626';
+  const ivc     = (pick.iv || 0) >= 35 ? '#dc2626' : (pick.iv || 0) >= 20 ? '#d97706' : '#16a34a';
+  const minConf = cardCfg?.minOptConf || 65;
+  const slPct   = pick.entry > 0 ? ((pick.entry - pick.sl) / pick.entry * 100).toFixed(2) : 0;
+  const tgtPct  = pick.entry > 0 ? ((pick.tgt - pick.entry) / pick.entry * 100).toFixed(2) : 0;
+  const vix_    = pick.vix || 15;
+  const ivRatio = pick.iv > 0 && vix_ > 0 ? +(pick.iv / vix_).toFixed(2) : null;
+  const ivCheap = ivRatio != null && ivRatio < 0.80;
+  const ivRich  = ivRatio != null && ivRatio > 1.40;
+  const isExpiry = isWeeklyExpiryDay();
+  const isOpening = (() => { const d = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'})); const m = d.getHours()*60+d.getMinutes(); return m>=555&&m<=585; })();
+  const portSz = cardCfg?.portSize || 500000, riskPct2 = cardCfg?.riskPct || 2;
+  const maxRisk = portSz * riskPct2 / 100;
+  const lossPerLot = pick.maxLoss || 0;
+  const recLots = lossPerLot > 0 ? Math.max(1, Math.floor(maxRisk / lossPerLot)) : 0;
+  const recCapital = recLots > 0 ? recLots * (pick.entry || 0) * (pick.lot || 1) : 0;
+  const sizeColor = recLots <= 1 ? '#92400e' : recLots >= 3 ? '#15803d' : '#1d4ed8';
+  const sizeBg    = recLots <= 1 ? '#fffbeb' : recLots >= 3 ? '#f0fdf4' : '#eff6ff';
+  const delta_ = Math.abs(pick.delta || 0.4), theta_ = Math.abs(pick.theta || 0);
+  const spot_  = pick.spot || 0;
+  const isCE_  = pick.type === 'CE';
+  const beSpot = spot_ > 0 ? (isCE_ ? pick.strike + (pick.entry||0) : pick.strike - (pick.entry||0)) : 0;
+  const bePct  = spot_ > 0 ? ((beSpot - spot_) / spot_ * 100).toFixed(2) : '?';
+  const oiMap  = { LONG_BUILD:{txt:'📈 Long Build-up',tone:'green'}, SHORT_COVER:{txt:'↩ Short Covering',tone:'green'}, SHORT_BUILD:{txt:'📉 Short Build-up',tone:'red'}, LONG_UNWIND:{txt:'↪ Long Unwinding',tone:'red'} };
+  const ivEnvMap = { EXPANDING:{txt:'🔥 IV Expanding',tone:'amber'}, RISING:{txt:'↑ IV Rising',tone:'amber'}, CONTRACTING:{txt:'❄ IV Contracting',tone:'blue'}, FALLING:{txt:'↓ IV Falling',tone:'blue'} };
+  const pzoneTone = pick.priceZone === 'abovePDH' || pick.priceZone === 'nearPDH' ? 'green' : pick.priceZone === 'belowPDL' || pick.priceZone === 'nearPDL' ? 'red' : 'amber';
+  const pzoneLabel = pick.priceZone === 'abovePDH' ? `📈 Above PDH ₹${pick.pdh||''} — breakout zone (+10 conf)` : pick.priceZone === 'nearPDH' ? `📈 Near PDH ₹${pick.pdh||''} — approaching breakout (+5 conf)` : pick.priceZone === 'belowPDL' ? `📉 Below PDL ₹${pick.pdl||''} — breakdown zone (+10 conf)` : pick.priceZone === 'nearPDL' ? `📉 Near PDL ₹${pick.pdl||''} — approaching breakdown (+5 conf)` : `⚠ Mid-range (PDH ₹${pick.pdh||'?'} / PDL ₹${pick.pdl||'?'}) — caution (-18 conf)`;
+
+  const scenarios = [-2,-1,0,1,2].map(pct => {
+    const dSpot = spot_ * pct / 100, dPrem = delta_ * dSpot * (isCE_ ? 1 : -1);
+    const newPrem = Math.max(0, (pick.entry||0) + dPrem), pnl = newPrem - (pick.entry||0);
+    return { pct, newPrem:+newPrem.toFixed(2), pnl:+pnl.toFixed(2), pnlPct:pick.entry>0?(pnl/pick.entry*100).toFixed(0):0 };
+  });
+
+  // ── Unified signal tags ──
+  const tags = [];
+  const regimeMap = {
+    CHOPPY_HIGH_VOL: { txt: '🌊 CHOPPY + HIGH VIX', tone: 'red' },
+    CHOPPY:          { txt: '🌊 CHOPPY', tone: 'amber' },
+    TRENDING_CALM:   { txt: '📈 CALM TREND', tone: 'green' },
+    TRENDING:        { txt: '📈 TRENDING', tone: 'green' },
+  };
+  if (pick.regime && regimeMap[pick.regime]) tags.push({ label: regimeMap[pick.regime].txt, tone: regimeMap[pick.regime].tone });
+  if (!pick.trendAligned) tags.push({ label: `⚠ AGAINST TREND (${pick.trendDir})`, tone: 'amber' });
+  if (pick.atm) tags.push({ label: 'ATM', tone: 'blue' });
+  if (pick.emaCross==='bullish_cross'&&pick.type==='CE') tags.push({ label: `📶 EMA CROSS ↑ ${(pick.emaCrossCandles||0)<=1?'FRESH':pick.emaCrossCandles+'c ago'}`, tone:'green' });
+  if (pick.emaCross==='bearish_cross'&&pick.type==='PE') tags.push({ label: `📶 EMA CROSS ↓ ${(pick.emaCrossCandles||0)<=1?'FRESH':pick.emaCrossCandles+'c ago'}`, tone:'red' });
+  if (!pick.emaCross&&pick.emaTrendBull===true&&pick.type==='CE') tags.push({ label:'📶 EMA Bull', tone:'green' });
+  if (!pick.emaCross&&pick.emaTrendBull===false&&pick.type==='PE') tags.push({ label:'📶 EMA Bear', tone:'red' });
+  if ((pick.volRatio||0)>=2.0) tags.push({ label:`📊 VOL ${pick.volRatio}× surge`, tone:'blue' });
+  else if ((pick.volRatio||0)>=1.5) tags.push({ label:`📊 VOL ${pick.volRatio}× avg`, tone:'blue' });
+  if (pick.momentumFresh) tags.push({ label:'⚡ FRESH momentum', tone:'amber' });
+  if (pick.priceZone) tags.push({ label: pzoneLabel, tone: pzoneTone });
+  if (pick.oiBuildType && pick.oiBuildType!=='NEUTRAL' && oiMap[pick.oiBuildType]) {
+    const b = oiMap[pick.oiBuildType];
+    tags.push({ label: `${b.txt}${(pick.oiBuildBonus||0)!==0?' '+(pick.oiBuildBonus>0?'+':'')+pick.oiBuildBonus+' conf':''}`, tone: b.tone });
+  }
+  if (pick.ivEnv && ivEnvMap[pick.ivEnv]) tags.push({ label: ivEnvMap[pick.ivEnv].txt, tone: ivEnvMap[pick.ivEnv].tone });
+  if (isExpiry) tags.push({ label: '⚡ EXPIRY DAY', tone: 'amber' });
+  if (isOpening) tags.push({ label: '⏰ OPENING HOUR +5 conf', tone: 'green' });
+  (pick.signals||[]).forEach(s => tags.push({ label: s.l, tone: 'green' }));
+
+  return (
+    <AccentCard dir={dir}>
+      <CardHeader
+        rank={null}
+        symbol={`${pick.und} ${pick.strike} ${pick.type}`}
+        sector={pick.type==='CE'?'📈 Call':'📉 Put'}
+        name={`Lot ${pick.lot} · Spot ₹${fmt(pick.spot,0)} · Exp ${pick.expiry}`}
+        ltp={fmt(pick.entry||0)}
+        chgPct={null}
+        rec={pick.action}
+        dir={dir}
+        rightExtra={
+          <div style={{ fontSize: 10, fontWeight: 700, color: pick.confidence>=minConf?'#16a34a':pick.confidence>=minConf-15?'#d97706':'#dc2626', marginTop: 2 }}>
+            {pick.confidence}% conf
+          </div>
+        }
+      />
+
+      {/* Capital required */}
+      <div style={{background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:9,padding:'8px 10px',marginBottom:9,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <div>
+          <div style={{fontSize:7.5,color:'#64748b',marginBottom:2}}>CAPITAL REQUIRED</div>
+          <div style={{fontSize:15,fontWeight:800,color:'#0f172a'}}>₹{fmt(pick.amtRequired||0,0)}</div>
+          <div style={{fontSize:9,color:'#64748b'}}>{pick.lot} qty × ₹{fmt(pick.entry)} premium</div>
+        </div>
+        <div style={{textAlign:'right'}}>
+          <div style={{fontSize:7.5,color:'#64748b',marginBottom:2}}>MAX PROFIT / LOSS</div>
+          <div style={{fontSize:12.5,fontWeight:700,color:'#16a34a'}}>+₹{fmt(pick.maxProfit||0,0)}</div>
+          <div style={{fontSize:9,color:'#dc2626'}}>−₹{fmt(Math.abs(pick.maxLoss||0),0)}</div>
+        </div>
+      </div>
+
+      <LevelsStrip
+        entry={fmt(pick.entry||0)}
+        sl={fmt(pick.sl||0)}
+        target={fmt(pick.tgt||0)}
+        entrySub="LTP"
+        slSub={`${pick.action==='BUY'?'-':'+'}${slPct}%`}
+        tgtSub={`${pick.action==='BUY'?'+':'-'}${tgtPct}% · R:R ${(pick.rr||0).toFixed?pick.rr.toFixed(1):pick.rr}`}
+      />
+      {pick.slTgtMethod && <div style={{fontSize:8.5,color:'#94a3b8',marginTop:-4,marginBottom:9}}>📐 {pick.slTgtMethod}</div>}
+
+      <SignalTags tags={tags} />
+
+      <ProgressStat label="Confidence" pct={pick.confidence||0} color={pick.confidence>=minConf?'#16a34a':pick.confidence>=minConf-15?'#d97706':'#dc2626'} valueLabel={`${pick.confidence}%`} />
+
+      {/* Greeks */}
+      <MetricGrid cols={4}>
+        <MetricMini label="DELTA Δ" value={(pick.delta||0).toFixed(2)} color={dc} />
+        <MetricMini label="IV %" value={(pick.iv||0).toFixed(1)} color={ivc} sub={ivCheap?'💡 Cheap':ivRich?'🔥 Rich':null} />
+        <MetricMini label="THETA Θ" value={(pick.theta||0).toFixed(2)} color="#dc2626" />
+        <MetricMini label="OI CHG" value={`${(pick.oiChg||0).toFixed(0)}%`} color={(pick.oiChg||0)>=0?'#16a34a':'#dc2626'} />
+      </MetricGrid>
+      <MetricGrid cols={2}>
+        <MetricMini label="Open Interest" value={(pick.oi||0).toLocaleString('en-IN')} color="#374151" sub={(pick.oiChg||0)>10?'Buildup':(pick.oiChg||0)<-10?'Unwinding':'Stable'} />
+        <MetricMini label="Signal Score" value={`${pick.score||0}/9`} color="#d97706" sub={`${(pick.signals||[]).length} triggers`} />
+      </MetricGrid>
+
+      {/* Position sizing */}
+      {recLots > 0 && (
+        <div style={{background:sizeBg,border:'1px solid #e2e8f0',borderRadius:9,padding:'8px 10px',marginBottom:9}}>
+          <div style={{fontSize:8,color:'#64748b',fontWeight:700,marginBottom:4}}>💰 POSITION SIZING (₹{(portSz/100000).toFixed(1)}L · {riskPct2}% risk = ₹{fmt(maxRisk,0)} max)</div>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div><span style={{fontSize:17,fontWeight:800,color:sizeColor}}>{recLots} lot{recLots>1?'s':''}</span><span style={{fontSize:9,color:'#64748b',marginLeft:6}}>recommended</span></div>
+            <div style={{textAlign:'right',fontSize:9,color:'#64748b'}}>Capital: ₹{fmt(recCapital,0)}<br/>Max loss: ₹{fmt(recLots*lossPerLot,0)}</div>
+          </div>
+          {recLots>3&&<div style={{fontSize:8,color:'#64748b',marginTop:3}}>⚠ Consider max {Math.min(recLots,3)} lots to diversify</div>}
+        </div>
+      )}
+
+      {/* Payoff calculator */}
+      {spot_ > 0 && (pick.entry||0) > 0 && (
+        <div style={{background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:9,padding:'8px 10px',marginBottom:9}}>
+          <div style={{fontSize:8,color:'#64748b',fontWeight:700,marginBottom:6}}>📊 PAYOFF CALCULATOR (delta approx)</div>
+          {scenarios.map(s=>(
+            <div key={s.pct} style={{display:'flex',justifyContent:'space-between',padding:'3px 6px',borderRadius:5,background:s.pnl>0?'#f0fdf4':s.pnl<0?'#fef2f2':'#f8fafc'}}>
+              <span style={{fontSize:9,color:'#374151',fontWeight:600}}>{s.pct>0?'+':''}{s.pct}% (₹{fmt(spot_*(1+s.pct/100),0)})</span>
+              <span style={{fontSize:9,fontWeight:700,color:s.pnl>0?'#16a34a':s.pnl<0?'#dc2626':'#64748b'}}>₹{fmt(s.newPrem)} {s.pnlPct!=='0'?`(${s.pnlPct>0?'+':''}${s.pnlPct}%)`:''}</span>
+            </div>
+          ))}
+          <div style={{display:'flex',gap:6,marginTop:6,paddingTop:6,borderTop:'1px solid #e2e8f0'}}>
+            <div style={{flex:1,textAlign:'center'}}>
+              <div style={{fontSize:7,color:'#64748b'}}>BREAK-EVEN</div>
+              <div style={{fontSize:10,fontWeight:700,color:'#374151'}}>₹{fmt(beSpot,0)}</div>
+              <div style={{fontSize:8,color:parseFloat(bePct)>0?'#dc2626':'#16a34a'}}>{parseFloat(bePct)>0?'+':''}{bePct}% move needed</div>
+            </div>
+            <div style={{flex:1,textAlign:'center'}}>
+              <div style={{fontSize:7,color:'#64748b'}}>THETA DECAY</div>
+              <div style={{fontSize:9,color:'#64748b'}}>1d: <b>₹{Math.max(0,(pick.entry||0)-theta_).toFixed(2)}</b> · 3d: <b>₹{Math.max(0,(pick.entry||0)-theta_*3).toFixed(2)}</b></div>
+              <div style={{fontSize:7,color:'#dc2626'}}>-₹{theta_.toFixed(2)}/day</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <FooterNote>
+        {pick.type==='CE'?'📈 Call':'📉 Put'} on {pick.und} · Strike {pick.strike}. Capital ₹{fmt(pick.amtRequired||0,0)} for {pick.lot} qty. Max profit ₹{fmt(pick.maxProfit||0,0)} if target hit.
+      </FooterNote>
+    </AccentCard>
+  );
+}
+
+
+export default function OptionsPane() {
+  const {
+    token, cfg, marketStatus, lg, onTokenExpired, updateBadge, fiiInterp, fiiData, gh, adaptWeights, mlModels, confCalibration,
+    activeTab, setScanning, setStatusDot, setStatusTxt, stocks,
+  } = useApp();
+  const accessToken = resolveAccessToken(token);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState('');
+  const [groups, setGroups]     = useState([]);
+  const [vix, setVix]           = useState(0);
+  const [filter, setFilter]     = useState('all');
+  const [progress, setProgress] = useState('');
+  const [updTime, setUpdTime]   = useState('');
+  const [optionsScanId, setOptionsScanId] = useState(0);
+  const [marketCtxMap, setMarketCtxMap] = useState({});
+  const loadingRef = useRef(false);
+  const prevAvgIVCache = useRef({}), prevPCRCache = useRef({});
+  const liveKeys = useMemo(() => [...INDEX_OPTS.map((idx) => idx.key), VIX_KEY], []);
+  const { lastPrices: liveIndexPrices } = useMarketFeed(
+    accessToken, liveKeys, liveKeys.length > 0, { pollFallback: true }
+  );
+  const optionLiveKeys = useMemo(() => {
+    const keys = [];
+    for (const g of groups) {
+      for (const row of g.chain || []) {
+        const callKey = getOptionKey(row.call_options);
+        const putKey = getOptionKey(row.put_options);
+        if (callKey) keys.push(callKey);
+        if (putKey) keys.push(putKey);
+      }
+    }
+    return [...new Set(keys)].slice(0, 1200);
+  }, [groups]);
+  const { lastPrices: liveOptionPrices } = useMarketFeed(
+    accessToken, optionLiveKeys, optionLiveKeys.length > 0, { pollFallback: false, mode: 'full' }
+  );
+  const liveGroups = useMemo(() => groups.map((g) => {
+    if (!g.chain?.length || Object.keys(liveOptionPrices).length === 0) return g;
+    const chain = withLiveOI(g.chain, liveOptionPrices);
+    return { ...g, chain, ...calcStructure(chain) };
+  }), [groups, liveOptionPrices]);
+
+  useEffect(() => { if (accessToken && marketStatus.open) loadOptions(); }, [accessToken, marketStatus.open]); // eslint-disable-line
+  useEffect(() => {
+    const onScan = () => {
+      if (activeTab === 'options') loadOptions(true);
+    };
+    document.addEventListener('friday:scan', onScan);
+    return () => document.removeEventListener('friday:scan', onScan);
+  }, [activeTab, accessToken]); // eslint-disable-line
+  useEffect(() => {
+    const liveVix = liveIndexPrices[VIX_KEY]?.ltp;
+    if (liveVix > 0) setVix(liveVix);
+    if (Object.keys(liveIndexPrices).length > 0) {
+      setUpdTime('Live: ' + getIST());
+    }
+  }, [liveIndexPrices]);
+
+  // ── OPTIONS SCAN — thin wrapper around services/optionScan.runOptionsScan ──
+  async function loadOptions() {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    setScanning(true); setStatusDot('scan'); setStatusTxt('Scanning options...');
+    setLoading(true); setError('');
+    setGroups([]);
+    setUpdTime('');
+    try {
+      const ctx = { accessToken, cfg, stocks, fiiData, adaptWeights, mlModels, confCalibration, gh, onTokenExpired, lg };
+      const caches = { prevAvgIVCache, prevPCRCache };
+      const callbacks = { setProgress, setMarketCtxMap, setVix };
+      const { groups: nextGroups, scanId, withTrend } = await runOptionsScan(ctx, caches, callbacks);
+      setOptionsScanId(scanId);
+      setGroups(nextGroups);
+      updateBadge('options', withTrend > 0 ? withTrend + ' signals' : '—');
+      setUpdTime('Updated: ' + getIST());
+      setStatusDot('live'); setStatusTxt('Live');
+    } catch (e) {
+      setError(e.message); setStatusDot('err'); setStatusTxt('Error'); lg('Options error: ' + e.message, 'e');
+    } finally { setLoading(false); setScanning(false); loadingRef.current = false; }
+  }
+
+  const { txt: vixTxt } = interpVIX(vix);
+  const filtered = useMemo(() => liveGroups.map(g => ({
+    ...g,
+    picks: g.picks.filter(p => {
+      // Always re-apply capital + confidence from current cfg (reactive to settings changes)
+      if (cfg.maxOptCapital > 0 && p.amtRequired > cfg.maxOptCapital) return false;
+      if (p.confidence < (cfg.minOptConf || 65)) return false;
+      // Tab filter
+      if (filter === 'nifty')     return g.name === 'NIFTY';
+      if (filter === 'banknifty') return g.name === 'BANKNIFTY';
+      if (filter === 'sensex')    return g.name === 'SENSEX';
+      if (filter === 'finnifty')  return g.name === 'FINNIFTY';
+      if (filter === 'stocks')    return g.type === 'stock';
+      if (filter === 'buy')       return p.action === 'BUY';
+      if (filter === 'sell')      return p.action === 'SELL';
+      if (filter === 'aligned')   return p.trendAligned;
+      if (filter === 'counter')   return !p.trendAligned;
+      return true; // 'all'
+    }),
+  })).filter(g => g.picks.length > 0), [liveGroups, filter, cfg.maxOptCapital, cfg.minOptConf]);
+
+  return (
+    <div>
+      {!marketStatus.open && <MarketClosedBanner msg={marketStatus.msg || '🔔 NSE Market Closed'} />}
+      {error && <ErrorBanner title="⚠ Options Error" message={error} onRetry={() => loadOptions(true)} />}
+      {loading ? (
+        <Spinner label="Scanning F&O options..." progress={progress}
+          sub="5-min intraday · EMA 9/21 · Composite Score · PCR trend · IV trend · Max Pain · OI Walls · Smart SL/Target" />
+      ) : (
+        <div>
+          {updTime && <LastUpdated time={updTime} />}
+
+          {/* FII/DII bias */}
+          {fiiInterp && (
+            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:9, padding:'10px 14px', marginBottom:12 }}>
+              <div style={{ fontSize:9, color:'#94a3b8', marginBottom:3 }}>FII/DII BIAS</div>
+              <div style={{ fontSize:13, fontWeight:800, color:fiiInterp.color }}>{fiiInterp.label}</div>
+              <div style={{ fontSize:10, color:'#64748b', marginTop:2 }}>{fiiInterp.detail}</div>
+            </div>
+          )}
+
+          {/* Composite momentum per index */}
+          {Object.keys(marketCtxMap).length > 0 && (
+            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:9, padding:'10px 14px', marginBottom:12 }}>
+              <div style={{ fontSize:9, color:'#94a3b8', marginBottom:6 }}>INTRADAY COMPOSITE MOMENTUM</div>
+              <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+                {Object.entries(marketCtxMap).map(([name, ctx]) => (
+                  <div key={name} style={{ fontSize:10, fontWeight:700, color: ctx.neutral ? '#d97706' : ctx.bullish ? '#16a34a' : '#dc2626', background: ctx.neutral ? '#fffbeb' : ctx.bullish ? '#f0fdf4' : '#fef2f2', border:`1px solid ${ctx.neutral?'#fde68a':ctx.bullish?'#bbf7d0':'#fecaca'}`, borderRadius:6, padding:'3px 8px' }}>
+                    {name}: {ctx.neutral ? '↔ NEUTRAL' : ctx.bullish ? '📈 BULL' : '📉 BEAR'} ({ctx.compositeScore > 0 ? '+' : ''}{ctx.compositeScore})
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Index stats */}
+          <div className="opt-idx-grid">
+            {liveGroups.map(g => {
+              const idx = INDEX_OPTS.find((item) => item.name === g.name);
+              return (
+                <IndexLiveCard
+                  key={g.name}
+                  group={g}
+                  live={idx ? liveIndexPrices[idx.key] : null}
+                  ctx={marketCtxMap[g.name]}
+                />
+              );
+            })}
+            {vix > 0 && (
+              <div style={{ background:'#fff', border:'1px solid #dbe3ee', borderRadius:8, padding:'11px 13px', boxShadow:'0 1px 3px rgba(15,23,42,.06)' }}>
+                <div style={{ fontSize:9, color:'#94a3b8', letterSpacing:.7, marginBottom:5 }}>INDIA VIX · LIVE</div>
+                <div style={{ fontSize:20, lineHeight:1, fontWeight:850, color:vix < 16 ? '#16a34a' : vix > 22 ? '#dc2626' : '#d97706' }}>{vix.toFixed(2)}</div>
+                <div style={{ fontSize:10, color:'#64748b', marginTop:6 }}>{vixTxt}</div>
+                {liveIndexPrices[VIX_KEY] && <div style={{ fontSize:9, color:'#16a34a', fontWeight:700, marginTop:7 }}>LIVE</div>}
+              </div>
+            )}
+          </div>
+
+          <div className="stats-g" style={{ display:'none' }}>
+            {groups.map(g => (
+              <StatCard key={g.name} label={g.name} value={`₹${fmt(g.spot)}`} sub={fmtC(g.spotChg)} valClass={g.spotChg >= 0 ? 'up' : 'dn'} />
+            ))}
+            {vix > 0 && <StatCard label="INDIA VIX" value={vix.toFixed(2)} sub={vixTxt} valClass={vix < 16 ? 'up' : vix > 22 ? 'dn' : 'am'} />}
+          </div>
+
+          {/* Max Pain + OI Walls */}
+          {groups.filter(g => g.maxPain < 0).map(g => (
+            <div key={g.name+'-mp'} style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, padding:'8px 12px', marginBottom:8, display:'flex', gap:16, flexWrap:'wrap', fontSize:10, alignItems:'center' }}>
+              <span style={{ fontWeight:700 }}>{g.name}</span>
+              <span>🎯 Max Pain: <b style={{ color:'#7c3aed' }}>₹{fmt(g.maxPain)}</b></span>
+              {g.oiWalls?.callWall > 0 && <span>📉 Call Wall: <b style={{ color:'#dc2626' }}>₹{fmt(g.oiWalls.callWall)}</b></span>}
+              {g.oiWalls?.putWall  > 0 && <span>📈 Put Wall: <b style={{ color:'#16a34a' }}>₹{fmt(g.oiWalls.putWall)}</b></span>}
+              <span style={{ color:'#64748b' }}>PCR: {g.pcr?.toFixed(2)} {g.pcrTrend > 0 ? '↑' : g.pcrTrend < 0 ? '↓' : '—'}</span>
+              {g.ivTrend !== 0 && <span style={{ color: g.ivTrend > 0 ? '#dc2626' : '#16a34a' }}>IV Trend: {g.ivTrend > 0 ? '+' : ''}{g.ivTrend}</span>}
+            </div>
+          ))}
+
+          {/* Filters */}
+          <div style={{ display:'flex', gap:6, marginBottom:12, overflowX:'auto', paddingBottom:4 }}>
+            {OPT_FILTERS.map(f => (
+              <button key={f.id} onClick={() => setFilter(f.id)} style={{
+                whiteSpace:'nowrap', padding:'6px 12px', borderRadius:20,
+                border: filter===f.id ? 'none' : '1px solid #e2e8f0',
+                fontSize:11, fontWeight:700, cursor:'pointer',
+                background: filter===f.id ? '#16a34a' : '#fff',
+                color:      filter===f.id ? '#fff' : '#374151',
+              }}>{f.label}</button>
+            ))}
+          </div>
+
+          {filtered.length === 0
+            ? <EmptyState>{marketStatus.open ? '🔄 No signals meet confidence ≥' + cfg.minOptConf + '% · Try lowering in ⚙ Settings' : '📅 NSE Market Closed · Mon–Fri 9:15–15:30 IST'}</EmptyState>
+            : filtered.map(g => (
+              <div key={g.name}>
+                <div className="opt-group-hdr">{g.fullName||g.name}{g.type==='stock'?' 📊':''} — ₹{fmt(g.spot)} ({fmtC(g.spotChg)}) · Exp: {g.expiries?.length > 1 ? `${g.expiries.length} expiries (${g.expiries[0]} → ${g.expiries[g.expiries.length-1]})` : g.expiry} · {g.picks.filter(p=>p.trendAligned).length} with-trend · {g.picks.length} total</div>
+                {/* With-trend first */}
+                {g.picks.filter(p=>p.trendAligned).length > 0 && (
+                  <div style={{ background:'#f0fdf4', border:'1px solid #bbf7d0', borderRadius:6, padding:'6px 10px', marginBottom:8, fontSize:10, fontWeight:700, color:'#15803d' }}>
+                    ✅ {g.picks.filter(p=>p.trendAligned).length} WITH-TREND signals
+                  </div>
+                )}
+                <div className="cards-g" style={{ marginBottom:8 }}>
+                  {g.picks.filter(p=>p.trendAligned).map((p,i) => <OptionCard key={`${g._scanId||optionsScanId}-${p.und}-${p.strike}-${p.type}-${p.expiry}-${p._scanIndex??i}`} pick={p} cfg={cfg} />)}
+                </div>
+                {/* Counter-trend */}
+                {g.picks.filter(p=>!p.trendAligned).length > 0 && (
+                  <>
+                    <div style={{ background:'#fffbeb', border:'1px solid #fde68a', borderRadius:6, padding:'6px 10px', marginBottom:8, fontSize:10, fontWeight:700, color:'#92400e' }}>
+                      ⚠ {g.picks.filter(p=>!p.trendAligned).length} COUNTER-TREND — against market direction
+                    </div>
+                    <div className="cards-g" style={{ marginBottom:16 }}>
+                      {g.picks.filter(p=>!p.trendAligned).map((p,i) => <OptionCard key={`${g._scanId||optionsScanId}-${p.und}-${p.strike}-${p.type}-${p.expiry}-${p._scanIndex??i}`} pick={p} cfg={cfg} />)}
+                    </div>
+                  </>
+                )}
+              </div>
+            ))
+          }
+          <div className="disc">⚠ SL/Target: IV+DTE+Delta model · Confidence: EMA 9/21 cross + VWAP + Momentum + PCR trend + IV trend + Zone + OI build · Not SEBI advice · Always DYODD.</div>
+        </div>
+      )}
+    </div>
+  );
+}
