@@ -31,6 +31,10 @@ export const DEF = {
   t2ClosePct:   30,    // % of position closed at T2 (remainder closes at T3)
   atrTrailMult: 1.5,   // stocks: trailing distance = ATR × this, once break-even active
   optionTrailMult: 0.6, // options: trailing distance = entry-SL risk distance × this
+  // ── Market regime suppression — derates signals in choppy/high-VIX conditions ──
+  regimeChoppyHighVolPenalty: -18,
+  regimeChoppyPenalty: -8,
+  regimeTrendingBonus: 4,
 };
 
 export const INDEX_OPTS = [
