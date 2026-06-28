@@ -498,6 +498,17 @@ export default function SettingsPane() {
           <SetRow label="Option Trail × Risk" sub="Trailing distance = entry-SL distance × this"><Inp value={local.optionTrailMult} onChange={v => set('optionTrailMult', v)} min={0.2} max={2} step={0.1} /></SetRow>
         </div>
 
+        {/* ── Market Regime ── */}
+        <div className="setting-card">
+          <h4>🌊 Market Regime Suppression</h4>
+          <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10, lineHeight: 1.7 }}>
+            Derates confidence in choppy/high-VIX conditions (where false breakouts cluster) and gives calm trending markets a small boost.
+          </div>
+          <SetRow label="Choppy + High VIX" sub="Confidence penalty when there's no clear trend and VIX is elevated"><Inp value={local.regimeChoppyHighVolPenalty} onChange={v => set('regimeChoppyHighVolPenalty', v)} min={-40} max={0} step={1} /></SetRow>
+          <SetRow label="Choppy" sub="Confidence penalty when there's no clear trend"><Inp value={local.regimeChoppyPenalty} onChange={v => set('regimeChoppyPenalty', v)} min={-30} max={0} step={1} /></SetRow>
+          <SetRow label="Calm Trending Bonus" sub="Confidence boost in a strong, low-VIX trend"><Inp value={local.regimeTrendingBonus} onChange={v => set('regimeTrendingBonus', v)} min={0} max={20} step={1} /></SetRow>
+        </div>
+
         {/* ── Adaptive Weights ── */}
         <div className="setting-card" style={{ gridColumn: '1 / -1' }}>
           <h4>🧠 Adaptive Indicator Weights</h4>
