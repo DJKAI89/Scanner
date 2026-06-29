@@ -35,6 +35,11 @@ export const DEF = {
   regimeChoppyHighVolPenalty: -18,
   regimeChoppyPenalty: -8,
   regimeTrendingBonus: 4,
+  // ── Confluence — rewards multi-module agreement, penalizes scattered/conflicting signals ──
+  confluenceFullBonus: 12,
+  confluenceStrongBonus: 7,
+  confluenceWeakPenalty: -8,
+  confluenceConflictPenalty: -12,
 };
 
 export const INDEX_OPTS = [
