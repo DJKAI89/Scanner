@@ -55,6 +55,13 @@ export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
     TRENDING:        { txt: '📈 TRENDING', tone: 'green' },
   };
   if (p.regime && regimeMap[p.regime]) tags.push({ label: regimeMap[p.regime].txt, tone: regimeMap[p.regime].tone });
+  if (p.confluence?.total > 0) {
+    const cf = p.confluence;
+    if (cf.conflicting >= 2) tags.push({ label: `🧩 CONFLICTING (${cf.agree}✓ ${cf.conflicting}✗)`, tone: 'red' });
+    else if (cf.ratio >= 0.8 && cf.agree >= 5) tags.push({ label: `🧩 FULL CONFLUENCE ${cf.agree}/${cf.total}`, tone: 'green' });
+    else if (cf.ratio >= 0.65 && cf.agree >= 4) tags.push({ label: `🧩 STRONG CONFLUENCE ${cf.agree}/${cf.total}`, tone: 'green' });
+    else if (cf.ratio < 0.5) tags.push({ label: `🧩 WEAK (${cf.agree}/${cf.total})`, tone: 'amber' });
+  }
   indLbls.forEach((l, j) => { if (di[j]) tags.push({ label: l, tone: 'green' }); });
   Object.entries(p.patterns||{}).filter(([,v])=>v).forEach(([k]) =>
     tags.push({ label: '📊 ' + k.replace(/([A-Z])/g,' $1').trim(), tone: 'green' })
