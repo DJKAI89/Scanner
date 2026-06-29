@@ -509,6 +509,18 @@ export default function SettingsPane() {
           <SetRow label="Calm Trending Bonus" sub="Confidence boost in a strong, low-VIX trend"><Inp value={local.regimeTrendingBonus} onChange={v => set('regimeTrendingBonus', v)} min={0} max={20} step={1} /></SetRow>
         </div>
 
+        {/* ── Confluence Scoring ── */}
+        <div className="setting-card">
+          <h4>🧩 Confluence Scoring</h4>
+          <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10, lineHeight: 1.7 }}>
+            6 independent modules (Trend, Momentum, Volume, Price Action, Institutional, Market Context) vote on direction. Rewards genuine multi-module agreement over scattered weak signals.
+          </div>
+          <SetRow label="Full Agreement Bonus" sub="5-6 of 6 modules agree"><Inp value={local.confluenceFullBonus} onChange={v => set('confluenceFullBonus', v)} min={0} max={30} step={1} /></SetRow>
+          <SetRow label="Strong Agreement Bonus" sub="4+ modules agree"><Inp value={local.confluenceStrongBonus} onChange={v => set('confluenceStrongBonus', v)} min={0} max={20} step={1} /></SetRow>
+          <SetRow label="Weak Agreement Penalty" sub="Less than half the modules agree"><Inp value={local.confluenceWeakPenalty} onChange={v => set('confluenceWeakPenalty', v)} min={-30} max={0} step={1} /></SetRow>
+          <SetRow label="Conflict Penalty" sub="2+ modules actively disagree"><Inp value={local.confluenceConflictPenalty} onChange={v => set('confluenceConflictPenalty', v)} min={-30} max={0} step={1} /></SetRow>
+        </div>
+
         {/* ── Adaptive Weights ── */}
         <div className="setting-card" style={{ gridColumn: '1 / -1' }}>
           <h4>🧠 Adaptive Indicator Weights</h4>

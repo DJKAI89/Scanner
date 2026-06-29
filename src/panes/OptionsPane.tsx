@@ -88,6 +88,13 @@ function OptionCard({ pick, cfg: cardCfg }) {
     TRENDING:        { txt: '📈 TRENDING', tone: 'green' },
   };
   if (pick.regime && regimeMap[pick.regime]) tags.push({ label: regimeMap[pick.regime].txt, tone: regimeMap[pick.regime].tone });
+  if (pick.confluence?.total > 0) {
+    const cf = pick.confluence;
+    if (cf.conflicting >= 2) tags.push({ label: `🧩 CONFLICTING (${cf.agree}✓ ${cf.conflicting}✗)`, tone: 'red' });
+    else if (cf.ratio >= 0.8 && cf.agree >= 5) tags.push({ label: `🧩 FULL CONFLUENCE ${cf.agree}/${cf.total}`, tone: 'green' });
+    else if (cf.ratio >= 0.65 && cf.agree >= 4) tags.push({ label: `🧩 STRONG CONFLUENCE ${cf.agree}/${cf.total}`, tone: 'green' });
+    else if (cf.ratio < 0.5) tags.push({ label: `🧩 WEAK (${cf.agree}/${cf.total})`, tone: 'amber' });
+  }
   if (!pick.trendAligned) tags.push({ label: `⚠ AGAINST TREND (${pick.trendDir})`, tone: 'amber' });
   if (pick.atm) tags.push({ label: 'ATM', tone: 'blue' });
   if (pick.emaCross==='bullish_cross'&&pick.type==='CE') tags.push({ label: `📶 EMA CROSS ↑ ${(pick.emaCrossCandles||0)<=1?'FRESH':pick.emaCrossCandles+'c ago'}`, tone:'green' });
