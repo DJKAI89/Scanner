@@ -434,6 +434,34 @@ export function applyRegimeAdjustment(conf, regime, cfg = {}) {
   return Math.min(99, Math.max(1, Math.round((conf || 0) + adj)));
 }
 
+// ── Confluence engine ──────────────────────────────────────────
+// Counts how many independent modules (Trend, Momentum, Volume, Price Action,
+// Institutional, Market Context) agree with the signal's proposed direction,
+// vs simple point-addition which can't distinguish "4 weak agreements" from
+// "1 strong confirmation". Each module is a -1 (bearish) / 0 (no opinion) / +1
+// (bullish) vote; actionDir is +1 for BUY/bullish, -1 for SELL/bearish.
+export function computeConfluence(modules, actionDir) {
+  const dir = actionDir >= 0 ? 1 : -1;
+  let agree = 0, conflicting = 0, total = 0;
+  for (const v of Object.values(modules)) {
+    if (!v) continue; // module had no opinion — doesn't count either way
+    total++;
+    if (Math.sign(v) === dir) agree++; else conflicting++;
+  }
+  return { agree, conflicting, total, ratio: total > 0 ? agree / total : 0 };
+}
+
+export function applyConfluenceAdjustment(conf, confluence, cfg = {}) {
+  if (!confluence || confluence.total === 0) return conf;
+  const { agree, conflicting, ratio } = confluence;
+  let adj = 0;
+  if (conflicting >= 2)                       adj = cfg.confluenceConflictPenalty ?? -12; // multiple modules actively disagree
+  else if (ratio >= 0.8 && agree >= 5)         adj = cfg.confluenceFullBonus ?? 12;        // near-total agreement, doc's "Stock B"
+  else if (ratio >= 0.65 && agree >= 4)        adj = cfg.confluenceStrongBonus ?? 7;       // solid majority
+  else if (ratio < 0.5)                        adj = cfg.confluenceWeakPenalty ?? -8;      // scattered, weak agreement
+  return Math.min(99, Math.max(1, Math.round((conf || 0) + adj)));
+}
+
 export function calcRelativeStrength(closes, niftyCloses) {
   if (!closes || !niftyCloses || closes.length < 6 || niftyCloses.length < 6) return null;
   const n = Math.min(closes.length, niftyCloses.length, 20);

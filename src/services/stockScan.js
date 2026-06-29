@@ -13,7 +13,7 @@ import {
   countIndicatorsEx, getRec, autoSLTarget, calcEntryTrigger, detectReversal,
   calcMACD, isNearSupport, calcRSIDivergence, getSector, calcConfidence, calcVWAP,
   calcVWAPBands, applyFIIBias, applyCalibration, applyAdaptWeights, calcEMA, calcIVPercentile,
-  applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment,
+  applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment,
 } from './technical';
 import { applyMlRanking } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
@@ -302,6 +302,20 @@ export async function runPicksScan(ctx, callbacks) {
     conf=applyCalibration(conf, confCalibration||null);
     const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(nChgPct) / 1.0), vixVal);
     conf=applyRegimeAdjustment(conf, stockRegime, cfg);
+    // Confluence — 6 independent modules vote bullish/bearish/no-opinion; stocks are
+    // always a bullish thesis (no short stock picks), so actionDir is always +1.
+    // Rewards genuine multi-module agreement (doc's "Stock B") over scattered weak
+    // agreement (doc's "Stock A") instead of treating every bonus as additive.
+    const confluenceModules = {
+      trend: Math.sign((t.a50===true?1:t.a50===false?-1:0) + (t.a200===true?1:t.a200===false?-1:0) + (t.adx?.bullTrend?1:t.adx?.bearTrend?-1:0)),
+      momentum: Math.sign((t.macdBull===true?1:t.macdBull===false?-1:0) + (t.rsi>58?1:t.rsi<42?-1:0) + (t.rsiDiv?.bullish?1:t.rsiDiv?.bearish?-1:0)),
+      volume: volOk ? (chgPct>0?1:chgPct<0?-1:0) : 0,
+      priceAction: Math.sign((patterns?.bullishEngulfing||patterns?.hammer||patterns?.morningStar?1:(patterns?.bearishEngulfing||patterns?.shootingStar||patterns?.eveningStar)?-1:0) + (nearSupp?1:0) + (aboveVWAP===true?1:aboveVWAP===false?-1:0)),
+      institutional: delivPct!=null ? (delivPct>=60?1:delivPct<=25?-1:0) : 0,
+      marketContext: Math.sign((secSc>60?1:secSc<40?-1:0) + (pcrSc>60?1:pcrSc<40?-1:0) + (nBull?1:-1)),
+    };
+    const confluence = computeConfluence(confluenceModules, 1);
+    conf = applyConfluenceAdjustment(conf, confluence, cfg);
     // Layer 3: per-indicator learned adjustment from past signal outcomes
     const reversal = detectReversal(ltp,t.rsi,patterns,sr,vixVal,pcr,nBull,chgPct,t.atr||0,high,low);
     const _indSnap = {
@@ -359,7 +373,7 @@ export async function runPicksScan(ctx, callbacks) {
       macd, macdBull, bb, adx, rsiDiv,
       a50, a200, nearSupp:nearSuppF, patterns,
       vwap, aboveVWAP, vwapType:'daily', vwapBands,
-      vol, avgVol20, high, low, delivPct, regime: stockRegime,
+      vol, avgVol20, high, low, delivPct, regime: stockRegime, confluence,
       _indSnap,
       mlProbability: mlRank.mlProbability,
       mlAdj: mlRank.mlAdj,
@@ -588,7 +602,19 @@ export async function runBreakoutScan(ctx, callbacks) {
     if (score<minScore) continue;
     const trade=boSLTarget(ltp,t.atr,isBull,pdhl?.pdh||0,pdhl?.pdl||0,ema?.ema200||0);
     const boVol=q.volume||0;
-    // IV Percentile — ATR-based IV proxy, same as HTML
+    const boDelivPct=getDeliveryPct(q);
+    // Confluence — same 6-module framework as the picks scan, direction-aware
+    // since breakouts can be BULL or BEAR (unlike stock picks, which are always
+    // a bullish thesis).
+    const boConfluenceModules = {
+      trend: Math.sign((ema?.goldenCross?1:ema?.deathCross?-1:ema?.uptrend?1:-1) + (st?.trend==='UP'?1:st?.trend==='DOWN'?-1:0) + (adx?.bullTrend?1:adx?.bearTrend?-1:0)),
+      momentum: Math.sign((mom?.bullConf?1:mom?.bearConf?-1:0) + (rs?.outperforming?1:rs?.underperforming?-1:0)),
+      volume: (vol?.strong||vol?.confirmed) ? (isBull?1:-1) : 0,
+      priceAction: Math.sign((pdhl?.bullBreakout?1:pdhl?.bearBreakout?-1:0) + (wk52?.breakHigh?1:wk52?.breakLow?-1:0) + (gap?.gapUp?1:gap?.gapDown?-1:0) + (wick?.bullStrong?1:wick?.bearRejected?-1:0)),
+      institutional: boDelivPct!=null ? (boDelivPct>=60?1:boDelivPct<=25?-1:0) : 0,
+      marketContext: Math.sign((wMTF?.confirms?(isBull?1:-1):0) + (sectorScore||0)),
+    };
+    const boConfluence = computeConfluence(boConfluenceModules, isBull ? 1 : -1);
     const ivProxy=t.atr>0?(t.atr/ltp*100*Math.sqrt(252)):null;
     const ivPct=calcIVPercentile(ivProxy,t.closes);
     // Primary signal type for display/logging
@@ -601,8 +627,9 @@ export async function runBreakoutScan(ctx, callbacks) {
       trade, atr:t.atr, isBull, phase, sectorScore, sec:item.sec||item.s||'NSE',
       ivPct, primaryType,
       rec:isBull?(score>=7?'STRONG BUY':'BUY'):(score>=7?'SELL':'WATCH'),
-      conf:applyRegimeAdjustment(Math.min(95,score*10), marketRegime, cfg), sl:trade.sl, target:trade.target,
-      regime: marketRegime,
+      conf:applyConfluenceAdjustment(applyRegimeAdjustment(Math.min(95,score*10), marketRegime, cfg), boConfluence, cfg),
+      sl:trade.sl, target:trade.target,
+      regime: marketRegime, confluence: boConfluence,
       pot:{cons:trade.sl,mod:trade.target,agg:trade.target,rr:trade.rr,wr:0,base:0,adj:0,ev:0},
       numInds:score, risk:50, rsi:null, high:q.ohlc?.high||ltp, low:q.ohlc?.low||ltp,
       rawVol:boVol, avgVol20:0, macd:{}, rsiDiv:null, patterns:{},

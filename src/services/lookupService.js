@@ -9,7 +9,7 @@ import {
   getRec, autoSLTarget, calcEntryTrigger, detectReversal, calcMACD,
   isNearSupport, calcRSIDivergence, getSignalStrength,
   calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain,
-  applyFIIBias, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, calcVolumeSurge, calcEMA, calcADX,
+  applyFIIBias, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment, calcVolumeSurge, calcEMA, calcADX,
 } from './technical';
 import { applyMlRanking } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
@@ -137,6 +137,20 @@ export async function lookupInstrument(ctx, callbacks) {
       conf=applyCalibration(conf, confCalibration||null);
       const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(chgPct) / 1.0), vixVal);
       conf=applyRegimeAdjustment(conf, stockRegime, cfg);
+      // Confluence — same 6-module framework as stockScan.js (parity); no peer
+      // group here for a real sector score, so marketContext relies on NIFTY PCR only.
+      const aboveVWAPProxy = vwapBands?.position === 'ABOVE_1SD' || vwapBands?.position === 'FAR_ABOVE' ? true
+                            : vwapBands?.position === 'BELOW_1SD' || vwapBands?.position === 'FAR_BELOW' ? false : null;
+      const confluenceModules = {
+        trend: Math.sign((a50===true?1:a50===false?-1:0) + (a200===true?1:a200===false?-1:0) + (adx?.bullTrend?1:adx?.bearTrend?-1:0)),
+        momentum: Math.sign((macd?.bull===true?1:macd?.bull===false?-1:0) + (rsi>58?1:rsi<42?-1:0) + (rsiDiv?.bullish?1:rsiDiv?.bearish?-1:0)),
+        volume: volOk ? (chgPct>0?1:chgPct<0?-1:0) : 0,
+        priceAction: Math.sign((pats?.bullishEngulfing||pats?.hammer||pats?.morningStar?1:(pats?.bearishEngulfing||pats?.shootingStar||pats?.eveningStar)?-1:0) + (nearS?1:0) + (aboveVWAPProxy===true?1:aboveVWAPProxy===false?-1:0)),
+        institutional: delivPct!=null ? (delivPct>=60?1:delivPct<=25?-1:0) : 0,
+        marketContext: pcrSc>60?1:pcrSc<40?-1:0,
+      };
+      const confluence = computeConfluence(confluenceModules, 1);
+      conf = applyConfluenceAdjustment(conf, confluence, cfg);
       const risk = calcRisk(ltp, sl, target, atr, 0);
       const pot = calcPotential(ltp, target, sl, numInds, rec);
       const reversal = detectReversal(ltp, rsi, pats, sr, 0, 1.0, chgPct > 0, chgPct, atr, q.ohlc?.high || ltp, q.ohlc?.low || ltp);
@@ -157,7 +171,7 @@ export async function lookupInstrument(ctx, callbacks) {
       const finalRec = getRec(conf, pot.base, risk, pot.rr);
       const strength = getSignalStrength(numInds, conf, reversal);
       const entry = calcEntryTrigger(ltp, q.ohlc?.high || ltp, sr, atr, finalRec, vwap, chgPct);
-      tech = { rsi, ema, macd, bb, atr, adx, sr, pats, rsiDiv, a50, a200, volOk, nearS, numInds, rec: finalRec, conf, sl, target, targets, pot, risk, strength, vwap, entry, reversal, avgVol: volObj?.avgVol || 0, volRatio: volObj?.ratio || 1, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj, regime: stockRegime };
+      tech = { rsi, ema, macd, bb, atr, adx, sr, pats, rsiDiv, a50, a200, volOk, nearS, numInds, rec: finalRec, conf, sl, target, targets, pot, risk, strength, vwap, entry, reversal, avgVol: volObj?.avgVol || 0, volRatio: volObj?.ratio || 1, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj, regime: stockRegime, confluence };
     }
   } catch (e) {
     lg('Daily candles: ' + e.message, 'w');
@@ -252,9 +266,20 @@ export async function lookupInstrument(ctx, callbacks) {
             let c = applyFIIBias(p.confidence, p.action === 'BUY', fiiData);
             c = applyCalibration(c, confCalibration || null);
             c = applyRegimeAdjustment(c, optRegime, cfg);
+            const optActionDir = p.type === 'CE' ? 1 : -1;
+            const confluenceModules = {
+              trend: Math.sign((p.emaTrendBull===true?1:p.emaTrendBull===false?-1:0) + (p.emaCross==='bullish_cross'?1:p.emaCross==='bearish_cross'?-1:0)),
+              momentum: p.momentumFresh ? Math.sign(p.compositeScore || 0) : 0,
+              volume: (p.volRatio >= 1.5) ? Math.sign(p.compositeScore || 0) : 0,
+              priceAction: (p.priceZone==='PDH_BREAK'||p.priceZone==='NEAR_PDH') ? 1 : (p.priceZone==='PDL_BREAK'||p.priceZone==='NEAR_PDL') ? -1 : 0,
+              institutional: p.oiBuildType==='CE_BUILD' ? 1 : p.oiBuildType==='PE_BUILD' ? -1 : 0,
+              marketContext: p.stockPCR != null ? (p.stockPCR > 1.2 ? 1 : p.stockPCR < 0.8 ? -1 : 0) : 0,
+            };
+            const confluence = computeConfluence(confluenceModules, optActionDir);
+            c = applyConfluenceAdjustment(c, confluence, cfg);
             c = applyAdaptWeights(c, adaptWeights?.option || null, _indSnap);
             const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap });
-            return { ...p, regime: optRegime, confidence: mlRank.confidence, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj };
+            return { ...p, regime: optRegime, confluence, confidence: mlRank.confidence, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj };
           })
           .filter((p) => p.confidence >= cfg.minOptConf);
 

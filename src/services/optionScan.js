@@ -5,7 +5,7 @@
 import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api';
 import { getIST, sleep } from '../utils/marketTime';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config';
-import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment } from './technical';
+import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment } from './technical';
 import { logSignals, buildOptionSignal } from './github';
 import { applyMlRanking } from './mlRanking';
 
@@ -108,12 +108,28 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
     let c = applyFIIBias(p.confidence, p.action === 'BUY', fiiData);
     c = applyCalibration(c, confCalibration || null);
     c = applyRegimeAdjustment(c, regime, cfg);
+    // Confluence — same 6-module framework as stocks/breakout. actionDir is based
+    // on option type (CE wants underlying up, PE wants underlying down) — the same
+    // basis trendAligned/action already use in scanChain, not raw BUY/SELL (a SELL
+    // is still a directional bet on the underlying via the option's type).
+    const actionDir = p.type === 'CE' ? 1 : -1;
+    const confluenceModules = {
+      trend: Math.sign((p.emaTrendBull===true?1:p.emaTrendBull===false?-1:0) + (p.emaCross==='bullish_cross'?1:p.emaCross==='bearish_cross'?-1:0)),
+      momentum: p.momentumFresh ? Math.sign(p.compositeScore || 0) : 0,
+      volume: (p.volRatio >= 1.5) ? Math.sign(p.compositeScore || 0) : 0,
+      priceAction: (p.priceZone==='PDH_BREAK'||p.priceZone==='NEAR_PDH') ? 1 : (p.priceZone==='PDL_BREAK'||p.priceZone==='NEAR_PDL') ? -1 : 0,
+      institutional: p.oiBuildType==='CE_BUILD' ? 1 : p.oiBuildType==='PE_BUILD' ? -1 : 0,
+      marketContext: p.stockPCR != null ? (p.stockPCR > 1.2 ? 1 : p.stockPCR < 0.8 ? -1 : 0) : 0,
+    };
+    const confluence = computeConfluence(confluenceModules, actionDir);
+    c = applyConfluenceAdjustment(c, confluence, cfg);
     c = applyAdaptWeights(c, adaptWeights?.option || null, indSnap);
     const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap: indSnap });
     return {
       ...p,
       confidence: Math.min(99, Math.max(1, Math.round(mlRank.confidence))),
       regime,
+      confluence,
       _indSnap: indSnap,
       _dte: p._dte ?? null,
       nearMaxPain: maxPain > 0 && spot > 0 && Math.abs(p.strike - maxPain) / spot < 0.01,
