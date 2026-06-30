@@ -984,7 +984,6 @@ export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, 
   const compositeScore = marketCtx?.compositeScore ?? (niftyBullish ? 1 : -1);
   const priceBull = compositeScore > 0.5, priceBear = compositeScore < -0.5;
   const oi_thresh = cfg?.oi ?? 15;
-  const marginPct = (cfg?.optionMarginPct ?? 11) / 100;
 
   for (const row of chain) {
     const sp = row.strike_price;
@@ -1023,14 +1022,15 @@ export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, 
       let confidence = calcOptConfidenceFull(delta, iv, oiChg, theta, signals, spot, sp, optType, niftyBullish, vix, maxPain, stockPCR, marketCtx);
       confidence = Math.round(Math.min(100, Math.max(0, confidence + oiBuildBonus)));
 
-      // Margin is an estimate only (SPAN+exposure is computed by the exchange/broker
-      // at order time) — this gives a rough sense of capital needed to WRITE this
-      // strike, not to buy it. Buying capital is just ltp × lot, shown separately.
-      const marginEst = +(spot * lot * marginPct).toFixed(0);
+      // Margin here is simply lot size × LTP — the capital tied up per lot at
+      // the current premium. It is NOT a SPAN+exposure margin (that's set by
+      // the exchange/broker and differs for buying vs writing); this is a
+      // straightforward, always-live figure that tracks LTP in real time.
+      const marginEst = +(ltp * lot).toFixed(0);
 
       out[optType] = {
         ltp: +ltp.toFixed(2), oi, oiChg: +oiChg.toFixed(1), delta: +delta.toFixed(2), iv: +iv.toFixed(1), theta: +theta.toFixed(2),
-        confidence, oiBuildType, oiBuildBonus, buyCapital: +(ltp * lot).toFixed(0), marginEst,
+        confidence, oiBuildType, oiBuildBonus, marginEst,
         instrKey: opt.instrument_key || null,
       };
     }
