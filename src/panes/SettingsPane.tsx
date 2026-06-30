@@ -484,7 +484,6 @@ export default function SettingsPane() {
           <SetRow label="Options Target %"  sub="% above entry = target"><Inp value={local.optTgt} onChange={v => set('optTgt', v)} min={10} max={200} /></SetRow>
           <SetRow label="Max Capital ₹"     sub="Hide options above this · 0 = no limit"><Inp value={local.maxOptCapital} onChange={v => set('maxOptCapital', v)} min={0} step={1000} width={90} /></SetRow>
           <SetRow label="Min Open Interest" sub="Skip illiquid strikes — SL can't be honored if it barely trades"><Inp value={local.minOptOI} onChange={v => set('minOptOI', v)} min={0} step={100} width={90} /></SetRow>
-          <SetRow label="Margin Estimate %" sub="Used on the Option Analysis page — actual SPAN+exposure varies by broker"><Inp value={local.optionMarginPct} onChange={v => set('optionMarginPct', v)} min={1} max={50} step={0.5} /></SetRow>
         </div>
 
         {/* ── Trade Management ── */}
