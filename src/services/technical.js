@@ -973,6 +973,72 @@ export function calcOIWalls(chain) {
   return { callWall, putWall, callWallOI: maxCallOI, putWallOI: maxPutOI };
 }
 
+// ── Option Analysis page — lightweight per-strike scanner ─────
+// Unlike scanChain (which filters down to only tradeable candidates: ≥2 signals,
+// minimum OI, etc.), this computes confidence + OI buildup for EVERY strike/side
+// in range so the chain table can show a number next to every row, the way a
+// broker's option-chain screen does. Reuses the same confidence formula and OI
+// buildup classification as scanChain for consistency with the rest of the app.
+export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, stockPCR, marketCtx, cfg, lot = 1) {
+  const rows = [];
+  const compositeScore = marketCtx?.compositeScore ?? (niftyBullish ? 1 : -1);
+  const priceBull = compositeScore > 0.5, priceBear = compositeScore < -0.5;
+  const oi_thresh = cfg?.oi ?? 15;
+  const marginPct = (cfg?.optionMarginPct ?? 11) / 100;
+
+  for (const row of chain) {
+    const sp = row.strike_price;
+    if (!spot || Math.abs(sp - atm) > spot * 0.15) continue;
+    const out = { strike: sp, atm: sp === atm };
+
+    for (const [side, optType] of [['call_options', 'CE'], ['put_options', 'PE']]) {
+      const opt = row[side];
+      const md = opt?.market_data, gr = opt?.option_greeks;
+      if (!opt || !md?.ltp) { out[optType] = null; continue; }
+
+      const ltp = md.ltp, delta = gr?.delta || 0, iv = gr?.iv || 0, theta = gr?.theta || 0;
+      const oi = md?.oi || 0, prevOI = md?.prev_oi || oi;
+      const oiChg = prevOI > 0 ? ((oi - prevOI) / prevOI * 100) : 0;
+      const isCEOpt = optType === 'CE';
+      const oiRising = oiChg >= oi_thresh, oiFalling = oiChg <= -oi_thresh;
+
+      let oiBuildType = 'NEUTRAL', oiBuildBonus = 0;
+      if (isCEOpt) {
+        if (priceBull && oiRising)  { oiBuildType = 'LONG_BUILD';  oiBuildBonus = +15; }
+        if (priceBull && oiFalling) { oiBuildType = 'SHORT_COVER'; oiBuildBonus =  +5; }
+        if (priceBear && oiRising)  { oiBuildType = 'SHORT_BUILD'; oiBuildBonus = -15; }
+        if (priceBear && oiFalling) { oiBuildType = 'LONG_UNWIND'; oiBuildBonus =  -8; }
+      } else {
+        if (priceBear && oiRising)  { oiBuildType = 'LONG_BUILD';  oiBuildBonus = +15; }
+        if (priceBear && oiFalling) { oiBuildType = 'SHORT_COVER'; oiBuildBonus =  +5; }
+        if (priceBull && oiRising)  { oiBuildType = 'SHORT_BUILD'; oiBuildBonus = -15; }
+        if (priceBull && oiFalling) { oiBuildType = 'LONG_UNWIND'; oiBuildBonus =  -8; }
+      }
+      if (!oiRising && !oiFalling) oiBuildBonus = 0;
+
+      const signals = []; // confidence formula reads signals.length for one minor term only
+      if (Math.abs(delta) >= (cfg?.delta || 0.40)) signals.push({ l: 'Delta', s: 3 });
+      if (iv >= (cfg?.iv || 15)) signals.push({ l: 'IV', s: 2 });
+
+      let confidence = calcOptConfidenceFull(delta, iv, oiChg, theta, signals, spot, sp, optType, niftyBullish, vix, maxPain, stockPCR, marketCtx);
+      confidence = Math.round(Math.min(100, Math.max(0, confidence + oiBuildBonus)));
+
+      // Margin is an estimate only (SPAN+exposure is computed by the exchange/broker
+      // at order time) — this gives a rough sense of capital needed to WRITE this
+      // strike, not to buy it. Buying capital is just ltp × lot, shown separately.
+      const marginEst = +(spot * lot * marginPct).toFixed(0);
+
+      out[optType] = {
+        ltp: +ltp.toFixed(2), oi, oiChg: +oiChg.toFixed(1), delta: +delta.toFixed(2), iv: +iv.toFixed(1), theta: +theta.toFixed(2),
+        confidence, oiBuildType, oiBuildBonus, buyCapital: +(ltp * lot).toFixed(0), marginEst,
+        instrKey: opt.instrument_key || null,
+      };
+    }
+    rows.push(out);
+  }
+  return rows.sort((a, b) => a.strike - b.strike);
+}
+
 // ── IV Percentile ─────────────────────────────────────────────
 export function calcIVPercentile(iv, closes) {
   if (!iv || iv <= 0 || !closes || closes.length < 30) return null;
