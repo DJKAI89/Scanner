@@ -9,6 +9,7 @@ import { LogDrawer, Toast } from './components/common.jsx';
 // ── Lazy pane imports ──
 import StocksPane   from './panes/StocksPane';
 import OptionsPane  from './panes/OptionsPane';
+import OptionAnalysisPane from './panes/OptionAnalysisPane';
 import PortfolioPane from './panes/PortfolioPane';
 import LookupPane   from './panes/LookupPane';
 import LogPane      from './panes/LogPane';
@@ -20,6 +21,7 @@ import SettingsPane from './panes/SettingsPane';
 const PANES = {
   stocks:    StocksPane,
   options:   OptionsPane,
+  optAnalysis: OptionAnalysisPane,
   portfolio: PortfolioPane,
   lookup:    LookupPane,
   log:       LogPane,
