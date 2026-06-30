@@ -40,7 +40,6 @@ export const DEF = {
   confluenceStrongBonus: 7,
   confluenceWeakPenalty: -8,
   confluenceConflictPenalty: -12,
-  optionMarginPct: 11, // estimated SPAN+exposure margin as % of contract value, for the Option Analysis page
 };
 
 export const INDEX_OPTS = [
