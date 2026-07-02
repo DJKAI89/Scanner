@@ -16,10 +16,6 @@ const INDEX_FILTERS = [
 const VIX_KEY = 'NSE_INDEX|India VIX';
 const PAGE_SIZE = 20;
 
-function fmtOI(v) {
-  if (!v) return '0.00';
-  return (v / 1e5).toFixed(2); // lakhs
-}
 function chgColor(pct) {
   if (pct == null || pct === 0) return '#64748b';
   return pct > 0 ? '#16a34a' : '#dc2626';
@@ -37,25 +33,39 @@ function ChgBar({ pct, align }) {
   );
 }
 
-// ── One side (CE or PE) of a strike row — OI / LTP stacked, broker style ──
+function confColor(c) {
+  if (c == null) return '#94a3b8';
+  return c >= 70 ? '#16a34a' : c >= 50 ? '#d97706' : '#dc2626';
+}
+function confBg(c) {
+  if (c == null) return 'transparent';
+  return c >= 70 ? '#f0fdf4' : c >= 50 ? '#fffbeb' : '#fef2f2';
+}
+function fmtMargin(v) {
+  if (!v) return '—';
+  if (v >= 1e5) return '₹' + (v / 1e5).toFixed(2) + 'L';
+  if (v >= 1e3) return '₹' + (v / 1e3).toFixed(1) + 'K';
+  return '₹' + fmt(v, 0);
+}
+
+// ── One side (CE or PE) of a strike row — LTP, confidence, margin ──
 function SideCell({ cell, align }) {
   if (!cell) return <div style={{ flex: 1, padding: '8px 6px' }} />;
-  const oiColor = chgColor(cell.oiChg);
   const ltpColor = chgColor(cell.ltpChgPct);
   return (
-    <div style={{ flex: 1, display: 'flex', padding: '8px 6px', gap: 4, textAlign: align, justifyContent: align === 'left' ? 'flex-start' : 'flex-end' }}>
-      <div style={{ flex: 1, order: align === 'left' ? 0 : 2 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 700, color: oiColor }}>{fmtOI(cell.oi)}</div>
-        <div style={{ fontSize: 9.5, fontWeight: 700, color: oiColor }}>{cell.oiChg >= 0 ? '+' : ''}{cell.oiChg}%</div>
-        <ChgBar pct={cell.oiChg} align={align} />
+    <div style={{ flex: 1, padding: '8px 9px', textAlign: align }}>
+      <div style={{ fontSize: 13.5, fontWeight: 800, color: ltpColor, display: 'flex', alignItems: 'baseline', gap: 4, justifyContent: align === 'left' ? 'flex-start' : 'flex-end' }}>
+        {fmt(cell.ltp)}{cell.isLive && <span style={{ fontSize: 6, color: '#16a34a' }}>⚡</span>}
       </div>
-      <div style={{ flex: 1, order: 1 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 700, color: ltpColor, display: 'flex', alignItems: 'center', gap: 3, justifyContent: align === 'left' ? 'flex-start' : 'flex-end' }}>
-          {fmt(cell.ltp)}{cell.isLive && <span style={{ fontSize: 6, color: '#16a34a' }}>⚡</span>}
-        </div>
-        <div style={{ fontSize: 9.5, fontWeight: 700, color: ltpColor }}>{cell.ltpChgPct >= 0 ? '+' : ''}{cell.ltpChgPct}%</div>
-        <ChgBar pct={cell.ltpChgPct} align={align} />
+      <div style={{ fontSize: 9.5, fontWeight: 700, color: ltpColor }}>{cell.ltpChgPct >= 0 ? '+' : ''}{cell.ltpChgPct}%</div>
+      <ChgBar pct={cell.ltpChgPct} align={align} />
+      <div style={{
+        display: 'inline-flex', justifyContent: align === 'left' ? 'flex-start' : 'flex-end', alignItems: 'center', gap: 4,
+        marginTop: 4, background: confBg(cell.confidence), borderRadius: 5, padding: '1.5px 5px',
+      }}>
+        <span style={{ fontSize: 9.5, fontWeight: 800, color: confColor(cell.confidence) }}>{cell.confidence}%</span>
       </div>
+      <div style={{ fontSize: 8.5, color: '#94a3b8', marginTop: 2 }}>{fmtMargin(cell.marginEst)} margin</div>
     </div>
   );
 }
@@ -114,9 +124,9 @@ function ChainSection({ chain, shownRows, totalStrikes, spot, accentColor, onLoa
         border: `1px solid ${accentColor}30`, borderTop: 'none',
         fontSize: 9, fontWeight: 800, color: '#64748b', letterSpacing: 0.3,
       }}>
-        <div style={{ flex: 1, textAlign: 'left' }}>← OI &nbsp; LTP (CALLS)</div>
+        <div style={{ flex: 1, textAlign: 'left' }}>← CALLS</div>
         <div style={{ width: 78, textAlign: 'center' }}>STRIKE 🔍</div>
-        <div style={{ flex: 1, textAlign: 'right' }}>LTP &nbsp; OI →</div>
+        <div style={{ flex: 1, textAlign: 'right' }}>PUTS →</div>
       </div>
 
       <div style={{ border: `1px solid ${accentColor}30`, borderTop: 'none', borderRadius: '0 0 10px 10px', overflow: 'hidden', boxShadow: '0 2px 8px rgba(15,23,42,.04)' }}>
