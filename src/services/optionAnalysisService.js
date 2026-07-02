@@ -58,9 +58,11 @@ export function mergeLiveIntoRows(rows, lastPrices, lot = 1) {
       const live = lastPrices[cell.instrKey];
       if (!live) continue;
       const liveLtp = live.ltp ?? cell.ltp;
+      const cp = live.cp || 0;
       next[side] = {
         ...cell,
         ltp: liveLtp,
+        ltpChgPct: cp > 0 ? +((liveLtp - cp) / cp * 100).toFixed(2) : cell.ltpChgPct,
         oi: live.oi ?? cell.oi,
         marginEst: +(liveLtp * lot).toFixed(0),
         isLive: true,

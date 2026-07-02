@@ -998,6 +998,8 @@ export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, 
       const ltp = md.ltp, delta = gr?.delta || 0, iv = gr?.iv || 0, theta = gr?.theta || 0;
       const oi = md?.oi || 0, prevOI = md?.prev_oi || oi;
       const oiChg = prevOI > 0 ? ((oi - prevOI) / prevOI * 100) : 0;
+      const prevClose = md?.close_price || md?.close || 0;
+      const ltpChgPct = prevClose > 0 ? +((ltp - prevClose) / prevClose * 100).toFixed(2) : 0;
       const isCEOpt = optType === 'CE';
       const oiRising = oiChg >= oi_thresh, oiFalling = oiChg <= -oi_thresh;
 
@@ -1029,7 +1031,7 @@ export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, 
       const marginEst = +(ltp * lot).toFixed(0);
 
       out[optType] = {
-        ltp: +ltp.toFixed(2), oi, oiChg: +oiChg.toFixed(1), delta: +delta.toFixed(2), iv: +iv.toFixed(1), theta: +theta.toFixed(2),
+        ltp: +ltp.toFixed(2), ltpChgPct, oi, oiChg: +oiChg.toFixed(1), delta: +delta.toFixed(2), iv: +iv.toFixed(1), theta: +theta.toFixed(2),
         confidence, oiBuildType, oiBuildBonus, marginEst,
         instrKey: opt.instrument_key || null,
       };
