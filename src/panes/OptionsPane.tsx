@@ -302,9 +302,15 @@ export default function OptionsPane() {
   const filtered = useMemo(() => liveGroups.map(g => ({
     ...g,
     picks: g.picks.filter(p => {
-      // Always re-apply capital + confidence from current cfg (reactive to settings changes)
-      if (cfg.maxOptCapital > 0 && p.amtRequired > cfg.maxOptCapital) return false;
-      if (p.confidence < (cfg.minOptConf || 65)) return false;
+      // Always re-apply capital + confidence from current cfg (reactive to settings changes).
+      // Must match the SAME effective threshold used at scan/log time (scoreAndFilterPicks in
+      // optionScan.js), i.e. the ML model threshold takes precedence over cfg when set — otherwise
+      // a pick that passed the scan filter (and got logged to GitHub / shown on Log page) gets
+      // silently dropped here and never renders on this page.
+      const effMinConf = mlModels?.thresholds?.option?.minConfidence || cfg.minOptConf || 65;
+      const effCapLimit = mlModels?.thresholds?.option?.maxCapital || cfg.maxOptCapital;
+      if (effCapLimit > 0 && p.amtRequired > effCapLimit) return false;
+      if (p.confidence < effMinConf) return false;
       // Tab filter
       if (filter === 'nifty')     return g.name === 'NIFTY';
       if (filter === 'banknifty') return g.name === 'BANKNIFTY';
@@ -317,7 +323,7 @@ export default function OptionsPane() {
       if (filter === 'counter')   return !p.trendAligned;
       return true; // 'all'
     }),
-  })).filter(g => g.picks.length > 0), [liveGroups, filter, cfg.maxOptCapital, cfg.minOptConf]);
+  })).filter(g => g.picks.length > 0), [liveGroups, filter, cfg.maxOptCapital, cfg.minOptConf, mlModels]);
 
   return (
     <div>
