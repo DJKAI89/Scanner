@@ -60,7 +60,7 @@ function finalizeClose(sig, ltp, istDate, istTime, reason) {
   if (remaining > 0) partials.push({ level: reason === 'TARGET' ? 'T3' : reason, price: ltp, time: istTime, pctClosed: remaining });
 
   const blended = partials.reduce((s, t) => s + signedPnlPct(sig, t.price) * (t.pctClosed / 100), 0);
-  const status = blended >= 0 ? 'TARGET_HIT' : 'SL_HIT';
+  const status = reason === 'EXPIRY' ? 'EXPIRED' : (blended >= 0 ? 'TARGET_HIT' : 'SL_HIT');
   return {
     status, exitPrice: +ltp.toFixed(2), exitTime: istTime, exitDate: istDate,
     pnlPct: +blended.toFixed(2), exitReason: reason, partials, remainingPct: 0,
