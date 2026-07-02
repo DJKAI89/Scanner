@@ -5,7 +5,7 @@ import { resolveAccessToken } from '../services/api';
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed';
-import { loadOptionChainAnalysis, mergeLiveIntoRows, selectStrikesAroundATM } from '../services/optionAnalysisService';
+import { loadOptionMeta, loadChainForExpiry, mergeLiveIntoRows, selectStrikesAroundATM } from '../services/optionAnalysisService';
 
 const INDEX_FILTERS = [
   { id: 'NIFTY',     key: 'NSE_INDEX|Nifty 50',  step: 50,  lot: 75, color: '#7c3aed' },
@@ -93,10 +93,11 @@ function StrikeRow({ row, atmStrike, accentColor }) {
   );
 }
 
-function ChainSection({ title, chain, atm, accentColor, visibleCount, onLoadMore }) {
-  const allRows = chain?.rows || [];
-  const shown = useMemo(() => selectStrikesAroundATM(allRows, atm, visibleCount), [allRows, atm, visibleCount]);
-  const hasMore = allRows.length > shown.length;
+// Renders exactly the rows it's given (already sliced to the visible window
+// by the parent) — it does not re-slice, so the WS subscription (also built
+// from that same visible-rows list in the parent) always matches what's drawn.
+function ChainSection({ chain, shownRows, totalStrikes, atm, accentColor, onLoadMore }) {
+  const hasMore = totalStrikes > shownRows.length;
 
   return (
     <div style={{ marginBottom: 16 }}>
@@ -106,8 +107,8 @@ function ChainSection({ title, chain, atm, accentColor, visibleCount, onLoadMore
         background: `linear-gradient(90deg, ${accentColor}15, ${accentColor}05)`,
         border: `1px solid ${accentColor}30`, borderBottom: 'none',
       }}>
-        <span style={{ fontSize: 11.5, fontWeight: 800, color: accentColor }}>{title}</span>
-        <span style={{ fontSize: 9.5, color: '#64748b', fontWeight: 600 }}>Exp {chain?.expiry} · {shown.length}/{allRows.length} strikes</span>
+        <span style={{ fontSize: 11.5, fontWeight: 800, color: accentColor }}>📅 {chain?.expiry}</span>
+        <span style={{ fontSize: 9.5, color: '#64748b', fontWeight: 600 }}>{shownRows.length}/{totalStrikes} strikes</span>
       </div>
 
       {/* Max pain + walls strip */}
@@ -131,9 +132,9 @@ function ChainSection({ title, chain, atm, accentColor, visibleCount, onLoadMore
       </div>
 
       <div style={{ border: `1px solid ${accentColor}30`, borderTop: 'none', borderRadius: '0 0 10px 10px', overflow: 'hidden', boxShadow: '0 2px 8px rgba(15,23,42,.04)' }}>
-        {shown.length === 0
+        {shownRows.length === 0
           ? <div style={{ padding: 20, textAlign: 'center', fontSize: 11, color: '#94a3b8' }}>No strikes in range</div>
-          : shown.map((row) => <StrikeRow key={row.strike} row={row} atmStrike={atm} accentColor={accentColor} />)}
+          : shownRows.map((row) => <StrikeRow key={row.strike} row={row} atmStrike={atm} accentColor={accentColor} />)}
         {hasMore && (
           <button onClick={onLoadMore} style={{
             width: '100%', padding: '10px 0', border: 'none', borderTop: '1px solid #f1f5f9',
@@ -155,23 +156,30 @@ export default function OptionAnalysisPane() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [progress, setProgress] = useState('');
-  const [data, setData] = useState(null);
+  const [meta, setMeta] = useState(null);       // spot/vix/marketCtx/expiryList — fetched once per index
+  const [chain, setChain] = useState(null);      // the single loaded chain for the selected expiry
+  const [expiry, setExpiry] = useState('');
+  const [chainLoading, setChainLoading] = useState(false);
   const [updTime, setUpdTime] = useState('');
-  const [expirySel, setExpirySel] = useState('in'); // 'in' = current week/month expiry, 'out' = next month
   const [visibleStrikes, setVisibleStrikes] = useState(PAGE_SIZE);
 
   const idx = INDEX_FILTERS.find((i) => i.id === filter) || INDEX_FILTERS[0];
 
+  // Full reload: spot/VIX/expiry-list + the default (nearest) expiry's chain.
   const load = useCallback(async () => {
-    setLoading(true); setError('');
-    setVisibleStrikes(PAGE_SIZE); setExpirySel('in');
+    setLoading(true); setError(''); setChain(null); setMeta(null);
+    setVisibleStrikes(PAGE_SIZE);
     try {
       const ctx = { token: accessToken, indexKey: idx.key, step: idx.step, lot: idx.lot, cfg, onTokenExpired, lg };
-      const result = await loadOptionChainAnalysis(ctx, { setProgress });
-      setData(result);
+      const m = await loadOptionMeta(ctx, { setProgress });
+      setMeta(m);
+      const defaultExpiry = m.expiryList[0];
+      setExpiry(defaultExpiry);
+      setProgress(`Fetching chain (${defaultExpiry})...`);
+      const c = await loadChainForExpiry(ctx, defaultExpiry, m);
+      setChain(c);
       setUpdTime('Updated: ' + getIST());
-      const total = (result.inMonth?.rows.length || 0) + (result.outOfMonth?.rows.length || 0);
-      updateBadge('optAnalysis', String(total));
+      updateBadge('optAnalysis', String(c.rows.length));
     } catch (e) {
       setError(e.message); lg('Option analysis error: ' + e.message, 'e');
     } finally { setLoading(false); }
@@ -185,25 +193,41 @@ export default function OptionAnalysisPane() {
     return () => document.removeEventListener('friday:scan', onScan);
   }, [load]);
 
-  // ── Live WS feed: spot + VIX + every loaded option instrument (both chains) ──
+  // Switching expiry only fetches that one chain — spot/VIX/marketCtx reused from meta.
+  const switchExpiry = useCallback(async (nextExpiry) => {
+    if (!meta || nextExpiry === expiry) return;
+    setExpiry(nextExpiry);
+    setChainLoading(true); setError('');
+    setVisibleStrikes(PAGE_SIZE);
+    try {
+      const ctx = { token: accessToken, indexKey: idx.key, step: idx.step, lot: idx.lot, cfg, onTokenExpired };
+      const c = await loadChainForExpiry(ctx, nextExpiry, meta);
+      setChain(c);
+      setUpdTime('Updated: ' + getIST());
+    } catch (e) {
+      setError(e.message); lg('Option analysis error: ' + e.message, 'e');
+    } finally { setChainLoading(false); }
+  }, [meta, expiry, accessToken, idx.key, idx.step, idx.lot, cfg, onTokenExpired, lg]);
+
+  // ── Only the strikes currently shown on screen get sliced + WS-subscribed ──
+  const shownRows = useMemo(
+    () => selectStrikesAroundATM(chain?.rows || [], chain?.atm, visibleStrikes),
+    [chain, visibleStrikes]
+  );
+
   const optionKeys = useMemo(() => {
     const keys = [];
-    const chain = expirySel === 'out' && data?.outOfMonth ? data.outOfMonth : data?.inMonth;
-    chain?.rows.forEach((r) => { if (r.CE?.instrKey) keys.push(r.CE.instrKey); if (r.PE?.instrKey) keys.push(r.PE.instrKey); });
+    shownRows.forEach((r) => { if (r.CE?.instrKey) keys.push(r.CE.instrKey); if (r.PE?.instrKey) keys.push(r.PE.instrKey); });
     return keys;
-  }, [data, expirySel]);
+  }, [shownRows]);
 
   const { lastPrices: idxPrices } = useMarketFeed(accessToken, [idx.key, VIX_KEY], !!accessToken, { pollFallback: true });
   const { lastPrices: optPrices } = useMarketFeed(accessToken, optionKeys, optionKeys.length > 0, { pollFallback: false, mode: 'full' });
 
-  const selectedChain = expirySel === 'out' && data?.outOfMonth ? data.outOfMonth : data?.inMonth;
-  const liveSelectedChain = useMemo(
-    () => selectedChain ? { ...selectedChain, rows: mergeLiveIntoRows(selectedChain.rows, optPrices, idx.lot) } : null,
-    [selectedChain, optPrices, idx.lot]
-  );
+  const liveShownRows = useMemo(() => mergeLiveIntoRows(shownRows, optPrices, idx.lot), [shownRows, optPrices, idx.lot]);
 
-  const liveSpot = idxPrices[idx.key]?.ltp || data?.spot || 0;
-  const liveVix  = idxPrices[VIX_KEY]?.ltp || data?.vixVal || 0;
+  const liveSpot = idxPrices[idx.key]?.ltp || meta?.spot || 0;
+  const liveVix  = idxPrices[VIX_KEY]?.ltp || meta?.vixVal || 0;
   const { txt: vixTxt } = interpVIX(liveVix);
   const wsLive = Object.keys(optPrices).length > 0;
 
@@ -227,8 +251,8 @@ export default function OptionAnalysisPane() {
       {error && <ErrorBanner title="⚠ Option Analysis Error" message={error} onRetry={load} />}
 
       {loading ? (
-        <Spinner label={`Loading ${filter} option chain...`} progress={progress} sub="In-month + out-of-month · Confidence · OI Buildup · Live Margin" />
-      ) : !data ? (
+        <Spinner label={`Loading ${filter} option chain...`} progress={progress} sub="Confidence · OI Buildup · Live Margin" />
+      ) : !meta ? (
         <EmptyState>Pull to scan or tap ▶ to load the {filter} chain</EmptyState>
       ) : (
         <div>
@@ -240,41 +264,39 @@ export default function OptionAnalysisPane() {
 
           {/* Spot + VIX */}
           <div className="stats-g" style={{ marginBottom: 10 }}>
-            <StatCard label={filter} value={`₹${fmt(liveSpot, 0)}`} sub={fmtC(data.spotChg)} valClass={data.spotChg >= 0 ? 'up' : 'dn'} />
+            <StatCard label={filter} value={`₹${fmt(liveSpot, 0)}`} sub={fmtC(meta.spotChg)} valClass={meta.spotChg >= 0 ? 'up' : 'dn'} />
             <StatCard label="INDIA VIX" value={liveVix.toFixed(2)} sub={vixTxt} valClass={liveVix < 16 ? 'up' : liveVix > 22 ? 'dn' : 'am'} />
             <StatCard label="WS FEED" value={wsLive ? 'LIVE' : 'Connecting'} sub={`${optionKeys.length} instruments`} valClass={wsLive ? 'up' : 'am'} />
           </div>
 
           {updTime && <LastUpdated time={updTime} />}
 
-          {/* Expiry selector — current week/month vs next month */}
-          <div style={{ display: 'flex', gap: 0, marginBottom: 10, background: '#f1f5f9', borderRadius: 10, padding: 3 }}>
-            <button onClick={() => { setExpirySel('in'); setVisibleStrikes(PAGE_SIZE); }} style={{
-              flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', fontSize: 11.5, fontWeight: 800, cursor: 'pointer',
-              background: expirySel === 'in' ? '#fff' : 'transparent',
-              color: expirySel === 'in' ? idx.color : '#64748b',
-              boxShadow: expirySel === 'in' ? '0 1px 6px rgba(0,0,0,.1)' : 'none',
-            }}>📅 This Expiry{data.inMonth?.expiry ? ` (${data.inMonth.expiry})` : ''}</button>
-            <button
-              onClick={() => { if (data.outOfMonth) { setExpirySel('out'); setVisibleStrikes(PAGE_SIZE); } }}
-              disabled={!data.outOfMonth}
-              style={{
-                flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', fontSize: 11.5, fontWeight: 800,
-                cursor: data.outOfMonth ? 'pointer' : 'not-allowed',
-                background: expirySel === 'out' ? '#fff' : 'transparent',
-                color: !data.outOfMonth ? '#cbd5e1' : expirySel === 'out' ? '#d97706' : '#64748b',
-                boxShadow: expirySel === 'out' ? '0 1px 6px rgba(0,0,0,.1)' : 'none',
-              }}>🗓 Next Month{data.outOfMonth?.expiry ? ` (${data.outOfMonth.expiry})` : ''}</button>
+          {/* Expiry selector — weekly: 5 nearest · monthly-only: current + next month */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 10, overflowX: 'auto', paddingBottom: 2 }}>
+            {meta.expiryList.map((e) => (
+              <button key={e} onClick={() => switchExpiry(e)} disabled={chainLoading} style={{
+                whiteSpace: 'nowrap', padding: '7px 12px', borderRadius: 20,
+                border: expiry === e ? 'none' : '1px solid #e2e8f0',
+                fontSize: 11, fontWeight: 700, cursor: chainLoading ? 'default' : 'pointer',
+                background: expiry === e ? idx.color : '#fff',
+                color: expiry === e ? '#fff' : '#374151',
+                opacity: chainLoading && expiry !== e ? 0.5 : 1,
+              }}>{e}</button>
+            ))}
           </div>
 
-          <ChainSection
-            title={expirySel === 'out' ? '🗓 NEXT MONTH' : '📅 THIS WEEK / MONTH'}
-            chain={liveSelectedChain}
-            atm={selectedChain?.atm}
-            accentColor={expirySel === 'out' ? '#d97706' : idx.color}
-            visibleCount={visibleStrikes}
-            onLoadMore={() => setVisibleStrikes((v) => v + PAGE_SIZE)}
-          />
+          {chainLoading ? (
+            <Spinner label={`Loading ${expiry}...`} />
+          ) : (
+            <ChainSection
+              chain={chain}
+              shownRows={liveShownRows}
+              totalStrikes={chain?.rows.length || 0}
+              atm={chain?.atm}
+              accentColor={idx.color}
+              onLoadMore={() => setVisibleStrikes((v) => v + PAGE_SIZE)}
+            />
+          )}
 
           <div className="disc">⚠ Margin = lot size × LTP (live, tracks premium) — not a SPAN+exposure margin from your broker. Confidence uses the same model as F&O Options. Not SEBI advice · DYODD.</div>
         </div>
