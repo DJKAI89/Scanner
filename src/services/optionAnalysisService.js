@@ -2,8 +2,9 @@
 // Shows every strike (not just trade candidates) with live LTP/OI, a
 // confidence score, OI buildup classification, and an estimated margin —
 // mirroring a broker's option-chain screen, with our own confidence model
-// layered on top. Loads BOTH the current month's nearest expiry ("in month")
-// and the following month's nearest expiry ("out of month") side by side.
+// layered on top. Expiry list is selectable (weekly: top 5 nearest expiries;
+// monthly-only: current + next month) and only ONE chain is fetched/rendered
+// at a time, driven by the selected expiry.
 
 import { fetchQ, fetchOptions, fetchOptionContracts, fetchIntraday } from './api';
 import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChainAnalysis } from './technical';
@@ -12,32 +13,28 @@ export function getOptionKey(opt) {
   return opt?.instrKey || '';
 }
 
-// Splits a sorted, deduped expiry list into "in month" (nearest expiry that
-// falls within the current calendar month, or the nearest available if none
-// remain this month) and "out of month" (nearest expiry strictly after the
-// in-month one's calendar month).
-export function splitExpiries(allExpiries) {
-  const unique = [...new Set(allExpiries)].sort();
-  if (!unique.length) return { inMonth: null, outOfMonth: null, all: [] };
-  const now = new Date();
-  const y = now.getFullYear(), m = now.getMonth();
-  const todayStr = now.toISOString().slice(0, 10);
-  const thisMonth = unique.filter(e => {
-    const d = new Date(e);
-    return d.getFullYear() === y && d.getMonth() === m && e >= todayStr;
-  });
-  const inMonth = thisMonth[0] || unique.find(e => e >= todayStr) || unique[0];
-  const inDate = new Date(inMonth);
-  const outOfMonth = unique.find(e => {
-    const d = new Date(e);
-    return (d.getFullYear() > inDate.getFullYear()) ||
-           (d.getFullYear() === inDate.getFullYear() && d.getMonth() > inDate.getMonth());
-  }) || null;
-  return { inMonth, outOfMonth, all: unique };
+// Classifies the full expiry list for an underlying:
+// - "weekly": more than one expiry falls within a single calendar month
+//   anywhere in the near future → show the 5 nearest expiries.
+// - "monthly": exactly one expiry per month (stocks, SENSEX-style) →
+//   show current month's + next month's expiry only.
+export function classifyExpiries(allExpiries) {
+  const unique = [...new Set(allExpiries)].filter(Boolean).sort();
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const future = unique.filter(e => e >= todayStr);
+  if (!future.length) return { mode: 'none', list: [] };
+
+  const byMonth = {};
+  future.forEach(e => { const ym = e.slice(0, 7); (byMonth[ym] = byMonth[ym] || []).push(e); });
+  const isWeekly = Object.values(byMonth).some(list => list.length > 1);
+
+  return isWeekly
+    ? { mode: 'weekly', list: future.slice(0, 5) }
+    : { mode: 'monthly', list: future.slice(0, 2) };
 }
 
-// Picks the `count` strikes closest to ATM from an ATM-range-filtered,
-// strike-ascending row array, while preserving ascending order for display.
+// Picks the `count` strikes closest to ATM from a strike-ascending row array,
+// while preserving ascending order for display.
 export function selectStrikesAroundATM(rows, atm, count) {
   if (!rows?.length) return rows;
   if (rows.length <= count) return rows;
@@ -47,10 +44,10 @@ export function selectStrikesAroundATM(rows, atm, count) {
   return rows.filter((_, i) => picked.has(i));
 }
 
-// Merges live WS prices (LTP/OI) into the static per-strike rows, recomputing
-// margin (lot × LTP) on every tick so it tracks the live premium. Confidence/
-// buildup are NOT recomputed on every tick — same pattern OptionsPane uses
-// (a fresh scan recomputes scoring; only price-derived fields update live).
+// Merges live WS prices (LTP/OI) into per-strike rows, recomputing margin
+// (lot × LTP) on every tick. Call this with ONLY the rows currently shown
+// on screen — the WS subscription itself is scoped to just those rows too,
+// so there's nothing to merge for off-screen strikes.
 export function mergeLiveIntoRows(rows, lastPrices, lot = 1) {
   if (!rows?.length || !lastPrices || Object.keys(lastPrices).length === 0) return rows;
   return rows.map((row) => {
@@ -86,11 +83,12 @@ async function loadOneChain(indexKey, expiry, spot, step, lot, niftyBullish, vix
   return { expiry, rows, maxPain, oiWalls, pcr, atm };
 }
 
+// Fetches spot/VIX/expiry-list/market-context ONCE per index selection.
+// Does NOT fetch any option chain — call loadChainForExpiry for that.
 // ctx: { token, indexKey, step, lot, cfg, onTokenExpired, lg }
-// callbacks: { setProgress }
-// Returns both chains: { spot, spotChg, vixVal, expiries, inMonth: {...}, outOfMonth: {...}|null }
-export async function loadOptionChainAnalysis(ctx, callbacks) {
-  const { token, indexKey, step, lot, cfg, onTokenExpired, lg } = ctx;
+// Returns: { spot, spotChg, vixVal, niftyBullish, marketCtx, expiryMode, expiryList }
+export async function loadOptionMeta(ctx, callbacks) {
+  const { token, indexKey, cfg, onTokenExpired, lg } = ctx;
   const { setProgress } = callbacks;
 
   setProgress('Fetching spot + VIX...');
@@ -107,8 +105,8 @@ export async function loadOptionChainAnalysis(ctx, callbacks) {
   setProgress('Fetching expiries...');
   const contracts = await fetchOptionContracts(indexKey, token, onTokenExpired);
   const rawExpiries = contracts.map(c => c.expiry).filter(Boolean);
-  const { inMonth, outOfMonth, all } = splitExpiries(rawExpiries);
-  if (!inMonth) throw new Error('No expiries available');
+  const { mode, list } = classifyExpiries(rawExpiries);
+  if (!list.length) throw new Error('No expiries available');
 
   setProgress('Fetching intraday context...');
   let marketCtx = null;
@@ -117,16 +115,18 @@ export async function loadOptionChainAnalysis(ctx, callbacks) {
     marketCtx = computeCtxFromCandles(candles, spot, spotChg, vixVal, null);
   } catch (e) { lg('Option analysis ctx: ' + e.message, 'w'); }
 
-  setProgress(`Fetching in-month chain (${inMonth})...`);
-  const inMonthChain = await loadOneChain(indexKey, inMonth, spot, step, lot, niftyBullish, vixVal, marketCtx, cfg, token, onTokenExpired);
-  if (!inMonthChain) throw new Error('Empty option chain for ' + inMonth);
+  return { spot, spotChg, vixVal, niftyBullish, marketCtx, expiryMode: mode, expiryList: list };
+}
 
-  let outOfMonthChain = null;
-  if (outOfMonth) {
-    setProgress(`Fetching out-of-month chain (${outOfMonth})...`);
-    try { outOfMonthChain = await loadOneChain(indexKey, outOfMonth, spot, step, lot, niftyBullish, vixVal, marketCtx, cfg, token, onTokenExpired); }
-    catch (e) { lg('Out-of-month chain: ' + e.message, 'w'); }
-  }
-
-  return { spot, spotChg, vixVal, expiries: all, inMonth: inMonthChain, outOfMonth: outOfMonthChain, marketCtx };
+// Fetches ONE chain for the given expiry, reusing already-fetched spot/VIX/
+// marketCtx (from loadOptionMeta) so switching expiry in the dropdown never
+// re-fetches spot/VIX/contracts — only the chain itself.
+// ctx: { token, indexKey, step, lot, cfg, onTokenExpired }
+// meta: { spot, vixVal, niftyBullish, marketCtx }
+export async function loadChainForExpiry(ctx, expiry, meta) {
+  const { token, indexKey, step, lot, cfg, onTokenExpired } = ctx;
+  const { spot, vixVal, niftyBullish, marketCtx } = meta;
+  const chain = await loadOneChain(indexKey, expiry, spot, step, lot, niftyBullish, vixVal, marketCtx, cfg, token, onTokenExpired);
+  if (!chain) throw new Error('Empty option chain for ' + expiry);
+  return chain;
 }
