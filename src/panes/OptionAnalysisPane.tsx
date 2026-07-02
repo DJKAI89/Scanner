@@ -157,14 +157,14 @@ export default function OptionAnalysisPane() {
   const [progress, setProgress] = useState('');
   const [data, setData] = useState(null);
   const [updTime, setUpdTime] = useState('');
-  const [visibleInMonth, setVisibleInMonth] = useState(PAGE_SIZE);
-  const [visibleOutMonth, setVisibleOutMonth] = useState(PAGE_SIZE);
+  const [expirySel, setExpirySel] = useState('in'); // 'in' = current week/month expiry, 'out' = next month
+  const [visibleStrikes, setVisibleStrikes] = useState(PAGE_SIZE);
 
   const idx = INDEX_FILTERS.find((i) => i.id === filter) || INDEX_FILTERS[0];
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
-    setVisibleInMonth(PAGE_SIZE); setVisibleOutMonth(PAGE_SIZE);
+    setVisibleStrikes(PAGE_SIZE); setExpirySel('in');
     try {
       const ctx = { token: accessToken, indexKey: idx.key, step: idx.step, lot: idx.lot, cfg, onTokenExpired, lg };
       const result = await loadOptionChainAnalysis(ctx, { setProgress });
@@ -188,17 +188,19 @@ export default function OptionAnalysisPane() {
   // ── Live WS feed: spot + VIX + every loaded option instrument (both chains) ──
   const optionKeys = useMemo(() => {
     const keys = [];
-    [data?.inMonth, data?.outOfMonth].forEach((chain) => {
-      chain?.rows.forEach((r) => { if (r.CE?.instrKey) keys.push(r.CE.instrKey); if (r.PE?.instrKey) keys.push(r.PE.instrKey); });
-    });
+    const chain = expirySel === 'out' && data?.outOfMonth ? data.outOfMonth : data?.inMonth;
+    chain?.rows.forEach((r) => { if (r.CE?.instrKey) keys.push(r.CE.instrKey); if (r.PE?.instrKey) keys.push(r.PE.instrKey); });
     return keys;
-  }, [data]);
+  }, [data, expirySel]);
 
   const { lastPrices: idxPrices } = useMarketFeed(accessToken, [idx.key, VIX_KEY], !!accessToken, { pollFallback: true });
   const { lastPrices: optPrices } = useMarketFeed(accessToken, optionKeys, optionKeys.length > 0, { pollFallback: false, mode: 'full' });
 
-  const liveInMonth = useMemo(() => data?.inMonth ? { ...data.inMonth, rows: mergeLiveIntoRows(data.inMonth.rows, optPrices, idx.lot) } : null, [data, optPrices, idx.lot]);
-  const liveOutOfMonth = useMemo(() => data?.outOfMonth ? { ...data.outOfMonth, rows: mergeLiveIntoRows(data.outOfMonth.rows, optPrices, idx.lot) } : null, [data, optPrices, idx.lot]);
+  const selectedChain = expirySel === 'out' && data?.outOfMonth ? data.outOfMonth : data?.inMonth;
+  const liveSelectedChain = useMemo(
+    () => selectedChain ? { ...selectedChain, rows: mergeLiveIntoRows(selectedChain.rows, optPrices, idx.lot) } : null,
+    [selectedChain, optPrices, idx.lot]
+  );
 
   const liveSpot = idxPrices[idx.key]?.ltp || data?.spot || 0;
   const liveVix  = idxPrices[VIX_KEY]?.ltp || data?.vixVal || 0;
@@ -245,27 +247,34 @@ export default function OptionAnalysisPane() {
 
           {updTime && <LastUpdated time={updTime} />}
 
-          <ChainSection
-            title="📅 THIS MONTH (In-Month)"
-            chain={liveInMonth}
-            atm={data.inMonth?.atm}
-            accentColor={idx.color}
-            visibleCount={visibleInMonth}
-            onLoadMore={() => setVisibleInMonth((v) => v + PAGE_SIZE)}
-          />
+          {/* Expiry selector — current week/month vs next month */}
+          <div style={{ display: 'flex', gap: 0, marginBottom: 10, background: '#f1f5f9', borderRadius: 10, padding: 3 }}>
+            <button onClick={() => { setExpirySel('in'); setVisibleStrikes(PAGE_SIZE); }} style={{
+              flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', fontSize: 11.5, fontWeight: 800, cursor: 'pointer',
+              background: expirySel === 'in' ? '#fff' : 'transparent',
+              color: expirySel === 'in' ? idx.color : '#64748b',
+              boxShadow: expirySel === 'in' ? '0 1px 6px rgba(0,0,0,.1)' : 'none',
+            }}>📅 This Expiry{data.inMonth?.expiry ? ` (${data.inMonth.expiry})` : ''}</button>
+            <button
+              onClick={() => { if (data.outOfMonth) { setExpirySel('out'); setVisibleStrikes(PAGE_SIZE); } }}
+              disabled={!data.outOfMonth}
+              style={{
+                flex: 1, padding: '8px 0', borderRadius: 8, border: 'none', fontSize: 11.5, fontWeight: 800,
+                cursor: data.outOfMonth ? 'pointer' : 'not-allowed',
+                background: expirySel === 'out' ? '#fff' : 'transparent',
+                color: !data.outOfMonth ? '#cbd5e1' : expirySel === 'out' ? '#d97706' : '#64748b',
+                boxShadow: expirySel === 'out' ? '0 1px 6px rgba(0,0,0,.1)' : 'none',
+              }}>🗓 Next Month{data.outOfMonth?.expiry ? ` (${data.outOfMonth.expiry})` : ''}</button>
+          </div>
 
-          {liveOutOfMonth ? (
-            <ChainSection
-              title="🗓 NEXT MONTH (Out-of-Month)"
-              chain={liveOutOfMonth}
-              atm={data.outOfMonth?.atm}
-              accentColor="#d97706"
-              visibleCount={visibleOutMonth}
-              onLoadMore={() => setVisibleOutMonth((v) => v + PAGE_SIZE)}
-            />
-          ) : (
-            <div style={{ fontSize: 10, color: '#94a3b8', textAlign: 'center', padding: '8px 0' }}>No out-of-month expiry available</div>
-          )}
+          <ChainSection
+            title={expirySel === 'out' ? '🗓 NEXT MONTH' : '📅 THIS WEEK / MONTH'}
+            chain={liveSelectedChain}
+            atm={selectedChain?.atm}
+            accentColor={expirySel === 'out' ? '#d97706' : idx.color}
+            visibleCount={visibleStrikes}
+            onLoadMore={() => setVisibleStrikes((v) => v + PAGE_SIZE)}
+          />
 
           <div className="disc">⚠ Margin = lot size × LTP (live, tracks premium) — not a SPAN+exposure margin from your broker. Confidence uses the same model as F&O Options. Not SEBI advice · DYODD.</div>
         </div>
