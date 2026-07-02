@@ -16,88 +16,86 @@ const INDEX_FILTERS = [
 const VIX_KEY = 'NSE_INDEX|India VIX';
 const PAGE_SIZE = 20;
 
-const BUILD_ICON = {
-  LONG_BUILD:  { icon: '📈', tone: '#16a34a', label: 'Long Build' },
-  SHORT_COVER: { icon: '↩',  tone: '#16a34a', label: 'Short Cover' },
-  SHORT_BUILD: { icon: '📉', tone: '#dc2626', label: 'Short Build' },
-  LONG_UNWIND: { icon: '↪',  tone: '#dc2626', label: 'Long Unwind' },
-  NEUTRAL:     null,
-};
-
-function fmtMargin(v) {
-  if (!v) return '—';
-  if (v >= 1e5) return '₹' + (v / 1e5).toFixed(2) + 'L';
-  if (v >= 1e3) return '₹' + (v / 1e3).toFixed(1) + 'K';
-  return '₹' + fmt(v, 0);
+function fmtOI(v) {
+  if (!v) return '0.00';
+  return (v / 1e5).toFixed(2); // lakhs
 }
-
-function confColor(c) {
-  if (c == null) return '#94a3b8';
-  return c >= 70 ? '#16a34a' : c >= 50 ? '#d97706' : '#dc2626';
+function chgColor(pct) {
+  if (pct == null || pct === 0) return '#64748b';
+  return pct > 0 ? '#16a34a' : '#dc2626';
 }
-function confBg(c) {
-  if (c == null) return 'transparent';
-  return c >= 70 ? '#f0fdf4' : c >= 50 ? '#fffbeb' : '#fef2f2';
-}
-
-// ── One side (CE or PE) of a strike row ──
-function SideCell({ cell, align, itm }) {
-  if (!cell) return <div style={{ flex: 1, textAlign: align, color: '#e2e8f0', fontSize: 11, padding: '6px 8px' }}>—</div>;
-  const build = BUILD_ICON[cell.oiBuildType];
+// Bar strength under each %-change figure — width scaled to magnitude, capped.
+function ChgBar({ pct, align }) {
+  const w = Math.min(100, Math.abs(pct || 0) * 2);
   return (
-    <div style={{
-      flex: 1, textAlign: align, padding: '7px 9px',
-      background: itm ? (align === 'left' ? 'linear-gradient(90deg,#f5f3ff,transparent)' : 'linear-gradient(270deg,#f5f3ff,transparent)') : 'transparent',
-    }}>
-      <div style={{ display: 'flex', justifyContent: align === 'left' ? 'flex-start' : 'flex-end', alignItems: 'baseline', gap: 5 }}>
-        <span style={{ fontSize: 14, fontWeight: 800, color: '#0f172a', letterSpacing: -0.2 }}>{fmt(cell.ltp)}</span>
-        {cell.isLive && <span style={{ fontSize: 7, color: '#16a34a', animation: 'pulse 1.5s ease-in-out infinite' }}>⚡</span>}
-      </div>
-      <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 1 }}>{fmt(cell.oi, 0)} OI</div>
+    <div style={{ height: 2, width: '100%', background: '#f1f5f9', marginTop: 3 }}>
       <div style={{
-        display: 'inline-flex', justifyContent: align === 'left' ? 'flex-start' : 'flex-end', alignItems: 'center', gap: 4,
-        marginTop: 4, background: confBg(cell.confidence), borderRadius: 5, padding: '1.5px 5px',
-      }}>
-        <span style={{ fontSize: 9.5, fontWeight: 800, color: confColor(cell.confidence) }}>{cell.confidence}%</span>
-        {build && <span title={build.label} style={{ fontSize: 9.5 }}>{build.icon}</span>}
-      </div>
-      <div style={{ fontSize: 8.5, color: '#94a3b8', marginTop: 2 }}>{fmtMargin(cell.marginEst)} margin</div>
+        height: 2, width: w + '%', background: chgColor(pct),
+        marginLeft: align === 'right' ? 'auto' : 0,
+      }} />
     </div>
   );
 }
 
-function StrikeRow({ row, atmStrike, accentColor }) {
-  const isAtm = row.strike === atmStrike;
-  const ceITM = row.strike < atmStrike;
-  const peITM = row.strike > atmStrike;
+// ── One side (CE or PE) of a strike row — OI / LTP stacked, broker style ──
+function SideCell({ cell, align }) {
+  if (!cell) return <div style={{ flex: 1, padding: '8px 6px' }} />;
+  const oiColor = chgColor(cell.oiChg);
+  const ltpColor = chgColor(cell.ltpChgPct);
   return (
-    <div style={{
-      display: 'flex', alignItems: 'stretch',
-      borderBottom: '1px solid #f1f5f9',
-      background: isAtm ? '#faf5ff' : '#fff',
-      transition: 'background .15s',
-    }}>
-      <SideCell cell={row.CE} align="left" itm={ceITM} />
+    <div style={{ flex: 1, display: 'flex', padding: '8px 6px', gap: 4, textAlign: align, justifyContent: align === 'left' ? 'flex-start' : 'flex-end' }}>
+      <div style={{ flex: 1, order: align === 'left' ? 0 : 2 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: oiColor }}>{fmtOI(cell.oi)}</div>
+        <div style={{ fontSize: 9.5, fontWeight: 700, color: oiColor }}>{cell.oiChg >= 0 ? '+' : ''}{cell.oiChg}%</div>
+        <ChgBar pct={cell.oiChg} align={align} />
+      </div>
+      <div style={{ flex: 1, order: 1 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: ltpColor, display: 'flex', alignItems: 'center', gap: 3, justifyContent: align === 'left' ? 'flex-start' : 'flex-end' }}>
+          {fmt(cell.ltp)}{cell.isLive && <span style={{ fontSize: 6, color: '#16a34a' }}>⚡</span>}
+        </div>
+        <div style={{ fontSize: 9.5, fontWeight: 700, color: ltpColor }}>{cell.ltpChgPct >= 0 ? '+' : ''}{cell.ltpChgPct}%</div>
+        <ChgBar pct={cell.ltpChgPct} align={align} />
+      </div>
+    </div>
+  );
+}
+
+function StrikeRow({ row, accentColor }) {
+  const pcr = row.CE?.oi > 0 ? +(row.PE?.oi / row.CE.oi).toFixed(2) : (row.PE?.oi > 0 ? 99.99 : 0);
+  return (
+    <div style={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid #f1f5f9', background: row.atm ? '#faf5ff' : '#fff' }}>
+      <SideCell cell={row.CE} align="left" />
       <div style={{
-        width: 62, flexShrink: 0, textAlign: 'center', fontSize: 12.5, fontWeight: 800,
-        color: isAtm ? accentColor : '#334155',
+        width: 78, flexShrink: 0, textAlign: 'center', fontSize: 13, fontWeight: 800,
+        color: row.atm ? accentColor : '#334155',
         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-        borderLeft: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9',
-        background: isAtm ? '#fff' : '#fafbfc',
+        borderLeft: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9', background: '#fafbfc',
       }}>
         <div>{fmt(row.strike, 0)}</div>
-        {isAtm && <div style={{ fontSize: 7, color: accentColor, fontWeight: 800, marginTop: 1 }}>● ATM</div>}
+        <div style={{ fontSize: 8.5, color: '#94a3b8', fontWeight: 700, marginTop: 1 }}>PCR: {pcr}</div>
       </div>
-      <SideCell cell={row.PE} align="right" itm={peITM} />
+      <SideCell cell={row.PE} align="right" />
     </div>
   );
 }
 
-// Renders exactly the rows it's given (already sliced to the visible window
-// by the parent) — it does not re-slice, so the WS subscription (also built
-// from that same visible-rows list in the parent) always matches what's drawn.
-function ChainSection({ chain, shownRows, totalStrikes, atm, accentColor, onLoadMore }) {
+// Spot-price pill inserted inline between the strike rows just below spot,
+// exactly like a broker chain's "current price" divider.
+function SpotDivider({ spot, color }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', padding: '6px 0' }}>
+      <div style={{ flex: 1, height: 1, background: color }} />
+      <div style={{ background: color, color: '#fff', fontSize: 12, fontWeight: 800, padding: '5px 16px', borderRadius: 20, margin: '0 8px' }}>
+        {fmt(spot, 2)}
+      </div>
+      <div style={{ flex: 1, height: 1, background: color }} />
+    </div>
+  );
+}
+
+function ChainSection({ chain, shownRows, totalStrikes, spot, accentColor, onLoadMore }) {
   const hasMore = totalStrikes > shownRows.length;
+  let spotInserted = false;
 
   return (
     <div style={{ marginBottom: 16 }}>
@@ -108,33 +106,33 @@ function ChainSection({ chain, shownRows, totalStrikes, atm, accentColor, onLoad
         border: `1px solid ${accentColor}30`, borderBottom: 'none',
       }}>
         <span style={{ fontSize: 11.5, fontWeight: 800, color: accentColor }}>📅 {chain?.expiry}</span>
-        <span style={{ fontSize: 9.5, color: '#64748b', fontWeight: 600 }}>{shownRows.length}/{totalStrikes} strikes</span>
+        <span style={{ fontSize: 9.5, color: '#64748b', fontWeight: 600 }}>{shownRows.length}/{totalStrikes} · Max Pain {fmt(chain?.maxPain, 0)} · PCR {chain?.pcr?.toFixed(2)}</span>
       </div>
 
-      {/* Max pain + walls strip */}
-      {chain && (
-        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 9.5, padding: '7px 12px', background: '#fff', border: `1px solid ${accentColor}30`, borderTop: 'none', borderBottom: 'none' }}>
-          <span>🎯 Max Pain <b style={{ color: '#7c3aed' }}>{fmt(chain.maxPain, 0)}</b></span>
-          {chain.oiWalls?.callWall > 0 && <span>📉 Call Wall <b style={{ color: '#dc2626' }}>{fmt(chain.oiWalls.callWall, 0)}</b></span>}
-          {chain.oiWalls?.putWall > 0 && <span>📈 Put Wall <b style={{ color: '#16a34a' }}>{fmt(chain.oiWalls.putWall, 0)}</b></span>}
-          <span>PCR <b>{chain.pcr?.toFixed(2)}</b></span>
-        </div>
-      )}
-
       <div style={{
-        display: 'flex', padding: '7px 9px', background: '#f8fafc',
+        display: 'flex', alignItems: 'center', padding: '7px 9px', background: '#f1f5f9',
         border: `1px solid ${accentColor}30`, borderTop: 'none',
-        fontSize: 8.5, fontWeight: 800, color: '#94a3b8', letterSpacing: 0.3,
+        fontSize: 9, fontWeight: 800, color: '#64748b', letterSpacing: 0.3,
       }}>
-        <div style={{ flex: 1, textAlign: 'left' }}>CALLS</div>
-        <div style={{ width: 62, textAlign: 'center' }}>STRIKE</div>
-        <div style={{ flex: 1, textAlign: 'right' }}>PUTS</div>
+        <div style={{ flex: 1, textAlign: 'left' }}>← OI &nbsp; LTP (CALLS)</div>
+        <div style={{ width: 78, textAlign: 'center' }}>STRIKE 🔍</div>
+        <div style={{ flex: 1, textAlign: 'right' }}>LTP &nbsp; OI →</div>
       </div>
 
       <div style={{ border: `1px solid ${accentColor}30`, borderTop: 'none', borderRadius: '0 0 10px 10px', overflow: 'hidden', boxShadow: '0 2px 8px rgba(15,23,42,.04)' }}>
         {shownRows.length === 0
           ? <div style={{ padding: 20, textAlign: 'center', fontSize: 11, color: '#94a3b8' }}>No strikes in range</div>
-          : shownRows.map((row) => <StrikeRow key={row.strike} row={row} atmStrike={atm} accentColor={accentColor} />)}
+          : shownRows.map((row, i) => {
+              // Insert the spot-price divider right where price crosses between strikes.
+              const showDivider = !spotInserted && spot && row.strike >= spot && (i === 0 || shownRows[i - 1].strike < spot);
+              if (showDivider) spotInserted = true;
+              return (
+                <React.Fragment key={row.strike}>
+                  {showDivider && <SpotDivider spot={spot} color={accentColor} />}
+                  <StrikeRow row={row} accentColor={accentColor} />
+                </React.Fragment>
+              );
+            })}
         {hasMore && (
           <button onClick={onLoadMore} style={{
             width: '100%', padding: '10px 0', border: 'none', borderTop: '1px solid #f1f5f9',
@@ -165,7 +163,6 @@ export default function OptionAnalysisPane() {
 
   const idx = INDEX_FILTERS.find((i) => i.id === filter) || INDEX_FILTERS[0];
 
-  // Full reload: spot/VIX/expiry-list + the default (nearest) expiry's chain.
   const load = useCallback(async () => {
     setLoading(true); setError(''); setChain(null); setMeta(null);
     setVisibleStrikes(PAGE_SIZE);
@@ -193,7 +190,6 @@ export default function OptionAnalysisPane() {
     return () => document.removeEventListener('friday:scan', onScan);
   }, [load]);
 
-  // Switching expiry only fetches that one chain — spot/VIX/marketCtx reused from meta.
   const switchExpiry = useCallback(async (nextExpiry) => {
     if (!meta || nextExpiry === expiry) return;
     setExpiry(nextExpiry);
@@ -209,33 +205,35 @@ export default function OptionAnalysisPane() {
     } finally { setChainLoading(false); }
   }, [meta, expiry, accessToken, idx.key, idx.step, idx.lot, cfg, onTokenExpired, lg]);
 
-  // ── Only the strikes currently shown on screen get sliced + WS-subscribed ──
+  // ── Only the strikes currently shown on screen ──
   const shownRows = useMemo(
     () => selectStrikesAroundATM(chain?.rows || [], chain?.atm, visibleStrikes),
     [chain, visibleStrikes]
   );
 
-  const optionKeys = useMemo(() => {
-    const keys = [];
+  // ── SINGLE WS connection for the whole page: index + VIX + only the ──
+  // ── visible strikes' option instrument keys. Upstox allows one active ──
+  // ── feed connection per token — two hooks here would race/starve each ──
+  // ── other, which is why the grid previously looked "dead". pollFallback ──
+  // ── is on, so even if WS itself is rejected, REST polling every 15s ──
+  // ── still keeps the grid (and spot/VIX) updating.──
+  const feedKeys = useMemo(() => {
+    const keys = [idx.key, VIX_KEY];
     shownRows.forEach((r) => { if (r.CE?.instrKey) keys.push(r.CE.instrKey); if (r.PE?.instrKey) keys.push(r.PE.instrKey); });
     return keys;
-  }, [shownRows]);
+  }, [idx.key, shownRows]);
 
-  const { lastPrices: idxPrices } = useMarketFeed(accessToken, [idx.key, VIX_KEY], !!accessToken, { pollFallback: true });
-  const { lastPrices: optPrices } = useMarketFeed(accessToken, optionKeys, optionKeys.length > 0, { pollFallback: false, mode: 'full' });
+  const { lastPrices: live, wsMode } = useMarketFeed(accessToken, feedKeys, feedKeys.length > 2, { pollFallback: true, mode: 'full' });
 
-  const liveShownRows = useMemo(() => mergeLiveIntoRows(shownRows, optPrices, idx.lot), [shownRows, optPrices, idx.lot]);
+  const liveShownRows = useMemo(() => mergeLiveIntoRows(shownRows, live, idx.lot), [shownRows, live, idx.lot]);
 
-  const liveSpot = idxPrices[idx.key]?.ltp || meta?.spot || 0;
-  const liveVix  = idxPrices[VIX_KEY]?.ltp || meta?.vixVal || 0;
+  const liveSpot = live[idx.key]?.ltp || meta?.spot || 0;
+  const liveVix  = live[VIX_KEY]?.ltp || meta?.vixVal || 0;
   const { txt: vixTxt } = interpVIX(liveVix);
-  const wsLive = Object.keys(optPrices).length > 0;
+  const spotChgLive = live[idx.key]?.chgPct ?? meta?.spotChg ?? 0;
 
   return (
     <div>
-      <style>{`@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }`}</style>
-
-      {/* Index filter tabs */}
       <div style={{ display: 'flex', gap: 0, marginBottom: 14, background: '#f1f5f9', borderRadius: 10, padding: 3 }}>
         {INDEX_FILTERS.map((f) => (
           <button key={f.id} onClick={() => setFilter(f.id)} style={{
@@ -243,7 +241,6 @@ export default function OptionAnalysisPane() {
             background: filter === f.id ? '#fff' : 'transparent',
             color: filter === f.id ? f.color : '#64748b',
             boxShadow: filter === f.id ? '0 1px 6px rgba(0,0,0,.1)' : 'none',
-            transition: 'all .15s',
           }}>{f.id}</button>
         ))}
       </div>
@@ -262,16 +259,14 @@ export default function OptionAnalysisPane() {
             </div>
           )}
 
-          {/* Spot + VIX */}
           <div className="stats-g" style={{ marginBottom: 10 }}>
-            <StatCard label={filter} value={`₹${fmt(liveSpot, 0)}`} sub={fmtC(meta.spotChg)} valClass={meta.spotChg >= 0 ? 'up' : 'dn'} />
+            <StatCard label={filter} value={`₹${fmt(liveSpot, 0)}`} sub={fmtC(spotChgLive)} valClass={spotChgLive >= 0 ? 'up' : 'dn'} />
             <StatCard label="INDIA VIX" value={liveVix.toFixed(2)} sub={vixTxt} valClass={liveVix < 16 ? 'up' : liveVix > 22 ? 'dn' : 'am'} />
-            <StatCard label="WS FEED" value={wsLive ? 'LIVE' : 'Connecting'} sub={`${optionKeys.length} instruments`} valClass={wsLive ? 'up' : 'am'} />
+            <StatCard label="FEED" value={wsMode === 'ws' ? 'LIVE' : wsMode === 'poll' ? 'POLLING' : '...'} sub={`${feedKeys.length - 2} strikes`} valClass={wsMode === 'ws' ? 'up' : 'am'} />
           </div>
 
           {updTime && <LastUpdated time={updTime} />}
 
-          {/* Expiry selector — weekly: 5 nearest · monthly-only: current + next month */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 10, overflowX: 'auto', paddingBottom: 2 }}>
             {meta.expiryList.map((e) => (
               <button key={e} onClick={() => switchExpiry(e)} disabled={chainLoading} style={{
@@ -292,13 +287,13 @@ export default function OptionAnalysisPane() {
               chain={chain}
               shownRows={liveShownRows}
               totalStrikes={chain?.rows.length || 0}
-              atm={chain?.atm}
+              spot={liveSpot}
               accentColor={idx.color}
               onLoadMore={() => setVisibleStrikes((v) => v + PAGE_SIZE)}
             />
           )}
 
-          <div className="disc">⚠ Margin = lot size × LTP (live, tracks premium) — not a SPAN+exposure margin from your broker. Confidence uses the same model as F&O Options. Not SEBI advice · DYODD.</div>
+          <div className="disc">⚠ Margin = lot size × LTP (live) — not SPAN+exposure. PCR per strike = strike's PE OI ÷ CE OI. Not SEBI advice · DYODD.</div>
         </div>
       )}
     </div>
