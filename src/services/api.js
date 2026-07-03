@@ -153,6 +153,28 @@ export async function fetchIntraday(key, interval = '30minute', token, onTokenEx
   return d?.data?.candles || [];
 }
 
+// ── Live option greeks (delta/theta/gamma/vega/iv/oi) — WS 'full' mode
+// technically carries these but Upstox hasn't published the proto field
+// numbers for optionGreeks, so we poll this REST endpoint instead of
+// guessing binary offsets. Keyed by instrument_key for easy merging.
+export async function fetchOptionGreeks(keys, token, onTokenExpired) {
+  const cleaned = [...new Set(
+    (Array.isArray(keys) ? keys : String(keys || '').split(',')).map((k) => k.trim()).filter(Boolean)
+  )].join(',');
+  if (!cleaned) return {};
+  const d = await withRetry(
+    () => apiGet('/v3/market-quote/option-greek?instrument_key=' + encodeURIComponent(cleaned), token, onTokenExpired),
+    'fetchOptionGreeks'
+  );
+  const raw = d?.data || {};
+  const out = {};
+  for (const v of Object.values(raw)) {
+    const key = (v?.instrument_token || '').replace(/:/g, '|');
+    if (key) out[key] = { iv: v.iv ?? 0, delta: v.delta ?? 0, theta: v.theta ?? 0, gamma: v.gamma ?? 0, vega: v.vega ?? 0, oi: v.oi ?? 0 };
+  }
+  return out;
+}
+
 // ── Options chain ──
 export async function fetchOptions(instrKey, expiry, token, onTokenExpired) {
   const d = await withRetry(
