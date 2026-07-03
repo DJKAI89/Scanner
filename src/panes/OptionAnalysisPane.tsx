@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, StatCard, LastUpdated, EmptyState } from '../components/common.jsx';
-import { resolveAccessToken } from '../services/api';
+import { resolveAccessToken, fetchOptionGreeks } from '../services/api';
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed';
@@ -227,15 +227,32 @@ export default function OptionAnalysisPane() {
   // ── other, which is why the grid previously looked "dead". pollFallback ──
   // ── is on, so even if WS itself is rejected, REST polling every 15s ──
   // ── still keeps the grid (and spot/VIX) updating.──
+  const [liveGreeks, setLiveGreeks] = useState({});
+
   const feedKeys = useMemo(() => {
     const keys = [idx.key, VIX_KEY];
     shownRows.forEach((r) => { if (r.CE?.instrKey) keys.push(r.CE.instrKey); if (r.PE?.instrKey) keys.push(r.PE.instrKey); });
     return keys;
   }, [idx.key, shownRows]);
 
+  // Real delta/theta/iv for visible strikes — WS doesn't carry these (see
+  // fetchOptionGreeks comment), so poll the REST endpoint every 20s instead.
+  useEffect(() => {
+    const optKeys = feedKeys.slice(2);
+    if (!accessToken || !optKeys.length) return;
+    let cancelled = false;
+    const poll = () => fetchOptionGreeks(optKeys, accessToken, onTokenExpired).then((g) => { if (!cancelled) setLiveGreeks(g); }).catch(() => {});
+    poll();
+    const t = setInterval(poll, 20000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [feedKeys, accessToken, onTokenExpired]);
+
   const { lastPrices: live, wsMode } = useMarketFeed(accessToken, feedKeys, feedKeys.length > 2, { pollFallback: true, mode: 'full' });
 
-  const liveShownRows = useMemo(() => mergeLiveIntoRows(shownRows, live, idx.lot), [shownRows, live, idx.lot]);
+  const liveShownRows = useMemo(() => {
+    const cs = meta?.marketCtx?.compositeScore ?? (meta?.niftyBullish ? 1 : -1);
+    return mergeLiveIntoRows(shownRows, live, idx.lot, cs > 0.5, cs < -0.5, cfg?.oi ?? 15, liveGreeks);
+  }, [shownRows, live, idx.lot, meta, cfg, liveGreeks]);
 
   const liveSpot = live[idx.key]?.ltp || meta?.spot || 0;
   const liveVix  = live[VIX_KEY]?.ltp || meta?.vixVal || 0;
