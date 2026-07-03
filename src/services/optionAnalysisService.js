@@ -44,11 +44,14 @@ export function selectStrikesAroundATM(rows, atm, count) {
   return rows.filter((_, i) => picked.has(i));
 }
 
+const OI_BONUS = { LONG_BUILD: 15, SHORT_COVER: 5, SHORT_BUILD: -15, LONG_UNWIND: -8, NEUTRAL: 0 };
+
 // Merges live WS prices (LTP/OI) into per-strike rows, recomputing margin
-// (lot × LTP) on every tick. Call this with ONLY the rows currently shown
-// on screen — the WS subscription itself is scoped to just those rows too,
-// so there's nothing to merge for off-screen strikes.
-export function mergeLiveIntoRows(rows, lastPrices, lot = 1) {
+// AND confidence on every tick. Delta/IV/theta stay as of last full fetch
+// (not in the WS tick payload) but OI buildup — the biggest confidence
+// swing factor — recomputes live off prevOI + live OI, same thresholds
+// used at scan time, layered back onto the cached baseConfidence.
+export function mergeLiveIntoRows(rows, lastPrices, lot = 1, priceBull = null, priceBear = null, oiThresh = 15, liveGreeks = null) {
   if (!rows?.length || !lastPrices || Object.keys(lastPrices).length === 0) return rows;
   return rows.map((row) => {
     const next = { ...row };
@@ -59,11 +62,38 @@ export function mergeLiveIntoRows(rows, lastPrices, lot = 1) {
       if (!live) continue;
       const liveLtp = live.ltp ?? cell.ltp;
       const cp = live.cp || 0;
+      const g = liveGreeks?.[cell.instrKey];
+      const liveOi = g?.oi || live.oi || cell.oi;
+
+      let oiBuildType = cell.oiBuildType, oiBuildBonus = cell.oiBuildBonus, confidence = cell.confidence;
+      if (live.oi != null && cell.prevOI > 0 && priceBull != null) {
+        const oiChg = (liveOi - cell.prevOI) / cell.prevOI * 100;
+        const oiRising = oiChg >= oiThresh, oiFalling = oiChg <= -oiThresh;
+        oiBuildType = 'NEUTRAL';
+        if (cell.isCE) {
+          if (priceBull && oiRising)  oiBuildType = 'LONG_BUILD';
+          if (priceBull && oiFalling) oiBuildType = 'SHORT_COVER';
+          if (priceBear && oiRising)  oiBuildType = 'SHORT_BUILD';
+          if (priceBear && oiFalling) oiBuildType = 'LONG_UNWIND';
+        } else {
+          if (priceBear && oiRising)  oiBuildType = 'LONG_BUILD';
+          if (priceBear && oiFalling) oiBuildType = 'SHORT_COVER';
+          if (priceBull && oiRising)  oiBuildType = 'SHORT_BUILD';
+          if (priceBull && oiFalling) oiBuildType = 'LONG_UNWIND';
+        }
+        oiBuildBonus = (oiRising || oiFalling) ? OI_BONUS[oiBuildType] : 0;
+        confidence = Math.round(Math.min(100, Math.max(0, (cell.baseConfidence ?? cell.confidence) + oiBuildBonus)));
+      }
+
       next[side] = {
         ...cell,
         ltp: liveLtp,
         ltpChgPct: cp > 0 ? +((liveLtp - cp) / cp * 100).toFixed(2) : cell.ltpChgPct,
-        oi: live.oi ?? cell.oi,
+        oi: liveOi,
+        delta: g?.delta ?? cell.delta,
+        iv: g?.iv != null ? +(g.iv * 100).toFixed(1) : cell.iv,
+        theta: g?.theta ?? cell.theta,
+        oiBuildType, oiBuildBonus, confidence,
         marginEst: +(liveLtp * lot).toFixed(0),
         isLive: true,
       };
