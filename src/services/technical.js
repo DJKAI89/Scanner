@@ -985,6 +985,20 @@ export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, 
   const priceBull = compositeScore > 0.5, priceBear = compositeScore < -0.5;
   const oi_thresh = cfg?.oi ?? 15;
 
+  // Same zone/direction-flip inputs the Options signal page (buildOptionPicks)
+  // uses, so confidence here matches it exactly rather than being a subset.
+  const pdh = marketCtx?.pdh || null, pdl = marketCtx?.pdl || null;
+  let priceZone = 'mid';
+  if (pdh && pdl && spot) {
+    const pdhDist = (spot - pdh) / pdh * 100;
+    const pdlDist = (pdl - spot) / pdl * 100;
+    if      (pdhDist >= 0)    priceZone = 'abovePDH';
+    else if (pdhDist >= -0.3) priceZone = 'nearPDH';
+    else if (pdlDist >= 0)    priceZone = 'belowPDL';
+    else if (pdlDist >= -0.3) priceZone = 'nearPDL';
+  }
+  const dirFlipPenalty = marketCtx?.directionFlipped ? -15 : 0;
+
   for (const row of chain) {
     const sp = row.strike_price;
     if (!spot || Math.abs(sp - atm) > spot * 0.15) continue;
@@ -1017,12 +1031,25 @@ export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, 
       }
       if (!oiRising && !oiFalling) oiBuildBonus = 0;
 
-      const signals = []; // confidence formula reads signals.length for one minor term only
+      const signals = [];
       if (Math.abs(delta) >= (cfg?.delta || 0.40)) signals.push({ l: 'Delta', s: 3 });
-      if (iv >= (cfg?.iv || 15)) signals.push({ l: 'IV', s: 2 });
+      if (iv >= (cfg?.iv || 15))                    signals.push({ l: 'IV', s: 2 });
+      if (oiRising)                                 signals.push({ l: 'OI+', s: 2 });
+      if (oiFalling)                                signals.push({ l: 'OI-', s: 1 });
+      if (theta < -0.5)                             signals.push({ l: 'Theta', s: 1 });
+      if (sp === atm)                                signals.push({ l: 'ATM', s: 1 });
 
       let confidence = calcOptConfidenceFull(delta, iv, oiChg, theta, signals, spot, sp, optType, niftyBullish, vix, maxPain, stockPCR, marketCtx);
-      confidence = Math.round(Math.min(100, Math.max(0, confidence + oiBuildBonus)));
+      let zoneAdj = 0;
+      if      (priceZone === 'abovePDH' &&  isCEOpt) zoneAdj = +10;
+      else if (priceZone === 'nearPDH'  &&  isCEOpt) zoneAdj =  +5;
+      else if (priceZone === 'belowPDL' && !isCEOpt) zoneAdj = +10;
+      else if (priceZone === 'nearPDL'  && !isCEOpt) zoneAdj =  +5;
+      else if (priceZone === 'mid')                   zoneAdj = -18;
+      if (priceZone === 'belowPDL' &&  isCEOpt) zoneAdj = -25;
+      if (priceZone === 'abovePDH' && !isCEOpt) zoneAdj = -25;
+      const baseConfidence = Math.round(Math.min(100, Math.max(0, confidence + zoneAdj + dirFlipPenalty)));
+      confidence = Math.round(Math.min(100, Math.max(0, baseConfidence + oiBuildBonus)));
 
       // Margin here is simply lot size × LTP — the capital tied up per lot at
       // the current premium. It is NOT a SPAN+exposure margin (that's set by
@@ -1032,7 +1059,7 @@ export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, 
 
       out[optType] = {
         ltp: +ltp.toFixed(2), ltpChgPct, oi, oiChg: +oiChg.toFixed(1), delta: +delta.toFixed(2), iv: +iv.toFixed(1), theta: +theta.toFixed(2),
-        confidence, oiBuildType, oiBuildBonus, marginEst,
+        confidence, baseConfidence, prevOI, isCE: isCEOpt, oiBuildType, oiBuildBonus, marginEst,
         instrKey: opt.instrument_key || null,
       };
     }
