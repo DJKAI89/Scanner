@@ -16,6 +16,13 @@ const STATUS_COLORS = {
   SL_HIT:     { bg:'#fef2f2', color:'#dc2626', border:'#fca5a5' },
   EXPIRED:    { bg:'#f8fafc', color:'#64748b', border:'#e2e8f0' },
 };
+const EXIT_REASON_LABELS = {
+  TARGET:     '🎯 Target',
+  SL:         '❌ Stop loss',
+  TRAIL_STOP: '📈 Trail stop',
+  TIME_STOP:  '⏱ Time stop',
+  EXPIRY:     '⌛ Expired',
+};
 
 function SignalRow({ sig, livePrice }) {
   const sc = STATUS_COLORS[sig.status] || STATUS_COLORS.OPEN;
@@ -23,24 +30,31 @@ function SignalRow({ sig, livePrice }) {
   const isOpt  = sig.type === 'OPTION';
   const ltp    = livePrice ?? null;
   const entry  = sig.entry  || 0;
-  const slVal  = sig.sl     || 0;
-  const tgtVal = sig.target || 0;
+  const partials = sig.partials || [];
+  const hasHit = (level) => partials.some(p => p.level === level);
+  // Effective SL — trailing stop once break-even/partial-exit has activated
+  const effSL  = sig.trailSL ?? sig.sl ?? 0;
+  // Next unhit target — T1 → T2 → T3, falling back to legacy single target
+  const nextTarget = !hasHit('T1') ? { v: sig.targetT1 || sig.target, l: 'T1' }
+                    : !hasHit('T2') ? { v: sig.targetT2 || sig.target, l: 'T2' }
+                    : { v: sig.targetT3 || sig.target, l: 'T3' };
+  const tgtVal = nextTarget.v || sig.target || 0;
 
   // Live P&L
   const pnlPct = ltp && entry
     ? +((ltp - entry) / entry * 100).toFixed(2)
     : (sig.pnlPct ?? null);
 
-  // Target progress % (how far from entry to target)
+  // Target progress % (how far from entry to next target)
   const totalMove  = Math.abs(tgtVal - entry);
   const actualMove = ltp ? (isBuy ? ltp - entry : entry - ltp) : 0;
   const toPct = ltp && totalMove > 0
     ? Math.round(Math.max(-50, Math.min(120, actualMove / totalMove * 100)))
     : null;
 
-  // SL distance %
-  const slDist = ltp && entry && slVal
-    ? +((isBuy ? ltp - slVal : slVal - ltp) / entry * 100).toFixed(1)
+  // SL distance % (vs effective/trailing SL)
+  const slDist = ltp && entry && effSL
+    ? +((isBuy ? ltp - effSL : effSL - ltp) / entry * 100).toFixed(1)
     : null;
 
   // Flash on price change
@@ -88,9 +102,9 @@ function SignalRow({ sig, livePrice }) {
       {/* Metrics */}
       <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:4, marginBottom:8 }}>
         {[
-          { l:'ENTRY',  v: entry  ? `₹${fmt(entry)}`  : '—' },
-          { l:'SL',     v: slVal  ? `₹${fmt(slVal)}`  : '—' },
-          { l:'TARGET', v: tgtVal ? `₹${fmt(tgtVal)}` : '—' },
+          { l:'ENTRY',  v: entry ? `₹${fmt(entry)}` : '—' },
+          { l: sig.trailSL != null ? '🔒 TRAIL SL' : 'SL', v: effSL ? `₹${fmt(effSL)}` : '—' },
+          { l: `NEXT (${nextTarget.l})`, v: tgtVal ? `₹${fmt(tgtVal)}` : '—' },
           { l:'CONF',   v: `${sig.confidence||0}%`          },
         ].map(m => (
           <div key={m.l} style={{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:6, padding:'5px 7px' }}>
@@ -99,6 +113,48 @@ function SignalRow({ sig, livePrice }) {
           </div>
         ))}
       </div>
+
+      {/* T1/T2/T3 strip — always visible, hit levels checked off */}
+      {(sig.targetT1 || sig.targetT2 || sig.targetT3 || sig.target) && (
+        <div style={{ display:'flex', gap:4, marginBottom:8 }}>
+          {[
+            { l:'T1', v: sig.targetT1 || sig.target },
+            { l:'T2', v: sig.targetT2 || sig.target },
+            { l:'T3', v: sig.targetT3 || sig.target },
+          ].map(t => {
+            const hit = hasHit(t.l);
+            return (
+              <div key={t.l} style={{
+                flex:1, textAlign:'center', borderRadius:6, padding:'4px 3px',
+                background: hit ? '#f0fdf4' : '#f8fafc',
+                border: `1px solid ${hit ? '#86efac' : '#e2e8f0'}`,
+              }}>
+                <div style={{ fontSize:7, fontWeight:800, color: hit ? '#16a34a' : '#94a3b8' }}>{hit ? '✅ ' : ''}{t.l}</div>
+                <div style={{ fontSize:10.5, fontWeight:700, color: hit ? '#16a34a' : '#334155' }}>{t.v ? `₹${fmt(t.v)}` : '—'}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Partial exits + break-even badges */}
+      {(partials.length > 0 || sig.beActive) && (
+        <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginBottom:8 }}>
+          {sig.beActive && (
+            <span style={{ fontSize:8, fontWeight:800, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:6, padding:'2px 7px' }}>🔒 Break-even active</span>
+          )}
+          {partials.map((p, i) => (
+            <span key={i} style={{ fontSize:8, fontWeight:800, background:'#f0fdf4', color:'#16a34a', border:'1px solid #bbf7d0', borderRadius:6, padding:'2px 7px' }}>
+              ✅ {p.level} @ ₹{fmt(p.price)} ({p.pctClosed}%)
+            </span>
+          ))}
+          {sig.remainingPct != null && sig.remainingPct < 100 && sig.status === 'OPEN' && (
+            <span style={{ fontSize:8, fontWeight:800, background:'#fffbeb', color:'#92400e', border:'1px solid #fde68a', borderRadius:6, padding:'2px 7px' }}>
+              {sig.remainingPct}% remaining
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Live P&L + progress bar (OPEN signals with live price) */}
       {sig.status==='OPEN' && ltp != null && (
@@ -151,6 +207,7 @@ function SignalRow({ sig, livePrice }) {
         {isOpt && sig.lot && <span>📦 {sig.lot} qty</span>}
         {sig.strength && <span>💪 {sig.strength}</span>}
         {sig.exitPrice && <span>🏁 Exit ₹{fmt(sig.exitPrice)}</span>}
+        {sig.exitReason && <span>{EXIT_REASON_LABELS[sig.exitReason] || sig.exitReason}</span>}
       </div>
     </div>
   );
@@ -158,7 +215,7 @@ function SignalRow({ sig, livePrice }) {
 
 // ── Compute day stats for index update ────────────────────────
 export default function LogPane() {
-  const { gh, token, onTokenExpired, updateBadge, lg, marketStatus, openSignalCount, runSignalMonitor } = useApp();
+  const { gh, token, cfg, onTokenExpired, updateBadge, lg, marketStatus, openSignalCount, runSignalMonitor } = useApp();
 
   const [loading, setLoading]         = useState(false);
   const [checking, setChecking]       = useState(false);
@@ -190,8 +247,8 @@ export default function LogPane() {
     const istDate = getISTDate();
     const istTime = new Date().toLocaleTimeString('en-IN', { timeZone:'Asia/Kolkata', hour12:false });
 
-    const { updated, changed, newlyResolved } = resolveSignalsAgainstLivePrices(
-      signals, lastPrices, resolvedRef.current, istDate, istTime
+    const { updated, changed, newlyResolved, touchedIds } = resolveSignalsAgainstLivePrices(
+      signals, lastPrices, resolvedRef.current, istDate, istTime, cfg
     );
     if (newlyResolved.length) {
       newlyResolved.forEach(id => resolvedRef.current.add(id));
@@ -200,11 +257,11 @@ export default function LogPane() {
     setSignals(updated);
 
     if (changed) {
-      persistResolvedSignals(gh, updated, resolvedRef.current, lg, (date, newSha) => {
+      persistResolvedSignals(gh, updated, new Set(touchedIds), lg, (date, newSha) => {
         setSigShaMap(m => ({ ...m, [date]: newSha }));
       });
     }
-  }, [lastPrices, wsConnected]); // eslint-disable-line
+  }, [lastPrices, wsConnected, cfg]); // eslint-disable-line
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -221,11 +278,11 @@ export default function LogPane() {
   const checkAllOutcomes = useCallback(async () => {
     setChecking(true); setError('');
     try {
-      await checkAllOutcomesService({ gh, token, onTokenExpired, lg });
+      await checkAllOutcomesService({ gh, token, cfg, onTokenExpired, lg });
       await load();
     } catch(e) { setError('Outcome check failed: ' + e.message); lg('checkAllOutcomes: '+e.message,'e'); }
     finally { setChecking(false); }
-  }, [gh, token, onTokenExpired, load, lg]); // eslint-disable-line
+  }, [gh, token, cfg, onTokenExpired, load, lg]); // eslint-disable-line
 
   useEffect(() => { if (gh.token) load(); }, [gh.token, days]); // eslint-disable-line
 
