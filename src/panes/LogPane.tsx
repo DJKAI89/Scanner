@@ -104,7 +104,7 @@ function SignalRow({ sig, livePrice }) {
         {[
           { l:'ENTRY',  v: entry ? `₹${fmt(entry)}` : '—' },
           { l: sig.trailSL != null ? '🔒 TRAIL SL' : 'SL', v: effSL ? `₹${fmt(effSL)}` : '—' },
-          { l: nextTarget.l, v: tgtVal ? `₹${fmt(tgtVal)}` : '—' },
+          { l: `NEXT (${nextTarget.l})`, v: tgtVal ? `₹${fmt(tgtVal)}` : '—' },
           { l:'CONF',   v: `${sig.confidence||0}%`          },
         ].map(m => (
           <div key={m.l} style={{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:6, padding:'5px 7px' }}>
@@ -113,6 +113,29 @@ function SignalRow({ sig, livePrice }) {
           </div>
         ))}
       </div>
+
+      {/* T1/T2/T3 strip — always visible, hit levels checked off */}
+      {(sig.targetT1 || sig.targetT2 || sig.targetT3 || sig.target) && (
+        <div style={{ display:'flex', gap:4, marginBottom:8 }}>
+          {[
+            { l:'T1', v: sig.targetT1 || sig.target },
+            { l:'T2', v: sig.targetT2 || sig.target },
+            { l:'T3', v: sig.targetT3 || sig.target },
+          ].map(t => {
+            const hit = hasHit(t.l);
+            return (
+              <div key={t.l} style={{
+                flex:1, textAlign:'center', borderRadius:6, padding:'4px 3px',
+                background: hit ? '#f0fdf4' : '#f8fafc',
+                border: `1px solid ${hit ? '#86efac' : '#e2e8f0'}`,
+              }}>
+                <div style={{ fontSize:7, fontWeight:800, color: hit ? '#16a34a' : '#94a3b8' }}>{hit ? '✅ ' : ''}{t.l}</div>
+                <div style={{ fontSize:10.5, fontWeight:700, color: hit ? '#16a34a' : '#334155' }}>{t.v ? `₹${fmt(t.v)}` : '—'}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Partial exits + break-even badges */}
       {(partials.length > 0 || sig.beActive) && (
