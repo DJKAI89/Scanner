@@ -157,8 +157,10 @@ function ChainSection({ chain, shownRows, totalStrikes, spot, accentColor, onLoa
 }
 
 export default function OptionAnalysisPane() {
-  const { token, cfg, marketStatus, lg, onTokenExpired, updateBadge } = useApp();
+  const { token, cfg: cfgBase, mlModels, marketStatus, lg, onTokenExpired, updateBadge } = useApp();
   const accessToken = resolveAccessToken(token);
+  const optGates = mlModels?.thresholds?.option;
+  const cfg = optGates?.deltaGate != null ? { ...cfgBase, delta: optGates.deltaGate, iv: optGates.ivGate } : cfgBase;
 
   const [filter, setFilter] = useState('NIFTY');
   const [loading, setLoading] = useState(false);
