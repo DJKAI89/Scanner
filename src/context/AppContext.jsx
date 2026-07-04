@@ -6,6 +6,7 @@ import { interpretFIIDII } from '../services/technical';
 import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded, ghReadIndex, ghReadDay, ghWriteDay, pullAiModelFromGH, pushAiModelToGH, appendAiHistoryToGH, pullAiHistoryFromGH } from '../services/github';
 import { evaluateSignalExit } from '../services/tradeManagement';
 import { fetchQ, resolveAccessToken } from '../services/api';
+import { syncUpstoxTokenToGithub } from '../services/githubSecretSync';
 import { trainSignalMlModels, buildModelSnapshot } from '../services/mlRanking';
 
 const AppContext = createContext(null);
@@ -114,8 +115,9 @@ export function AppProvider({ children }) {
     localStorage.setItem('friday_token', v);
     localStorage.setItem('friday_token_date', new Date().toDateString());
     setTokenState(v); setTokenExpired(false); setBooted(true);
+    if (gh?.token && gh?.user && gh?.repo) syncUpstoxTokenToGithub(gh, v, lg);
     return null;
-  }, []);
+  }, [gh, lg]);
 
   const clearToken = useCallback(() => {
     localStorage.removeItem('friday_token');
