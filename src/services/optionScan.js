@@ -153,7 +153,11 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
 // caches: { prevAvgIVCache, prevPCRCache } — refs persisted across scans for trend deltas
 // callbacks: { setProgress, setMarketCtxMap, setVix }
 export async function runOptionsScan(ctx, caches, callbacks) {
-  const { accessToken, cfg, stocks, fiiData, adaptWeights, mlModels, confCalibration, gh, onTokenExpired, lg } = ctx;
+  const { accessToken, cfg: cfgIn, stocks, fiiData, adaptWeights, mlModels, confCalibration, gh, onTokenExpired, lg } = ctx;
+  // Learned delta/IV gates (mlRanking.optimizeThresholds) override the static
+  // 0.40/15 defaults once enough logged option signals exist to sweep them.
+  const optGates = mlModels?.thresholds?.option;
+  const cfg = optGates?.deltaGate != null ? { ...cfgIn, delta: optGates.deltaGate, iv: optGates.ivGate } : cfgIn;
   const { prevAvgIVCache, prevPCRCache } = caches;
   const { setProgress, setMarketCtxMap, setVix } = callbacks;
 
