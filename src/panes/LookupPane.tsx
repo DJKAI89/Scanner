@@ -180,10 +180,20 @@ function OptionSuggestionCard({ pick, cfg, showTools = true }) {
         <RecPill label={`${pick.action || 'BUY'} ${pick.type}`} dir={dir} />
       </div>
 
-      <div style={{ marginBottom: 8 }}>
+      <div style={{ marginBottom: 8, display:'flex', gap:6, flexWrap:'wrap' }}>
         <Tag tone={pick.confidence >= 70 ? 'green' : pick.confidence >= 50 ? 'amber' : 'red'}>
           {pick.confidence}% confidence
         </Tag>
+        {pick.regime && pick.regime !== 'NEUTRAL' && (
+          <Tag tone={pick.regime.startsWith('CHOPPY') ? (pick.regime==='CHOPPY_HIGH_VOL'?'red':'amber') : 'green'}>
+            {({CHOPPY_HIGH_VOL:'🌊 Choppy+High VIX',CHOPPY:'🌊 Choppy',TRENDING_CALM:'📈 Calm trend',TRENDING:'📈 Trending'})[pick.regime]}
+          </Tag>
+        )}
+        {pick.confluence?.total > 0 && (
+          <Tag tone={pick.confluence.conflicting >= 2 ? 'red' : pick.confluence.ratio >= 0.65 && pick.confluence.agree >= 4 ? 'green' : pick.confluence.ratio < 0.5 ? 'amber' : 'amber'}>
+            🧩 {pick.confluence.agree}/{pick.confluence.total} modules agree
+          </Tag>
+        )}
       </div>
 
       <LevelsStrip
@@ -391,7 +401,7 @@ export default function LookupPane() {
             }}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:6 }}>
                 <div style={{ fontWeight:900, fontSize:18, color:recColors[r.tech.rec] || '#d97706', letterSpacing:-0.3 }}>{r.tech.rec}</div>
-                <div style={{ fontSize:10.5, fontWeight:700, color:r.tech.strength?.color }}>{r.tech.strength?.label} · {r.tech.numInds} indicators · {r.tech.conf?.toFixed(0)}% conf</div>
+                <div style={{ fontSize:10.5, fontWeight:700, color:r.tech.strength?.color }}>{r.tech.strength?.label} · {r.tech.numInds} indicators · {r.tech.conf?.toFixed(0)}% conf{r.tech.regime && r.tech.regime !== 'NEUTRAL' ? ` · ${({CHOPPY_HIGH_VOL:'🌊 Choppy+High VIX',CHOPPY:'🌊 Choppy',TRENDING_CALM:'📈 Calm trend',TRENDING:'📈 Trending'})[r.tech.regime] || ''}` : ''}{r.tech.confluence?.total > 0 ? ` · 🧩 ${r.tech.confluence.agree}/${r.tech.confluence.total} modules agree` : ''}</div>
               </div>
               <div style={{ fontSize:11, color:'#475569', lineHeight:1.6, marginTop:8 }}>
                 {[

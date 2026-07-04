@@ -19,8 +19,6 @@ function getAiFolder()       { return `ai-models/${_uid()}`; }
 function getAiLatestPath()   { return `${getAiFolder()}/latest.json`; }
 function getAiHistoryIndexPath()        { return `${getAiFolder()}/history/index.json`; }
 function getAiHistoryDayPath(date)      { return `${getAiFolder()}/history/${date}.json`; }
-function getPaperFolder()    { return `paper-trades/${_uid()}`; }
-function getPaperDayPath(date) { return `${getPaperFolder()}/${date}.json`; }
 
 // ── Base GitHub fetch ──
 const _ghInflight = new Map();
@@ -166,24 +164,6 @@ export async function pullAiHistoryFromGH(gh, limit = 100) {
     }
     return items;
   } catch (_) { return []; }
-}
-
-export async function pullPaperTradesFromGH(gh, date) {
-  try {
-    const d = await _ghFetch(gh, getPaperDayPath(date));
-    if (!d) return { trades: [], sha: null };
-    const content = _decode(d.content);
-    return { trades: content.trades || [], sha: d.sha || null };
-  } catch (_) { return { trades: [], sha: null }; }
-}
-
-export async function pushPaperTradesToGH(gh, date, trades, sha = null) {
-  if (!gh.token || !gh.user || !gh.repo) return false;
-  try {
-    const payload = { trades: trades || [], date, savedAt: new Date().toISOString(), upstoxId: _uid() };
-    const r = await _ghPut(gh, getPaperDayPath(date), payload, sha, `FRIDAY paper trades · ${_uid()} · ${date}`);
-    return r?.ok ?? false;
-  } catch (_) { return false; }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -397,7 +377,17 @@ export function buildStockSignal(p, vixVal) {
     },
     status:         'OPEN',
     holdDays,
-    exitPrice: null, exitTime: null, exitDate: null, pnlPct: null, note: '',
+    atr:            p.atr || 0,
+    // ── Trade management: multi-target partial exits + ATR trailing stop ──
+    targetT1:       +(p.pot?.cons || p.target || 0).toFixed(2),
+    targetT2:       +(p.target   || p.pot?.mod || 0).toFixed(2),
+    targetT3:       +(p.pot?.agg || p.target || 0).toFixed(2),
+    partials:       [],
+    remainingPct:   100,
+    beActive:       false,
+    trailSL:        null,
+    maxFavPrice:    +p.ltp.toFixed(2),
+    exitPrice: null, exitTime: null, exitDate: null, pnlPct: null, exitReason: null, note: '',
   };
 }
 
@@ -459,11 +449,22 @@ export function buildOptionSignal(p, vixVal) {
       atm:            p.atm             || false,
     },
     status:         'OPEN',
-    holdDays:       1,
+    holdDays:       strengthLabel === 'STRONG' ? 3 : strengthLabel === 'MODERATE' ? 2 : 1,
+    riskDist:       +Math.abs((p.entry || 0) - (p.sl || 0)).toFixed(2),
+    // ── Trade management: multi-target partial exits + R-multiple trailing stop ──
+    targetT1:       +(p.t1 ?? p.tgt ?? 0).toFixed(2),
+    targetT2:       +(p.t2 ?? p.tgt ?? 0).toFixed(2),
+    targetT3:       +(p.t3 ?? p.tgt ?? 0).toFixed(2),
+    partials:       [],
+    remainingPct:   100,
+    beActive:       false,
+    trailSL:        null,
+    maxFavPrice:    +(p.entry || 0).toFixed(2),
     exitPrice:      null,
     exitTime:       null,
     exitDate:       null,
     pnlPct:         null,
+    exitReason:     null,
     note:           '',
   };
 }

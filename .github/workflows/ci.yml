@@ -2,9 +2,8 @@ name: FRIDAY — Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main, master]
   workflow_dispatch:
-
+  
 permissions:
   contents: read
   pages: write
@@ -25,10 +24,10 @@ jobs:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
 
-      - name: 🟢 Setup Node 20
+      - name: 🟢 Setup Node 24
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: 📦 Install

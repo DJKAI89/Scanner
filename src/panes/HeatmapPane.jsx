@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
-import { resolveAccessToken, fetchQ } from '../services/api';
+import { resolveAccessToken } from '../services/api';
 import { useMarketFeed } from '../hooks/useMarketFeed';
+import { loadBasePrices, enrichHeatmapRows } from '../services/heatmapService';
 import { getIST } from '../utils/marketTime';
 
 const fmt  = v => v >= 1000 ? v.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : v.toFixed(2);
@@ -90,7 +91,7 @@ function BreadthBar({ enriched }) {
 
 // ── Main ──────────────────────────────────────────────────────
 export default function HeatmapPane() {
-  const { token, stocks, marketStatus, lg, updateBadge } = useApp();
+  const { token, stocks, marketStatus, lg, updateBadge, onTokenExpired } = useApp();
 
   const [sector,   setSector]   = useState('ALL');
   const [sortBy,   setSortBy]   = useState('chg');
@@ -116,38 +117,17 @@ export default function HeatmapPane() {
   const loadBase = useCallback(async () => {
     if (!accessToken || !allKeys.length) return;
     setLoading(true); setError('');
-    lg(`Heatmap: loading ${allKeys.length} quotes…`, 'o');
     try {
-      const BATCH = 50;
-      const results = {};
-      const batches = [];
-      for (let i = 0; i < allKeys.length; i += BATCH)
-        batches.push(allKeys.slice(i, i + BATCH));
-
-      await Promise.allSettled(
-        batches.map(batch =>
-          fetchQ(batch.join(','), accessToken).then(raw => {
-            for (const [k, q] of Object.entries(raw)) {
-              const ltp = q.last_price || 0;
-              const cp  = q.ohlc?.close || 0;
-              if (ltp > 0) results[k] = { ltp, cp };
-            }
-          })
-        )
-      );
-
-      const count = Object.keys(results).length;
+      const { results, updTime: nextUpdTime } = await loadBasePrices({ accessToken, allKeys, onTokenExpired, lg, updateBadge });
       setBasePrices(results);
-      setUpdTime('Updated: ' + getIST());
-      updateBadge('heatmap', String(count));
-      lg(`Heatmap: ${count} base quotes loaded`, 'o');
+      setUpdTime(nextUpdTime);
     } catch (e) {
       setError(e.message);
       lg('Heatmap error: ' + e.message, 'e');
     } finally {
       setLoading(false);
     }
-  }, [accessToken, allKeys, lg, updateBadge]); // eslint-disable-line
+  }, [accessToken, allKeys, onTokenExpired, lg, updateBadge]); // eslint-disable-line
 
   // Mount — same as Portfolio's useEffect
   useEffect(() => { if (accessToken) loadBase(); }, [accessToken]); // eslint-disable-line
@@ -161,18 +141,7 @@ export default function HeatmapPane() {
 
   // ── Enrich — same pattern as Portfolio's enrich() ──
   // REST base gives ltp+cp, WS lastPrices overrides ltp when live
-  const enriched = useMemo(() => {
-    return stocks.map(stock => {
-      const key    = stock.key;
-      const base   = basePrices[key];
-      const live   = lastPrices[key];
-      const ltp    = live?.ltp || base?.ltp || 0;
-      const cp     = live?.cp  || base?.cp  || 0;
-      const chgPct = (ltp > 0 && cp > 0) ? +((ltp - cp) / cp * 100).toFixed(2) : 0;
-      const chgPt  = (ltp > 0 && cp > 0) ? +(ltp - cp).toFixed(2) : 0;
-      return { ...stock, ltp, cp, chgPct, chgPt, isLive: !!live?.ltp };
-    });
-  }, [stocks, basePrices, lastPrices]);
+  const enriched = useMemo(() => enrichHeatmapRows(stocks, basePrices, lastPrices), [stocks, basePrices, lastPrices]);
 
   // Sectors
   const sectors = useMemo(() =>

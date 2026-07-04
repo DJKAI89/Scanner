@@ -6,16 +6,40 @@ const GH_REPO = process.env.GH_REPO || '';
 const FRIDAY_USER_ID = (process.env.FRIDAY_USER_ID || '').replace(/[^a-zA-Z0-9_-]/g, '_');
 const LOOKBACK_DAYS = Number(process.env.AI_LOOKBACK_DAYS || 90);
 
-if (!GH_TOKEN || !GH_USER || !GH_REPO) {
-  console.error('Missing required config:', {
-    AI_GH_TOKEN: GH_TOKEN ? 'set' : 'MISSING',
-    GH_USER: GH_USER ? 'set' : 'MISSING',
-    GH_REPO: GH_REPO ? 'set' : 'MISSING',
-  });
-  console.error('Check that repo secrets AI_GH_TOKEN, AI_GH_USER, AI_GH_REPO exist and are spelled exactly like this (case-sensitive).');
+// ═══════════════════════════════════════════════════════════════════
+// CONFIGURATION VALIDATION
+// ═══════════════════════════════════════════════════════════════════
+const config = {
+  GH_TOKEN,
+  GH_USER,
+  GH_REPO,
+  FRIDAY_USER_ID,
+  LOOKBACK_DAYS,
+};
+
+const missingConfig = [];
+if (!GH_TOKEN) missingConfig.push('AI_GH_TOKEN (required: GitHub personal access token with repo:contents:read/write)');
+if (!GH_USER) missingConfig.push('GH_USER (required: GitHub username)');
+if (!GH_REPO) missingConfig.push('GH_REPO (required: Repository name)');
+
+if (missingConfig.length > 0) {
+  console.error('❌ CONFIGURATION ERROR');
+  console.error('Missing required environment variables:');
+  missingConfig.forEach(msg => console.error(`  - ${msg}`));
+  console.error('\nSet these variables before running:');
+  console.error('  export AI_GH_TOKEN="ghp_..."');
+  console.error('  export GH_USER="your-username"');
+  console.error('  export GH_REPO="your-repo"');
+  console.error('  export FRIDAY_USER_ID="user-id" (optional, processes all if not set)');
   process.exit(1);
 }
-console.log(`Config OK — targeting ${GH_USER}/${GH_REPO}, token length ${GH_TOKEN.length}`);
+
+console.log('✅ Configuration OK');
+console.log(`  Repository: ${GH_USER}/${GH_REPO}`);
+console.log(`  Token length: ${GH_TOKEN.length} chars`);
+console.log(`  Lookback: ${LOOKBACK_DAYS} days`);
+if (FRIDAY_USER_ID) console.log(`  Target user: ${FRIDAY_USER_ID}`);
+console.log('');
 
 async function loadBrainModule() {
   const source = await fs.readFile(new URL('../src/services/mlRanking.js', import.meta.url), 'utf8');
@@ -187,74 +211,128 @@ async function listUserIds() {
 }
 
 async function main() {
-  const brain = await loadBrainModule();
-  const userIds = await listUserIds();
+  const SCRIPT_TIMEOUT_MS = 25 * 60 * 1000; // 25 minute overall timeout
+  const startTime = Date.now();
+  
+  console.log('📋 Starting AI model retraining...');
+  
+  let brain;
+  try {
+    brain = await loadBrainModule();
+    console.log('✅ ML brain module loaded');
+  } catch (e) {
+    console.error('❌ Failed to load ML module:', e.message);
+    process.exit(1);
+  }
+
+  let userIds;
+  try {
+    userIds = await listUserIds();
+    console.log(`📊 Found ${userIds.length} users with signal history`);
+  } catch (e) {
+    console.error('❌ Failed to list user IDs:', e.message);
+    process.exit(1);
+  }
+
   if (!userIds.length) {
-    console.log('No user folders found in signal-logs');
+    console.log('⚠️ No user folders found in signal-logs. Nothing to train.');
     return;
   }
 
   let trained = 0;
+  let failed = 0;
+  let skipped = 0;
+
   for (const userId of userIds) {
+    // Check overall timeout
+    if (Date.now() - startTime > SCRIPT_TIMEOUT_MS) {
+      console.warn(`⏱️ TIMEOUT: Script exceeded ${SCRIPT_TIMEOUT_MS / 1000 / 60} minute limit. Exiting gracefully.`);
+      break;
+    }
+
     globalThis.FRIDAY_USER_ID = userId;
-    const signals = await (async () => {
-      const indexPath = `signal-logs/${userId}/index.json`;
-      const indexFile = await ghFetch(indexPath);
-      if (!indexFile) return [];
-      const index = decodeContent(indexFile.content);
-      if (!index) {
-        console.log(`Skip ${userId}: index.json is empty/unreadable`);
-        return [];
+    const userStartTime = Date.now();
+
+    try {
+      const signals = await (async () => {
+        const indexPath = `signal-logs/${userId}/index.json`;
+        const indexFile = await ghFetch(indexPath);
+        if (!indexFile) return [];
+        const index = decodeContent(indexFile.content);
+        if (!index) {
+          console.log(`⏭️ Skip ${userId}: index.json is empty/unreadable`);
+          return [];
+        }
+        const dates = (index.dates || []).slice(-LOOKBACK_DAYS);
+        const out = [];
+        for (const date of dates) {
+          const day = await ghFetch(`signal-logs/${userId}/${date}.json`);
+          if (!day) continue;
+          const payload = decodeContent(day.content);
+          if (!payload) continue;
+          out.push(...(payload.signals || []));
+        }
+        return out;
+      })();
+
+      const closed = signals.filter((s) => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
+      if (closed.length < 10) {
+        console.log(`⏭️ Skip ${userId}: only ${closed.length} closed signals (need ≥10)`);
+        skipped++;
+        continue;
       }
-      const dates = (index.dates || []).slice(-LOOKBACK_DAYS);
-      const out = [];
-      for (const date of dates) {
-        const day = await ghFetch(`signal-logs/${userId}/${date}.json`);
-        if (!day) continue;
-        const payload = decodeContent(day.content);
-        if (!payload) continue;
-        out.push(...(payload.signals || []));
+
+      const models = brain.trainSignalMlModels(closed);
+      if (!models) {
+        console.log(`⚠️ Skip ${userId}: training returned null (insufficient/unbalanced data)`);
+        skipped++;
+        continue;
       }
-      return out;
-    })();
 
-    const closed = signals.filter((s) => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
-    if (closed.length < 10) {
-      console.log(`Skip ${userId}: not enough closed signals (${closed.length})`);
-      continue;
+      // Validate trained model
+      if (models.stock) {
+        console.log(`  Stock model: accuracy=${(models.stock.accuracy || 0).toFixed(3)}, edge=${(models.stock.edge || 0).toFixed(4)}, samples=${models.stock.trainedOn}`);
+      }
+      if (models.option) {
+        console.log(`  Option model: accuracy=${(models.option.accuracy || 0).toFixed(3)}, edge=${(models.option.edge || 0).toFixed(4)}, samples=${models.option.trainedOn}`);
+      }
+
+      const snapshot = brain.buildModelSnapshot(models);
+      const today = new Date().toISOString().slice(0, 10);
+      const latestPath = `ai-models/${userId}/latest.json`;
+      const historyIndexPath = `ai-models/${userId}/history/index.json`;
+      const historyDayPath = `ai-models/${userId}/history/${today}.json`;
+
+      const latestExisting = await ghFetch(latestPath);
+      await ghPut(latestPath, { ...models, trainedOffline: true, userId }, latestExisting?.sha || null, `FRIDAY AI offline retrain · ${userId}`);
+
+      const historyDayExisting = await ghFetch(historyDayPath);
+      await ghPut(historyDayPath, { date: today, snapshot, trainedOffline: true, userId }, historyDayExisting?.sha || null, `FRIDAY AI history · ${userId} · ${today}`);
+
+      const historyIndexExisting = await ghFetch(historyIndexPath);
+      const historyIndex = decodeContent(historyIndexExisting?.content) || { dates: [] };
+      const dates = Array.from(new Set([...(historyIndex.dates || []), today])).sort().slice(-LOOKBACK_DAYS);
+      await ghPut(historyIndexPath, { dates, updatedAt: new Date().toISOString() }, historyIndexExisting?.sha || null, `FRIDAY AI history index · ${userId}`);
+
+      const elapsed = Math.round((Date.now() - userStartTime) / 1000);
+      console.log(`✅ Trained ${userId}: ${closed.length} closed signals in ${elapsed}s`);
+      trained++;
+    } catch (e) {
+      console.error(`❌ Error training ${userId}: ${e.message}`);
+      failed++;
     }
-
-    const models = brain.trainSignalMlModels(closed);
-    if (!models) {
-      console.log(`Skip ${userId}: training returned no model`);
-      continue;
-    }
-
-    const snapshot = brain.buildModelSnapshot(models);
-    const today = new Date().toISOString().slice(0, 10);
-    const latestPath = `ai-models/${userId}/latest.json`;
-    const historyIndexPath = `ai-models/${userId}/history/index.json`;
-    const historyDayPath = `ai-models/${userId}/history/${today}.json`;
-
-    const latestExisting = await ghFetch(latestPath);
-    await ghPut(latestPath, { ...models, trainedOffline: true, userId }, latestExisting?.sha || null, `FRIDAY AI offline retrain · ${userId}`);
-
-    const historyDayExisting = await ghFetch(historyDayPath);
-    await ghPut(historyDayPath, { date: today, snapshot, trainedOffline: true, userId }, historyDayExisting?.sha || null, `FRIDAY AI history · ${userId} · ${today}`);
-
-    const historyIndexExisting = await ghFetch(historyIndexPath);
-    const historyIndex = decodeContent(historyIndexExisting?.content) || { dates: [] };
-    const dates = Array.from(new Set([...(historyIndex.dates || []), today])).sort().slice(-LOOKBACK_DAYS);
-    await ghPut(historyIndexPath, { dates, updatedAt: new Date().toISOString() }, historyIndexExisting?.sha || null, `FRIDAY AI history index · ${userId}`);
-
-    console.log(`AI retrain complete for ${userId}. Closed signals: ${closed.length}`);
-    trained++;
   }
 
-  console.log(`Finished. Trained users: ${trained}/${userIds.length}`);
+  console.log('');
+  console.log('═════════════════════════════════════════');
+  console.log(`📈 Results: Trained=${trained}, Skipped=${skipped}, Failed=${failed}, Total=${userIds.length}`);
+  console.log(`⏱️ Total time: ${Math.round((Date.now() - startTime) / 1000)}s`);
+  console.log('═════════════════════════════════════════');
+
+  if (failed > 0) process.exit(1);
 }
 
 main().catch((err) => {
-  console.error(err.stack || err.message || String(err));
+  console.error('❌ Unrecoverable error:', err.stack || err.message || String(err));
   process.exit(1);
 });

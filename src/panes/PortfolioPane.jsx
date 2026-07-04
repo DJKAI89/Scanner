@@ -1,13 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, StatCard, EmptyState, LastUpdated } from '../components/common.jsx';
-import { fetchPortfolio, resolveAccessToken } from '../services/api';
+import { resolveAccessToken } from '../services/api';
 import { fmt, fmtC } from '../utils/formatters';
 import { getIST } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed';
+import {
+  getInstrumentKey, loadPortfolio, enrichPortfolioRows,
+  computeSectorMap, computeConcentrationWarnings, sortRows, loadPortfolioAiGuidance,
+} from '../services/portfolioService';
 
 export default function PortfolioPane() {
-  const { token, onTokenExpired, lg, updateBadge, marketStatus } = useApp();
+  const { token, onTokenExpired, lg, updateBadge, marketStatus, gh, mlModels } = useApp();
   const accessToken = resolveAccessToken(token);
 
   const [loading, setLoading]     = useState(false);
@@ -18,22 +22,11 @@ export default function PortfolioPane() {
   const [tab, setTab]             = useState('holdings');
   const [sortCol, setSortCol]     = useState('sym');
   const [sortDir, setSortDir]     = useState('asc');
+  const [aiGuidance, setAiGuidance] = useState(null);
 
   function toggleSort(col) {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSortCol(col); setSortDir(col === 'sym' ? 'asc' : 'desc'); }
-  }
-
-  function getInstrumentKey(item) {
-    return item.instrument_key || item.instrumentKey || item.instrument_token || item.instrumentToken || item.token || '';
-  }
-
-  function num(...values) {
-    for (const v of values) {
-      const n = Number(v);
-      if (Number.isFinite(n) && n !== 0) return n;
-    }
-    return 0;
   }
 
   const allKeys = useMemo(() => {
@@ -50,10 +43,11 @@ export default function PortfolioPane() {
     if (Object.keys(lastPrices).length > 0) setUpdTime('Live: ' + getIST());
   }, [lastPrices]);
 
+  // ── PORTFOLIO LOAD — thin wrapper around services/portfolioService.loadPortfolio ──
   async function load() {
     setLoading(true); setError('');
     try {
-      const { positions: pos, holdings: hld } = await fetchPortfolio(accessToken, onTokenExpired);
+      const { positions: pos, holdings: hld } = await loadPortfolio(accessToken, onTokenExpired);
       setPositions(pos); setHoldings(hld);
       updateBadge('portfolio', String(pos.length + hld.length));
       setUpdTime('Updated: ' + getIST());
@@ -64,27 +58,10 @@ export default function PortfolioPane() {
     } finally { setLoading(false); }
   }
 
-  function enrich(arr) {
-    return arr.map((item) => {
-      const key       = getInstrumentKey(item);
-      const live      = lastPrices[key];
-      const ltp       = num(live?.ltp, item.last_price, item.ltp, item.close_price);
-      const qty       = num(item.quantity, item.used_quantity, item.available_quantity, item.t1_quantity, item.qty);
-      const avg       = num(item.average_price, item.average_cost, item.avg_price, item.buy_price);
-      const prevClose = num(live?.cp, item.close_price, item.previous_close, item.prev_close, item.ohlc?.close);
-      const pnl       = avg > 0 ? (ltp - avg) * qty : num(item.pnl, item.profit_and_loss);
-      const pnlPct    = avg > 0 ? ((ltp - avg) / avg) * 100 : 0;
-      const todayPnl  = prevClose > 0 ? (ltp - prevClose) * qty : num(item.day_pnl, item.dayPnl);
-      const todayPct  = prevClose > 0 ? ((ltp - prevClose) / prevClose) * 100 : 0;
-      const value     = ltp * qty;
-      return { ...item, key, ltp, qty, avg, prevClose, pnl, pnlPct, todayPnl, todayPct, value, isLive: !!live };
-    });
-  }
-
-  const enrichedPos = useMemo(() => enrich(positions), [positions, lastPrices]); // eslint-disable-line
+  const enrichedPos = useMemo(() => enrichPortfolioRows(positions, lastPrices), [positions, lastPrices]);
   const enrichedHld = useMemo(() =>
-    enrich(holdings).sort((a, b) => (a.tradingsymbol||a.symbol||'').localeCompare(b.tradingsymbol||b.symbol||'')),
-    [holdings, lastPrices]); // eslint-disable-line
+    enrichPortfolioRows(holdings, lastPrices).sort((a, b) => (a.tradingsymbol||a.symbol||'').localeCompare(b.tradingsymbol||b.symbol||'')),
+    [holdings, lastPrices]);
 
   const portfolioRows = [...enrichedPos, ...enrichedHld];
   const totalPnl   = portfolioRows.reduce((s, i) => s + (i.pnl     || 0), 0);
@@ -92,46 +69,19 @@ export default function PortfolioPane() {
   const todayPnl   = portfolioRows.reduce((s, i) => s + (i.todayPnl|| 0), 0);
   const totalValue = portfolioRows.reduce((s, i) => s + (i.value   || 0), 0);
 
-  const sectorMap = useMemo(() => {
-    const map = {};
-    enrichedHld.concat(enrichedPos).forEach(item => {
-      const sec = item.sector || item.exchange || 'Other';
-      if (!map[sec]) map[sec] = { value: 0, pnl: 0, count: 0 };
-      map[sec].value += item.value || 0;
-      map[sec].pnl   += item.pnl   || 0;
-      map[sec].count++;
-    });
-    return Object.entries(map).sort((a, b) => b[1].value - a[1].value);
-  }, [enrichedHld, enrichedPos]);
+  // AI guidance — only refires on raw data reload, not on every WS price tick
+  useEffect(() => {
+    if (!gh?.token || !mlModels || (!positions.length && !holdings.length)) { setAiGuidance(null); return; }
+    loadPortfolioAiGuidance({ gh, mlModels, portfolioRows: [...positions, ...holdings] }).then(setAiGuidance);
+  }, [positions, holdings, gh?.token, gh?.user, gh?.repo, mlModels?.computedAt]); // eslint-disable-line
 
-  const correlationWarnings = useMemo(() => {
-    if (!totalValue) return [];
-    return sectorMap
-      .filter(([, v]) => v.value / totalValue > 0.4)
-      .map(([sec, v]) => `⚠ ${sec} is ${((v.value/totalValue)*100).toFixed(0)}% of portfolio`);
-  }, [sectorMap, totalValue]);
+  const sectorMap = useMemo(() => computeSectorMap(enrichedHld.concat(enrichedPos)), [enrichedHld, enrichedPos]);
+
+  const correlationWarnings = useMemo(() => computeConcentrationWarnings(sectorMap, totalValue), [sectorMap, totalValue]);
 
   const current = tab === 'positions' ? enrichedPos : enrichedHld;
 
-  const sortedCurrent = useMemo(() => {
-    const arr = [...current];
-    const dir = sortDir === 'asc' ? 1 : -1;
-    arr.sort((a, b) => {
-      switch (sortCol) {
-        case 'sym':    return dir * ((a.tradingsymbol||a.symbol||'').localeCompare(b.tradingsymbol||b.symbol||''));
-        case 'qty':    return dir * (a.qty - b.qty);
-        case 'avg':    return dir * (a.avg - b.avg);
-        case 'ltp':    return dir * (a.ltp - b.ltp);
-        case 'value':  return dir * (a.value - b.value);
-        case 'dayPnl': return dir * (a.todayPnl - b.todayPnl);
-        case 'dayPct': return dir * (a.todayPct  - b.todayPct);
-        case 'pnl':    return dir * (a.pnl - b.pnl);
-        case 'pnlPct': return dir * (a.pnlPct - b.pnlPct);
-        default: return 0;
-      }
-    });
-    return arr;
-  }, [current, sortCol, sortDir]);
+  const sortedCurrent = useMemo(() => sortRows(current, sortCol, sortDir), [current, sortCol, sortDir]);
 
   // ── Shared color helpers ──
   const gc = v => v >= 0 ? '#16a34a' : '#dc2626';
@@ -292,6 +242,24 @@ export default function PortfolioPane() {
             <div style={{ background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 8, padding: '10px 13px', marginBottom: 10 }}>
               <div style={{ fontSize: 10, fontWeight: 800, color: '#92400e', marginBottom: 4 }}>⚠ Concentration Risk</div>
               {correlationWarnings.map((w, i) => <div key={i} style={{ fontSize: 10, color: '#78350f' }}>{w}</div>)}
+            </div>
+          )}
+
+          {/* AI portfolio guidance */}
+          {aiGuidance?.suggestions?.length > 0 && (
+            <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px', marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: '#0f172a', marginBottom: 8 }}>🤖 AI Guidance — today's candidates vs your exposure (max {aiGuidance.maxConcurrent} concurrent)</div>
+              {aiGuidance.suggestions.map(s => (
+                <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f1f5f9', fontSize: 10 }}>
+                  <div>
+                    <span style={{ fontWeight: 700 }}>{s.symbol}</span>
+                    {s.clusterPenalty > 0 && <span style={{ color: '#d97706', marginLeft: 6 }}>⚠ cluster penalty {s.clusterPenalty}</span>}
+                  </div>
+                  <div style={{ textAlign: 'right', color: '#374151' }}>
+                    risk {s.suggestedRiskPct}% · stop {s.dailyStopPct}%
+                  </div>
+                </div>
+              ))}
             </div>
           )}
 

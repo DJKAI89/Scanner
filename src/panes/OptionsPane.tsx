@@ -81,6 +81,20 @@ function OptionCard({ pick, cfg: cardCfg }) {
 
   // ── Unified signal tags ──
   const tags = [];
+  const regimeMap = {
+    CHOPPY_HIGH_VOL: { txt: '🌊 CHOPPY + HIGH VIX', tone: 'red' },
+    CHOPPY:          { txt: '🌊 CHOPPY', tone: 'amber' },
+    TRENDING_CALM:   { txt: '📈 CALM TREND', tone: 'green' },
+    TRENDING:        { txt: '📈 TRENDING', tone: 'green' },
+  };
+  if (pick.regime && regimeMap[pick.regime]) tags.push({ label: regimeMap[pick.regime].txt, tone: regimeMap[pick.regime].tone });
+  if (pick.confluence?.total > 0) {
+    const cf = pick.confluence;
+    if (cf.conflicting >= 2) tags.push({ label: `🧩 CONFLICTING (${cf.agree}✓ ${cf.conflicting}✗)`, tone: 'red' });
+    else if (cf.ratio >= 0.8 && cf.agree >= 5) tags.push({ label: `🧩 FULL CONFLUENCE ${cf.agree}/${cf.total}`, tone: 'green' });
+    else if (cf.ratio >= 0.65 && cf.agree >= 4) tags.push({ label: `🧩 STRONG CONFLUENCE ${cf.agree}/${cf.total}`, tone: 'green' });
+    else if (cf.ratio < 0.5) tags.push({ label: `🧩 WEAK (${cf.agree}/${cf.total})`, tone: 'amber' });
+  }
   if (!pick.trendAligned) tags.push({ label: `⚠ AGAINST TREND (${pick.trendDir})`, tone: 'amber' });
   if (pick.atm) tags.push({ label: 'ATM', tone: 'blue' });
   if (pick.emaCross==='bullish_cross'&&pick.type==='CE') tags.push({ label: `📶 EMA CROSS ↑ ${(pick.emaCrossCandles||0)<=1?'FRESH':pick.emaCrossCandles+'c ago'}`, tone:'green' });
@@ -288,9 +302,15 @@ export default function OptionsPane() {
   const filtered = useMemo(() => liveGroups.map(g => ({
     ...g,
     picks: g.picks.filter(p => {
-      // Always re-apply capital + confidence from current cfg (reactive to settings changes)
-      if (cfg.maxOptCapital > 0 && p.amtRequired > cfg.maxOptCapital) return false;
-      if (p.confidence < (cfg.minOptConf || 65)) return false;
+      // Always re-apply capital + confidence from current cfg (reactive to settings changes).
+      // Must match the SAME effective threshold used at scan/log time (scoreAndFilterPicks in
+      // optionScan.js), i.e. the ML model threshold takes precedence over cfg when set — otherwise
+      // a pick that passed the scan filter (and got logged to GitHub / shown on Log page) gets
+      // silently dropped here and never renders on this page.
+      const effMinConf = mlModels?.thresholds?.option?.minConfidence || cfg.minOptConf || 65;
+      const effCapLimit = mlModels?.thresholds?.option?.maxCapital || cfg.maxOptCapital;
+      if (effCapLimit > 0 && p.amtRequired > effCapLimit) return false;
+      if (p.confidence < effMinConf) return false;
       // Tab filter
       if (filter === 'nifty')     return g.name === 'NIFTY';
       if (filter === 'banknifty') return g.name === 'BANKNIFTY';
@@ -303,7 +323,7 @@ export default function OptionsPane() {
       if (filter === 'counter')   return !p.trendAligned;
       return true; // 'all'
     }),
-  })).filter(g => g.picks.length > 0), [liveGroups, filter, cfg.maxOptCapital, cfg.minOptConf]);
+  })).filter(g => g.picks.length > 0), [liveGroups, filter, cfg.maxOptCapital, cfg.minOptConf, mlModels]);
 
   return (
     <div>

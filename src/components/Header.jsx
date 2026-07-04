@@ -14,7 +14,7 @@ export default function Header({ menuOpen, onMenuToggle }) {
   } = useApp();
 
   const currentTab = TABS.find((t) => t.id === activeTab);
-  const showScanButton = activeTab === 'stocks' || activeTab === 'options';
+  const showScanButton = activeTab === 'stocks' || activeTab === 'options' || activeTab === 'optAnalysis';
   const displayDot = marketStatus?.open ? statusDot : 'err';
   const displayTxt = marketStatus?.open
     ? statusTxt

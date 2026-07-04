@@ -21,10 +21,25 @@ export const DEF = {
   optSL:        25,
   optTgt:       50,
   minOptConf:   65,
+  minOptOI:     500,
   maxOptCapital: 0,
   portSize:     500000,
   riskPct:      2,
   optStockScanCount: 20,
+  // ── Trade management: partial exits + trailing stop ──
+  t1ClosePct:   50,    // % of position closed at T1
+  t2ClosePct:   30,    // % of position closed at T2 (remainder closes at T3)
+  atrTrailMult: 1.5,   // stocks: trailing distance = ATR × this, once break-even active
+  optionTrailMult: 0.6, // options: trailing distance = entry-SL risk distance × this
+  // ── Market regime suppression — derates signals in choppy/high-VIX conditions ──
+  regimeChoppyHighVolPenalty: -18,
+  regimeChoppyPenalty: -8,
+  regimeTrendingBonus: 4,
+  // ── Confluence — rewards multi-module agreement, penalizes scattered/conflicting signals ──
+  confluenceFullBonus: 12,
+  confluenceStrongBonus: 7,
+  confluenceWeakPenalty: -8,
+  confluenceConflictPenalty: -12,
 };
 
 export const INDEX_OPTS = [
@@ -37,6 +52,7 @@ export const INDEX_OPTS = [
 export const TABS = [
   { id: 'stocks',    icon: '📈', label: 'Stocks',        pageLabel: '📈 Stocks'      },
   { id: 'options',   icon: '⚡', label: 'F&O Options',   pageLabel: '⚡ F&O Options' },
+  { id: 'optAnalysis', icon: '🧮', label: 'Option Analysis', pageLabel: '🧮 Option Analysis' },
   { id: 'portfolio', icon: '💼', label: 'Portfolio',     pageLabel: '💼 Portfolio'   },
   { id: 'lookup',    icon: '🔍', label: 'Analyse Stock', pageLabel: '🔍 Analyse Stock'     },
   { id: 'log',       icon: '📋', label: 'Signal Log',    pageLabel: '📋 Signal Log'  },

@@ -744,9 +744,13 @@ export function getPortfolioAiGuidance(openSignals = [], candidateSignals = [], 
     const penalty = portfolioPenalty(sig) + ((underlyingCounts[sig.stock || sig.und] || 0) >= 2 ? 5 : 0);
     const sizePct = clamp(2.2 - penalty * 0.12, 0.4, 2.2);
     const dailyStopPct = sig.type === 'OPTION' ? 2.8 : 1.8;
+    const baseLabel = sig.stock || sig.und || sig.name;
+    const symbol = sig.type === 'OPTION' && sig.strike != null
+      ? `${baseLabel} ${sig.strike}${sig.optType || ''}`
+      : baseLabel;
     return {
-      id: sig.id || `${sig.stock}_${sig.time}`,
-      symbol: sig.stock || sig.und || sig.name,
+      id: sig.id || `${baseLabel}_${sig.strike || ''}_${sig.optType || ''}_${sig.time}`,
+      symbol,
       suggestedRiskPct: +sizePct.toFixed(2),
       dailyStopPct,
       clusterPenalty: penalty,

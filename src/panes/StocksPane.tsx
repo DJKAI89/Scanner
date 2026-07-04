@@ -421,6 +421,13 @@ function BoCard({ r, rank, onPopup }) {
 
   const tags = [];
   const tag = (label, tone) => tags.push({ label, tone });
+  const regimeMap = {
+    CHOPPY_HIGH_VOL: { txt: '🌊 CHOPPY + HIGH VIX', tone: 'red' },
+    CHOPPY:          { txt: '🌊 CHOPPY', tone: 'amber' },
+    TRENDING_CALM:   { txt: '📈 CALM TREND', tone: 'green' },
+    TRENDING:        { txt: '📈 TRENDING', tone: 'green' },
+  };
+  if (r.regime && regimeMap[r.regime]) tag(regimeMap[r.regime].txt, regimeMap[r.regime].tone);
   if (_bull>0&&_bear>0) tag('⚡ MIXED SIGNALS','amber');
   if (r.ema) {
     if (r.ema.goldenCross)       tag('⭐ GOLDEN CROSS','amber');
@@ -652,7 +659,7 @@ export default function StocksPane() {
     if (boLoading) return;
     setBoLoading(true); setBoError(''); setBoProgress('Fetching quotes...');
     try {
-      const ctx = { token, stocks, onTokenExpired, lg, marketStatus, scanStats };
+      const ctx = { token, stocks, cfg, onTokenExpired, lg, marketStatus, scanStats };
       const callbacks = { setBoProgress, setBoCards };
       const { boStats: stats } = await runBreakoutScan(ctx, callbacks);
       setBoStats(stats);

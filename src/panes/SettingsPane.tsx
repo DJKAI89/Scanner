@@ -486,6 +486,41 @@ export default function SettingsPane() {
           <SetRow label="Min Open Interest" sub="Skip illiquid strikes — SL can't be honored if it barely trades"><Inp value={local.minOptOI} onChange={v => set('minOptOI', v)} min={0} step={100} width={90} /></SetRow>
         </div>
 
+        {/* ── Trade Management ── */}
+        <div className="setting-card">
+          <h4>🎯 Trade Management</h4>
+          <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10, lineHeight: 1.7 }}>
+            Partial exits at T1/T2, break-even after T1, then a trailing stop on the remainder. T3 closes whatever's left. Applies to both stocks and options.
+          </div>
+          <SetRow label="T1 Close %" sub="% of position closed at first target"><Inp value={local.t1ClosePct} onChange={v => set('t1ClosePct', v)} min={10} max={90} step={5} /></SetRow>
+          <SetRow label="T2 Close %" sub="% of position closed at second target (rest closes at T3)"><Inp value={local.t2ClosePct} onChange={v => set('t2ClosePct', v)} min={10} max={90} step={5} /></SetRow>
+          <SetRow label="Stock Trail × ATR" sub="Trailing distance once break-even active"><Inp value={local.atrTrailMult} onChange={v => set('atrTrailMult', v)} min={0.5} max={4} step={0.1} /></SetRow>
+          <SetRow label="Option Trail × Risk" sub="Trailing distance = entry-SL distance × this"><Inp value={local.optionTrailMult} onChange={v => set('optionTrailMult', v)} min={0.2} max={2} step={0.1} /></SetRow>
+        </div>
+
+        {/* ── Market Regime ── */}
+        <div className="setting-card">
+          <h4>🌊 Market Regime Suppression</h4>
+          <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10, lineHeight: 1.7 }}>
+            Derates confidence in choppy/high-VIX conditions (where false breakouts cluster) and gives calm trending markets a small boost.
+          </div>
+          <SetRow label="Choppy + High VIX" sub="Confidence penalty when there's no clear trend and VIX is elevated"><Inp value={local.regimeChoppyHighVolPenalty} onChange={v => set('regimeChoppyHighVolPenalty', v)} min={-40} max={0} step={1} /></SetRow>
+          <SetRow label="Choppy" sub="Confidence penalty when there's no clear trend"><Inp value={local.regimeChoppyPenalty} onChange={v => set('regimeChoppyPenalty', v)} min={-30} max={0} step={1} /></SetRow>
+          <SetRow label="Calm Trending Bonus" sub="Confidence boost in a strong, low-VIX trend"><Inp value={local.regimeTrendingBonus} onChange={v => set('regimeTrendingBonus', v)} min={0} max={20} step={1} /></SetRow>
+        </div>
+
+        {/* ── Confluence Scoring ── */}
+        <div className="setting-card">
+          <h4>🧩 Confluence Scoring</h4>
+          <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10, lineHeight: 1.7 }}>
+            6 independent modules (Trend, Momentum, Volume, Price Action, Institutional, Market Context) vote on direction. Rewards genuine multi-module agreement over scattered weak signals.
+          </div>
+          <SetRow label="Full Agreement Bonus" sub="5-6 of 6 modules agree"><Inp value={local.confluenceFullBonus} onChange={v => set('confluenceFullBonus', v)} min={0} max={30} step={1} /></SetRow>
+          <SetRow label="Strong Agreement Bonus" sub="4+ modules agree"><Inp value={local.confluenceStrongBonus} onChange={v => set('confluenceStrongBonus', v)} min={0} max={20} step={1} /></SetRow>
+          <SetRow label="Weak Agreement Penalty" sub="Less than half the modules agree"><Inp value={local.confluenceWeakPenalty} onChange={v => set('confluenceWeakPenalty', v)} min={-30} max={0} step={1} /></SetRow>
+          <SetRow label="Conflict Penalty" sub="2+ modules actively disagree"><Inp value={local.confluenceConflictPenalty} onChange={v => set('confluenceConflictPenalty', v)} min={-30} max={0} step={1} /></SetRow>
+        </div>
+
         {/* ── Adaptive Weights ── */}
         <div className="setting-card" style={{ gridColumn: '1 / -1' }}>
           <h4>🧠 Adaptive Indicator Weights</h4>

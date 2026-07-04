@@ -402,6 +402,66 @@ export function calcNR7(candles) {
   return { isNR7: todayR === Math.min(...ranges), isNR4: todayR === Math.min(...ranges.slice(0, 4)), range: +todayR.toFixed(2), avgRange: +(ranges.reduce((s,v)=>s+v,0)/7).toFixed(2) };
 }
 
+// ── Market regime detection ───────────────────────────────────
+// Classifies the current market into a regime bucket from a normalized
+// trend-strength signal (0 = no clear direction, 1 = strongly trending) and
+// VIX, then suppresses confidence in choppy/high-vol conditions — where false
+// breakouts cluster — and gives a small boost to calm trending conditions.
+// normTrendStrength should already be 0-1 by the time it reaches here; each
+// caller normalizes its own best-available trend signal (compositeScore where
+// computed, day-change % as a lighter proxy where it isn't).
+export function classifyMarketRegime(normTrendStrength, vix) {
+  const ts = Math.max(0, Math.min(1, normTrendStrength || 0));
+  const highVol = (vix || 0) >= 22;
+  const lowVol  = (vix || 0) > 0 && vix <= 13;
+  const choppy   = ts < 0.3;
+  const trending = ts >= 0.6;
+  if (choppy && highVol) return 'CHOPPY_HIGH_VOL';
+  if (choppy)             return 'CHOPPY';
+  if (trending && lowVol) return 'TRENDING_CALM';
+  if (trending)            return 'TRENDING';
+  return 'NEUTRAL';
+}
+
+export function applyRegimeAdjustment(conf, regime, cfg = {}) {
+  const adj = {
+    CHOPPY_HIGH_VOL: cfg.regimeChoppyHighVolPenalty ?? -18,
+    CHOPPY:          cfg.regimeChoppyPenalty ?? -8,
+    TRENDING_CALM:   cfg.regimeTrendingBonus ?? 4,
+    TRENDING:        Math.round((cfg.regimeTrendingBonus ?? 4) * 0.5),
+    NEUTRAL: 0,
+  }[regime] ?? 0;
+  return Math.min(99, Math.max(1, Math.round((conf || 0) + adj)));
+}
+
+// ── Confluence engine ──────────────────────────────────────────
+// Counts how many independent modules (Trend, Momentum, Volume, Price Action,
+// Institutional, Market Context) agree with the signal's proposed direction,
+// vs simple point-addition which can't distinguish "4 weak agreements" from
+// "1 strong confirmation". Each module is a -1 (bearish) / 0 (no opinion) / +1
+// (bullish) vote; actionDir is +1 for BUY/bullish, -1 for SELL/bearish.
+export function computeConfluence(modules, actionDir) {
+  const dir = actionDir >= 0 ? 1 : -1;
+  let agree = 0, conflicting = 0, total = 0;
+  for (const v of Object.values(modules)) {
+    if (!v) continue; // module had no opinion — doesn't count either way
+    total++;
+    if (Math.sign(v) === dir) agree++; else conflicting++;
+  }
+  return { agree, conflicting, total, ratio: total > 0 ? agree / total : 0 };
+}
+
+export function applyConfluenceAdjustment(conf, confluence, cfg = {}) {
+  if (!confluence || confluence.total === 0) return conf;
+  const { agree, conflicting, ratio } = confluence;
+  let adj = 0;
+  if (conflicting >= 2)                       adj = cfg.confluenceConflictPenalty ?? -12; // multiple modules actively disagree
+  else if (ratio >= 0.8 && agree >= 5)         adj = cfg.confluenceFullBonus ?? 12;        // near-total agreement, doc's "Stock B"
+  else if (ratio >= 0.65 && agree >= 4)        adj = cfg.confluenceStrongBonus ?? 7;       // solid majority
+  else if (ratio < 0.5)                        adj = cfg.confluenceWeakPenalty ?? -8;      // scattered, weak agreement
+  return Math.min(99, Math.max(1, Math.round((conf || 0) + adj)));
+}
+
 export function calcRelativeStrength(closes, niftyCloses) {
   if (!closes || !niftyCloses || closes.length < 6 || niftyCloses.length < 6) return null;
   const n = Math.min(closes.length, niftyCloses.length, 20);
@@ -799,8 +859,8 @@ export function boScore(ema, pdhl, st, vol, wk52, mom, nr7, bb, weeklyMTF, gap, 
   if (pdhl?.bullBreakout && wick?.bearRejected) bull  = Math.max(0, bull - 2);
   if (pdhl?.bearBreakout && wick?.bullRejected) bear  = Math.max(0, bear - 2);
   // EMA below all but trying to breakout bull = trend fight
-  if (ema?.belowAll && pdhl?.bullBreakout) bull = Math.max(0, bull - 3);
-  if (ema?.aboveAll && pdhl?.bearBreakout) bear = Math.max(0, bear - 3);
+  if (ema && !ema.uptrend && pdhl?.bullBreakout) bull = Math.max(0, bull - 3);
+  if (ema?.uptrend && pdhl?.bearBreakout) bear = Math.max(0, bear - 3);
 
   // ── Time-of-day penalty ────────────────────────────────
   const dominant = Math.max(bull, bear);
@@ -885,30 +945,6 @@ export function boSLTarget(ltp, atr, isBull, pdh, pdl, ema200) {
   return { sl, target, rr, method: 'ATR SL · 2:1 R:R' };
 }
 
-// ── Fibonacci Levels ──────────────────────────────────────────
-export function calcFibLevels(swingLow, swingHigh) {
-  const range = swingHigh - swingLow;
-  if (range <= 0) return null;
-  return { range, swingLow, swingHigh, fib236: +(swingHigh - range * 0.236).toFixed(2), fib382: +(swingHigh - range * 0.382).toFixed(2), fib500: +(swingHigh - range * 0.500).toFixed(2), fib618: +(swingHigh - range * 0.618).toFixed(2), ext618: +(swingHigh + range * 0.618).toFixed(2), ext100: +(swingHigh + range * 1.000).toFixed(2) };
-}
-
-// ── calcOptConfidence — port from HTML calcOptConfidence ──────
-export function calcOptConfidence(delta, iv, oiChg, theta, spot, strike, optType, niftyBullish, vix, maxPain, pcr = 1.0) {
-  const absD = Math.abs(delta), isCE = optType === 'CE';
-  const cs = niftyBullish ? 1.5 : -1.5, aligned = (isCE && cs > 0) || (!isCE && cs < 0), absCs = Math.abs(cs);
-  const dirMult = aligned ? (absCs >= 3 ? 1.05 : absCs >= 2 ? 1.0 : 0.95) : (absCs >= 3 ? 0.25 : absCs >= 2 ? 0.35 : 0.45);
-  const deltaScore = absD >= 0.7 ? 90 : absD >= 0.5 ? 78 : absD >= 0.3 ? 60 : absD >= 0.15 ? 42 : 25;
-  const ivScore    = iv >= 60 ? 20 : iv >= 40 ? 35 : iv >= 25 ? 60 : iv >= 15 ? 80 : 55;
-  const pcrBullish = pcr > 1.2, pcrAligned = (isCE && pcrBullish) || (!isCE && !pcrBullish);
-  const oiScore    = pcrAligned ? 72 : 45;
-  const moneyness  = spot > 0 ? Math.abs((strike - spot) / spot * 100) : 10;
-  const atmScore   = moneyness <= 1 ? 90 : moneyness <= 3 ? 80 : moneyness <= 6 ? 65 : moneyness <= 10 ? 45 : 25;
-  const thetaScore = theta < -10 ? 20 : theta < -3 ? 40 : theta < -1 ? 62 : theta < -0.3 ? 75 : 85;
-  let raw = deltaScore*0.30 + ivScore*0.20 + oiScore*0.25 + atmScore*0.15 + thetaScore*0.10;
-  if      (vix > 30) raw -= 15; else if (vix > 25) raw -= 8; else if (vix > 20) raw -= 4; else if (vix < 14) raw += 5;
-  return Math.round(Math.min(100, Math.max(0, raw * dirMult)));
-}
-
 // ── Max Pain & OI Walls ───────────────────────────────────────
 export function calcMaxPain(chain) {
   if (!chain || chain.length < 3) return 0;
@@ -935,6 +971,101 @@ export function calcOIWalls(chain) {
     if (putOI  > maxPutOI)  { maxPutOI  = putOI;  putWall  = row.strike_price; }
   }
   return { callWall, putWall, callWallOI: maxCallOI, putWallOI: maxPutOI };
+}
+
+// ── Option Analysis page — lightweight per-strike scanner ─────
+// Unlike scanChain (which filters down to only tradeable candidates: ≥2 signals,
+// minimum OI, etc.), this computes confidence + OI buildup for EVERY strike/side
+// in range so the chain table can show a number next to every row, the way a
+// broker's option-chain screen does. Reuses the same confidence formula and OI
+// buildup classification as scanChain for consistency with the rest of the app.
+export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, stockPCR, marketCtx, cfg, lot = 1) {
+  const rows = [];
+  const compositeScore = marketCtx?.compositeScore ?? (niftyBullish ? 1 : -1);
+  const priceBull = compositeScore > 0.5, priceBear = compositeScore < -0.5;
+  const oi_thresh = cfg?.oi ?? 15;
+
+  // Same zone/direction-flip inputs the Options signal page (buildOptionPicks)
+  // uses, so confidence here matches it exactly rather than being a subset.
+  const pdh = marketCtx?.pdh || null, pdl = marketCtx?.pdl || null;
+  let priceZone = 'mid';
+  if (pdh && pdl && spot) {
+    const pdhDist = (spot - pdh) / pdh * 100;
+    const pdlDist = (pdl - spot) / pdl * 100;
+    if      (pdhDist >= 0)    priceZone = 'abovePDH';
+    else if (pdhDist >= -0.3) priceZone = 'nearPDH';
+    else if (pdlDist >= 0)    priceZone = 'belowPDL';
+    else if (pdlDist >= -0.3) priceZone = 'nearPDL';
+  }
+  const dirFlipPenalty = marketCtx?.directionFlipped ? -15 : 0;
+
+  for (const row of chain) {
+    const sp = row.strike_price;
+    if (!spot || Math.abs(sp - atm) > spot * 0.15) continue;
+    const out = { strike: sp, atm: sp === atm };
+
+    for (const [side, optType] of [['call_options', 'CE'], ['put_options', 'PE']]) {
+      const opt = row[side];
+      const md = opt?.market_data, gr = opt?.option_greeks;
+      if (!opt || !md?.ltp) { out[optType] = null; continue; }
+
+      const ltp = md.ltp, delta = gr?.delta || 0, iv = gr?.iv || 0, theta = gr?.theta || 0;
+      const oi = md?.oi || 0, prevOI = md?.prev_oi || oi;
+      const oiChg = prevOI > 0 ? ((oi - prevOI) / prevOI * 100) : 0;
+      const prevClose = md?.close_price || md?.close || 0;
+      const ltpChgPct = prevClose > 0 ? +((ltp - prevClose) / prevClose * 100).toFixed(2) : 0;
+      const isCEOpt = optType === 'CE';
+      const oiRising = oiChg >= oi_thresh, oiFalling = oiChg <= -oi_thresh;
+
+      let oiBuildType = 'NEUTRAL', oiBuildBonus = 0;
+      if (isCEOpt) {
+        if (priceBull && oiRising)  { oiBuildType = 'LONG_BUILD';  oiBuildBonus = +15; }
+        if (priceBull && oiFalling) { oiBuildType = 'SHORT_COVER'; oiBuildBonus =  +5; }
+        if (priceBear && oiRising)  { oiBuildType = 'SHORT_BUILD'; oiBuildBonus = -15; }
+        if (priceBear && oiFalling) { oiBuildType = 'LONG_UNWIND'; oiBuildBonus =  -8; }
+      } else {
+        if (priceBear && oiRising)  { oiBuildType = 'LONG_BUILD';  oiBuildBonus = +15; }
+        if (priceBear && oiFalling) { oiBuildType = 'SHORT_COVER'; oiBuildBonus =  +5; }
+        if (priceBull && oiRising)  { oiBuildType = 'SHORT_BUILD'; oiBuildBonus = -15; }
+        if (priceBull && oiFalling) { oiBuildType = 'LONG_UNWIND'; oiBuildBonus =  -8; }
+      }
+      if (!oiRising && !oiFalling) oiBuildBonus = 0;
+
+      const signals = [];
+      if (Math.abs(delta) >= (cfg?.delta || 0.40)) signals.push({ l: 'Delta', s: 3 });
+      if (iv >= (cfg?.iv || 15))                    signals.push({ l: 'IV', s: 2 });
+      if (oiRising)                                 signals.push({ l: 'OI+', s: 2 });
+      if (oiFalling)                                signals.push({ l: 'OI-', s: 1 });
+      if (theta < -0.5)                             signals.push({ l: 'Theta', s: 1 });
+      if (sp === atm)                                signals.push({ l: 'ATM', s: 1 });
+
+      let confidence = calcOptConfidenceFull(delta, iv, oiChg, theta, signals, spot, sp, optType, niftyBullish, vix, maxPain, stockPCR, marketCtx);
+      let zoneAdj = 0;
+      if      (priceZone === 'abovePDH' &&  isCEOpt) zoneAdj = +10;
+      else if (priceZone === 'nearPDH'  &&  isCEOpt) zoneAdj =  +5;
+      else if (priceZone === 'belowPDL' && !isCEOpt) zoneAdj = +10;
+      else if (priceZone === 'nearPDL'  && !isCEOpt) zoneAdj =  +5;
+      else if (priceZone === 'mid')                   zoneAdj = -18;
+      if (priceZone === 'belowPDL' &&  isCEOpt) zoneAdj = -25;
+      if (priceZone === 'abovePDH' && !isCEOpt) zoneAdj = -25;
+      const baseConfidence = Math.round(Math.min(100, Math.max(0, confidence + zoneAdj + dirFlipPenalty)));
+      confidence = Math.round(Math.min(100, Math.max(0, baseConfidence + oiBuildBonus)));
+
+      // Margin here is simply lot size × LTP — the capital tied up per lot at
+      // the current premium. It is NOT a SPAN+exposure margin (that's set by
+      // the exchange/broker and differs for buying vs writing); this is a
+      // straightforward, always-live figure that tracks LTP in real time.
+      const marginEst = +(ltp * lot).toFixed(0);
+
+      out[optType] = {
+        ltp: +ltp.toFixed(2), ltpChgPct, oi, oiChg: +oiChg.toFixed(1), delta: +delta.toFixed(2), iv: +iv.toFixed(1), theta: +theta.toFixed(2),
+        confidence, baseConfidence, prevOI, isCE: isCEOpt, oiBuildType, oiBuildBonus, marginEst,
+        instrKey: opt.instrument_key || null,
+      };
+    }
+    rows.push(out);
+  }
+  return rows.sort((a, b) => a.strike - b.strike);
 }
 
 // ── IV Percentile ─────────────────────────────────────────────
@@ -1022,13 +1153,6 @@ export function interpretFIIDII(d) {
     fiiNet, diiNet, netFlow,
     fiiBuying, fiiSelling, diiBuying, diiSelling,
   };
-}
-
-// ── getChgPct helper ──────────────────────────────────────────
-export function getChgPctFromQ(q) {
-  if (!q) return 0;
-  const ltp = q.last_price || 0, prev = (q.ohlc && q.ohlc.close) || ltp;
-  return prev > 0 ? ((ltp - prev) / prev) * 100 : 0;
 }
 
 // ── isWeeklyExpiryDay — EXACT port from HTML ─────────────────
@@ -1403,6 +1527,9 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       if (iv === 0 && absD0 > 0.95) continue;
       if (iv === 0 && ltp < 1)      continue;
       const oi = md?.oi || 0, prevOI = md?.prev_oi || oi;
+      // Liquidity gate — a calculated SL is meaningless if the contract barely trades;
+      // thin OI means price can gap straight through the SL before it's ever caught.
+      if (oi < (cfg?.minOptOI ?? 500)) continue;
       const oiChg = prevOI > 0 ? ((oi - prevOI) / prevOI * 100) : 0;
       const absD  = Math.abs(delta);
 
@@ -1478,8 +1605,12 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       const trendAligned = effectiveNeutral ? false : (isCE ? compositeScore > 0 : compositeScore < 0);
       const momentumDir  = isNeutral ? 'NEUTRAL' : compositeScore > 2 ? 'STRONGLY BULLISH' : compositeScore > 0 ? 'BULLISH' : compositeScore < -2 ? 'STRONGLY BEARISH' : 'BEARISH';
 
-      // Action
-      const aligned = (isCE && niftyBullish) || (!isCE && !niftyBullish);
+      // Action — use THIS instrument's own compositeScore (same as trendAligned above),
+      // not the cross-index niftyBullish flag. Using niftyBullish here meant every
+      // non-NIFTY underlying (SENSEX/BANKNIFTY/FINNIFTY/stocks) had its BUY/SELL
+      // decision driven by NIFTY's move instead of its own — a major source of
+      // wrong-direction entries whenever the two diverged.
+      const aligned = (isCE && compositeScore > 0) || (!isCE && compositeScore < 0);
       let action = 'WATCH';
       if (!aligned && !isNeutral) { if (absD >= delta_thresh && oiChg <= -oi_thresh) action = 'SELL'; }
       else                        { if (absD >= delta_thresh) action = 'BUY'; }
@@ -1495,13 +1626,22 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
         slTgtMethod += ' · SELL (flipped)';
       }
 
+      // Multi-target levels (T1/T2/T3) for partial-exit trade management.
+      // T2 = the existing risk-validated target; T1/T3 are R-multiple steps
+      // around it in the same direction (SL/Target already flipped above for SELL).
+      const dir      = action === 'SELL' ? -1 : 1;
+      const riskDist = Math.abs(entry - sl);
+      const t1 = riskDist > 0 ? +(entry + dir * riskDist * 1.0).toFixed(2) : tgt;
+      const t2 = tgt;
+      const t3 = riskDist > 0 ? +(entry + dir * riskDist * (Math.abs(rr || 2) * 1.5)).toFixed(2) : tgt;
+
       const lot       = lotSize || 1;
       const maxLoss   = +(action === 'SELL' ? (sl - entry) * lot : (entry - sl) * lot).toFixed(0);
       const maxProfit = +(action === 'SELL' ? (entry - tgt) * lot : (tgt - entry) * lot).toFixed(0);
 
       picks.push({
         instrKey,
-        strike: sp, type: optType, entry, sl, tgt, rr,
+        strike: sp, type: optType, entry, sl, tgt, rr, t1, t2, t3,
         iv, delta, theta, oi, oiChg, action, signals,
         score: signals.reduce((a, s) => a + s.s, 0),
         confidence, atm: sp === atm, spot, expiry, und: name,
