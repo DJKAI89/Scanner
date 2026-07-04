@@ -57,10 +57,46 @@ function todayIST() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD
 }
 
+// Fetches NSE's live trading-holiday calendar. NSE blocks bare requests
+// (same issue as the sector-map builder) — needs browser-like headers plus
+// a homepage hit first to pick up cookies, with retry.
+async function fetchNseHolidays() {
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+    Accept: 'application/json', Referer: 'https://www.nseindia.com/',
+  };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const jar = await fetch('https://www.nseindia.com/', { headers });
+      const cookie = jar.headers.get('set-cookie') || '';
+      const r = await fetch('https://www.nseindia.com/api/holiday-master?type=trading', {
+        headers: { ...headers, Cookie: cookie },
+      });
+      const ct = r.headers.get('content-type') || '';
+      if (!r.ok || !ct.includes('json')) throw new Error(`non-JSON (${r.status})`);
+      const d = await r.json();
+      const dates = (d?.CM || []).map((h) => {
+        // NSE returns "26-Jan-2026" style — normalize to YYYY-MM-DD
+        const dt = new Date(h.tradingDate);
+        return isNaN(dt) ? null : dt.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      }).filter(Boolean);
+      if (dates.length) return dates;
+    } catch (e) {
+      console.warn(`NSE holiday fetch attempt ${attempt + 1} failed: ${e.message}`);
+      await new Promise((res) => setTimeout(res, 1500));
+    }
+  }
+  console.warn('Could not fetch NSE holiday calendar — proceeding without holiday skip');
+  return [];
+}
+
 async function main() {
   if (!gh.token || !gh.user || !gh.repo || !upstoxToken) {
     console.error('Missing GH_TOKEN/GH_USER/GH_REPO/UPSTOX_ACCESS_TOKEN'); process.exit(1);
   }
+  const today0 = todayIST();
+  const holidays = await fetchNseHolidays();
+  if (holidays.includes(today0)) { console.log('NSE holiday — skipping'); return; }
   const index = await ghGet(`${folder}/index.json`);
   if (!index) { console.log('No signal index yet'); return; }
   const { dates, dailyStats } = JSON.parse(Buffer.from(index.content, 'base64').toString('utf8'));
