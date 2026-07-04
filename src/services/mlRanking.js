@@ -410,7 +410,7 @@ function summarizeBacktest(rows, type, thresholds) {
 
 function optimizeThresholds(dataset, model, type) {
   const rows = buildBacktestRows(dataset.map((d) => d.signal || d), model, type);
-  if (!rows.length) return { probability: 0.62, minConfidence: 65, maxRisk: 55, minRR: 1.2, maxCapital: 0 };
+  if (!rows.length) return { probability: 0.62, minConfidence: 65, maxRisk: 55, minRR: 1.2, maxCapital: 0, deltaGate: 0.40, ivGate: 15 };
   const candidates = [0.55, 0.58, 0.6, 0.62, 0.65, 0.68, 0.7, 0.74];
   let best = { probability: 0.62, score: -Infinity };
   for (const p of candidates) {
@@ -421,12 +421,36 @@ function optimizeThresholds(dataset, model, type) {
     const score = wr * 0.7 + (avgNet / 100) * 0.3;
     if (score > best.score) best = { probability: p, score };
   }
+
+  // Same sweep, but for the raw delta/IV signal gates (calcOptConfidenceFull's
+  // hardcoded 0.40 / 15) — only meaningful for options, needs the signal's
+  // own delta/iv, not present on stock rows.
+  let deltaGate = 0.40, ivGate = 15;
+  if (type === 'OPTION') {
+    const withGreeks = dataset.map((d) => d.signal || d).filter((s) => s.delta != null || s.iv != null);
+    if (withGreeks.length >= 20) {
+      const sweepGate = (field, candidates) => {
+        let bestG = { v: candidates[0], score: -Infinity };
+        for (const v of candidates) {
+          const f = withGreeks.filter((s) => Math.abs(s[field] ?? 0) >= v);
+          if (f.length < Math.max(6, withGreeks.length * 0.08)) continue;
+          const wr = f.filter((s) => s.status === 'TARGET_HIT').length / f.length;
+          if (wr > bestG.score) bestG = { v, score: wr };
+        }
+        return bestG.v;
+      };
+      deltaGate = sweepGate('delta', [0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55]);
+      ivGate = sweepGate('iv', [8, 10, 12, 15, 18, 22, 26]);
+    }
+  }
+
   return {
     probability: best.probability,
     minConfidence: Math.round(best.probability * 100),
     maxRisk: type === 'STOCK' ? 48 : 58,
     minRR: type === 'STOCK' ? 1.4 : 1.3,
     maxCapital: type === 'OPTION' ? 120000 : 0,
+    deltaGate, ivGate,
   };
 }
 
