@@ -57,37 +57,22 @@ function todayIST() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD
 }
 
-// Fetches NSE's live trading-holiday calendar. NSE blocks bare requests
-// (same issue as the sector-map builder) — needs browser-like headers plus
-// a homepage hit first to pick up cookies, with retry.
+// Live trading-holiday calendar via Upstox's official endpoint (same token,
+// no bot-block risk like scraping nseindia.com directly).
 async function fetchNseHolidays() {
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
-    Accept: 'application/json', Referer: 'https://www.nseindia.com/',
-  };
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const jar = await fetch('https://www.nseindia.com/', { headers });
-      const cookie = jar.headers.get('set-cookie') || '';
-      const r = await fetch('https://www.nseindia.com/api/holiday-master?type=trading', {
-        headers: { ...headers, Cookie: cookie },
-      });
-      const ct = r.headers.get('content-type') || '';
-      if (!r.ok || !ct.includes('json')) throw new Error(`non-JSON (${r.status})`);
-      const d = await r.json();
-      const dates = (d?.CM || []).map((h) => {
-        // NSE returns "26-Jan-2026" style — normalize to YYYY-MM-DD
-        const dt = new Date(h.tradingDate);
-        return isNaN(dt) ? null : dt.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-      }).filter(Boolean);
-      if (dates.length) return dates;
-    } catch (e) {
-      console.warn(`NSE holiday fetch attempt ${attempt + 1} failed: ${e.message}`);
-      await new Promise((res) => setTimeout(res, 1500));
-    }
+  try {
+    const r = await fetch('https://api.upstox.com/v2/market/holidays', {
+      headers: { Authorization: `Bearer ${upstoxToken}`, Accept: 'application/json' },
+    });
+    if (!r.ok) throw new Error(`status ${r.status}`);
+    const d = await r.json();
+    return (d?.data || [])
+      .filter((h) => !h.closed_exchanges?.length || h.closed_exchanges.includes('NSE') || (h.open_exchanges || []).every((e) => e.exchange !== 'NSE'))
+      .map((h) => h.date);
+  } catch (e) {
+    console.warn('Upstox holiday fetch failed — proceeding without holiday skip:', e.message);
+    return [];
   }
-  console.warn('Could not fetch NSE holiday calendar — proceeding without holiday skip');
-  return [];
 }
 
 async function main() {
