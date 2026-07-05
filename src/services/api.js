@@ -175,6 +175,44 @@ export async function fetchOptionGreeks(keys, token, onTokenExpired) {
   return out;
 }
 
+// ── Live FII/DII activity (replaces manually-updated fii-dii/latest.json
+// GitHub file). Normalizes into the exact shape interpretFIIDII/applyFIIBias
+// already expect: { fii_net, dii_net, fii_idx_fut_long, fii_idx_fut_short, fetched_at }
+function _num(v) { return typeof v === 'number' ? v : parseFloat(v) || 0; }
+
+async function _fetchInstitutionalActivity(path, token, onTokenExpired) {
+  const d = await withRetry(
+    () => apiGet(`/v2/market/${path}?data_type=NSE_FO%7CINDEX_OPTIONS&data_type=NSE_FO%7CINDEX_FUTURES&data_type=NSE_FO%7CSTOCK_FUTURES&interval=1D`, token, onTokenExpired),
+    `fetch${path}`
+  );
+  return d?.data || [];
+}
+
+export async function fetchFIIDIIData(token, onTokenExpired) {
+  const [fiiRows, diiRows] = await Promise.all([
+    _fetchInstitutionalActivity('fii', token, onTokenExpired),
+    _fetchInstitutionalActivity('dii', token, onTokenExpired).catch(() => []),
+  ]);
+  if (!fiiRows.length && !diiRows.length) return null;
+
+  const latest = (rows) => rows[rows.length - 1] || rows[0] || {};
+  const netOf = (row) => _num(row.buy_value ?? row.buy_amount ?? row.buyValue) - _num(row.sell_value ?? row.sell_amount ?? row.sellValue);
+  const idxFutRow = (rows) => rows.find((r) => (r.data_type || r.segment || '').toString().toUpperCase().includes('INDEX_FUT')) || {};
+
+  const fiiLatest = latest(fiiRows);
+  const diiLatest = latest(diiRows);
+  const fiiIdxFut = idxFutRow(fiiRows);
+
+  return {
+    fii_net: +netOf(fiiLatest).toFixed(2),
+    dii_net: +netOf(diiLatest).toFixed(2),
+    fii_idx_fut_long: _num(fiiIdxFut.long_contracts ?? fiiIdxFut.longContracts ?? fiiIdxFut.long_qty),
+    fii_idx_fut_short: _num(fiiIdxFut.short_contracts ?? fiiIdxFut.shortContracts ?? fiiIdxFut.short_qty),
+    fetched_at: new Date().toISOString(),
+    source: 'upstox',
+  };
+}
+
 // ── Options chain ──
 export async function fetchOptions(instrKey, expiry, token, onTokenExpired) {
   const d = await withRetry(
