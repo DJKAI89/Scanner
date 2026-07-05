@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { DEF, CFG_VERSION } from '../constants/config';
 import { localIsOpen, getMarketStatusLocal, getIST, getISTDate } from '../utils/marketTime';
-import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken } from '../services/api';
+import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken, fetchFIIDIIData } from '../services/api';
 import { interpretFIIDII } from '../services/technical';
 import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded, ghReadIndex, ghReadDay, ghWriteDay, pullAiModelFromGH, pushAiModelToGH, appendAiHistoryToGH, pullAiHistoryFromGH } from '../services/github';
 import { evaluateSignalExit } from '../services/tradeManagement';
@@ -214,12 +214,27 @@ export function AppProvider({ children }) {
     }
   }, [gh, stocks.length, lg]); // eslint-disable-line
 
-  // ── loadFIIDII — from GitHub fii-dii/latest.json ──
+  // ── loadFIIDII — live from Upstox (falls back to GitHub fii-dii/latest.json) ──
   const loadFIIDII = useCallback(async (ghCfg, force = false) => {
     const g = ghCfg || gh;
-    if (!g.token || !g.user || !g.repo) return;
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     if (!force && localStorage.getItem('friday_fiidii_date') === today && fiiData) return;
+
+    const accessToken = resolveAccessToken(token);
+    if (accessToken) {
+      try {
+        const data = await fetchFIIDIIData(accessToken, onTokenExpired);
+        if (data) {
+          setFiiData(data);
+          setFiiInterp(interpretFIIDII(data));
+          localStorage.setItem('friday_fiidii_date', today);
+          lg('FII/DII loaded live (Upstox)', 'o');
+          return;
+        }
+      } catch (e) { lg('loadFIIDII (Upstox): ' + e.message + ' — falling back to GitHub file', 'w'); }
+    }
+
+    if (!g.token || !g.user || !g.repo) return;
     try {
       const r = await fetch(
         `https://api.github.com/repos/${g.user}/${g.repo}/contents/fii-dii/latest.json`,
@@ -237,10 +252,10 @@ export function AppProvider({ children }) {
       const age = data.fetched_at
         ? Math.round((Date.now() - new Date(data.fetched_at)) / 3600000)
         : '?';
-      lg(`FII/DII loaded (${age}h old)`, 'o');
+      lg(`FII/DII loaded from GitHub fallback (${age}h old)`, 'o');
       if (age > 20) showToast(`⚠ FII/DII data is ${age}h old — update fii-dii/latest.json in GitHub`, '#d97706', 7000);
     } catch (e) { lg('loadFIIDII: ' + e.message, 'w'); }
-  }, [gh, fiiData, lg, showToast]); // eslint-disable-line
+  }, [gh, token, fiiData, lg, showToast, onTokenExpired]); // eslint-disable-line
 
   // ── loadConfCalibration + adaptWeights — self-calibrating from GitHub signal history ──
   // Two-layer calibration system:
