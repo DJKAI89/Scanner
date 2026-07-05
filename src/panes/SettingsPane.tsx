@@ -354,7 +354,7 @@ export default function SettingsPane() {
     gh, saveGh,
     clearToken, showToast,
     stocksStatus, loadStocks,
-    fiiInterp, loadFIIDII,
+    fiiInterp, fiiData, loadFIIDII,
     ghSettingsPulled,
     adaptWeights, mlModels, mlSnapshots,
   } = useApp();
@@ -557,7 +557,10 @@ export default function SettingsPane() {
         <div className="setting-card">
           <h4>🏦 FII / DII Data</h4>
           <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10, lineHeight: 1.7 }}>
-            From <code style={{ background: '#f1f5f9', padding: '1px 4px', borderRadius: 3 }}>fii-dii/latest.json</code> in your GitHub repo. Update daily.
+            Live from Upstox (<code style={{ background: '#f1f5f9', padding: '1px 4px', borderRadius: 3 }}>fii-dii/latest.json</code> in your GitHub repo used only as fallback).
+            {fiiData?.source && <span style={{ marginLeft: 6, color: fiiData.source === 'upstox' ? '#16a34a' : '#d97706', fontWeight: 700 }}>
+              {fiiData.source === 'upstox' ? '● live' : '● github fallback'}
+            </span>}
           </div>
           {fiiInterp ? (
             <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
