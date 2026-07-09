@@ -1,0 +1,20 @@
+name: Monitor Signals
+
+on:
+  schedule:
+    - cron: '*/3 3-10 * * 1-5'   # every 3 min, 09:15-15:30 IST (03:45-10:00 UTC), Mon-Fri
+  workflow_dispatch: {}
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: node scripts/monitorSignals.mjs
+        env:
+          GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
+          GH_USER: ${{ secrets.AI_GH_USER }}
+          GH_REPO: ${{ secrets.AI_GH_REPO }}
+          UPSTOX_ACCESS_TOKEN: ${{ secrets.UPSTOX_ACCESS_TOKEN }}
