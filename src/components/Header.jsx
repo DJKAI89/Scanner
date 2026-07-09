@@ -26,7 +26,7 @@ export default function Header({ menuOpen, onMenuToggle }) {
         <div className="logo">
           <div className="logo-ic"><span>F</span></div>
           <div>
-            <div className="logo-txt">F.R.I.D.A.Y</div>
+            <div className="logo-txt">Scanner</div>
             <div className="logo-sub">PROFESSIONAL NSE SCANNER</div>
           </div>
         </div>
@@ -58,7 +58,7 @@ export default function Header({ menuOpen, onMenuToggle }) {
               className="btn btn-g"
               disabled={scanning}
               style={{ fontWeight: 700, fontSize: 12, padding: '7px 14px' }}
-              onClick={() => document.dispatchEvent(new CustomEvent('friday:scan'))}
+              onClick={() => document.dispatchEvent(new CustomEvent('scanner:scan'))}
             >
               {scanning ? 'Scanning...' : 'Scan'}
             </button>

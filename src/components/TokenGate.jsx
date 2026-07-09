@@ -38,7 +38,7 @@ export default function TokenGate() {
             <span style={{ fontSize: 17 }}>F</span>
           </div>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 800, color: '#0f172a' }}>F.R.I.D.A.Y</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: '#0f172a' }}>Scanner</div>
             <div style={{ fontSize: 9, color: '#94a3b8', letterSpacing: '1.5px' }}>PROFESSIONAL NSE SCANNER</div>
           </div>
         </div>

@@ -51,7 +51,7 @@ export function Toast({ msg, color = '#16a34a' }) {
   if (!msg) return null;
   return (
     <div
-      className="friday-toast"
+      className="scanner-toast"
       style={{ borderLeft: `4px solid ${color}`, opacity: 1 }}
     >
       {msg}

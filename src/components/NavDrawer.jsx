@@ -24,7 +24,7 @@ export default function NavDrawer({ open, onClose }) {
         <div className="nav-hdr">
           <div className="nav-logo-ic"><span>F</span></div>
           <div>
-            <div className="nav-logo-txt">{userName || 'F.R.I.D.A.Y'}</div>
+            <div className="nav-logo-txt">{userName || 'Scanner'}</div>
             <div className="nav-logo-sub">
               {userId ? `ID: ${userId} · NSE` : 'PROFESSIONAL NSE SCANNER'}
             </div>
