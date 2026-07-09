@@ -364,7 +364,7 @@ export default function SettingsPane() {
   const [saveStatus, setSaveStatus] = useState('');
   const [ghStatus, setGhStatus]     = useState('');
   const [tokenInput, setTokenInput] = useState('');
-  const [tokenSavedDate]            = useState(() => localStorage.getItem('friday_token_date') || '');
+  const [tokenSavedDate]            = useState(() => localStorage.getItem('scanner_token_date') || '');
   const [notifPerm, setNotifPerm]   = useState(() =>
     typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'
   );
@@ -581,7 +581,7 @@ export default function SettingsPane() {
           <h4>📋 Signal Log (GitHub)</h4>
           <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10, lineHeight: 1.7 }}>
             Logs every signal as daily JSON files. Settings sync across browsers automatically.<br />
-            <a href="https://github.com/settings/tokens/new?scopes=repo&description=FRIDAY+Signal+Log"
+            <a href="https://github.com/settings/tokens/new?scopes=repo&description=SCANNER+Signal+Log"
               target="_blank" rel="noreferrer" style={{ color: '#16a34a', fontWeight: 700 }}>
               Generate GitHub Token (repo scope) →
             </a>
@@ -641,8 +641,8 @@ export default function SettingsPane() {
               onClick={() => {
                 const v = tokenInput.trim();
                 if (!v || v.length < 20) { showToast('⚠ Token too short', '#dc2626'); return; }
-                localStorage.setItem('friday_token', v);
-                localStorage.setItem('friday_token_date', new Date().toDateString());
+                localStorage.setItem('scanner_token', v);
+                localStorage.setItem('scanner_token_date', new Date().toDateString());
                 setTokenInput('');
                 showToast('✅ Token updated! Refresh the page to apply.');
               }}>

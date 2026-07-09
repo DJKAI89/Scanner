@@ -264,8 +264,8 @@ export default function OptionsPane() {
     const onScan = () => {
       if (activeTab === 'options') loadOptions(true);
     };
-    document.addEventListener('friday:scan', onScan);
-    return () => document.removeEventListener('friday:scan', onScan);
+    document.addEventListener('scanner:scan', onScan);
+    return () => document.removeEventListener('scanner:scan', onScan);
   }, [activeTab, accessToken]); // eslint-disable-line
   useEffect(() => {
     const liveVix = liveIndexPrices[VIX_KEY]?.ltp;
@@ -324,6 +324,24 @@ export default function OptionsPane() {
       return true; // 'all'
     }),
   })).filter(g => g.picks.length > 0), [liveGroups, filter, cfg.maxOptCapital, cfg.minOptConf, mlModels]);
+
+  // Safety net: if the confidence/capital gate empties every group (e.g. a
+  // learned threshold overshoots on a small/noisy sample), fall back to the
+  // top picks by confidence — same pattern stocks already use — instead of
+  // silently rendering nothing.
+  const displayGroups = useMemo(() => {
+    if (filtered.length > 0 || filter !== 'all') return filtered;
+    const allRaw = liveGroups.flatMap(g => g.picks.map(p => ({ ...p, _group: g })));
+    if (!allRaw.length) return filtered;
+    const top = allRaw.sort((a, b) => b.confidence - a.confidence).slice(0, 8);
+    const byGroup = new Map();
+    for (const p of top) {
+      const key = p._group.name;
+      if (!byGroup.has(key)) byGroup.set(key, { ...p._group, picks: [] });
+      byGroup.get(key).picks.push({ ...p, _fallback: true });
+    }
+    return [...byGroup.values()];
+  }, [filtered, liveGroups, filter]);
 
   return (
     <div>
@@ -414,9 +432,15 @@ export default function OptionsPane() {
             ))}
           </div>
 
-          {filtered.length === 0
+          {displayGroups.length === 0
             ? <EmptyState>{marketStatus.open ? '🔄 No signals meet confidence ≥' + cfg.minOptConf + '% · Try lowering in ⚙ Settings' : '📅 NSE Market Closed · Mon–Fri 9:15–15:30 IST'}</EmptyState>
-            : filtered.map(g => (
+            : <>
+              {filtered.length === 0 && (
+                <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 12px', marginBottom: 10, fontSize: 10, color: '#92400e', fontWeight: 700 }}>
+                  ⚠ 0 picks met the confidence threshold — showing top picks by confidence instead. Try lowering Min Confidence in ⚙ Settings.
+                </div>
+              )}
+              {displayGroups.map(g => (
               <div key={g.name}>
                 <div className="opt-group-hdr">{g.fullName||g.name}{g.type==='stock'?' 📊':''} — ₹{fmt(g.spot)} ({fmtC(g.spotChg)}) · Exp: {g.expiries?.length > 1 ? `${g.expiries.length} expiries (${g.expiries[0]} → ${g.expiries[g.expiries.length-1]})` : g.expiry} · {g.picks.filter(p=>p.trendAligned).length} with-trend · {g.picks.length} total</div>
                 {/* With-trend first */}
@@ -440,7 +464,8 @@ export default function OptionsPane() {
                   </>
                 )}
               </div>
-            ))
+            ))}
+            </>
           }
           <div className="disc">⚠ SL/Target: IV+DTE+Delta model · Confidence: EMA 9/21 cross + VWAP + Momentum + PCR trend + IV trend + Zone + OI build · Not SEBI advice · Always DYODD.</div>
         </div>

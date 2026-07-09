@@ -198,8 +198,8 @@ export default function OptionAnalysisPane() {
 
   useEffect(() => {
     const onScan = () => load();
-    document.addEventListener('friday:scan', onScan);
-    return () => document.removeEventListener('friday:scan', onScan);
+    document.addEventListener('scanner:scan', onScan);
+    return () => document.removeEventListener('scanner:scan', onScan);
   }, [load]);
 
   const switchExpiry = useCallback(async (nextExpiry) => {
