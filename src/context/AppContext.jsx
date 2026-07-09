@@ -128,9 +128,9 @@ export function AppProvider({ children }) {
     localStorage.setItem('scanner_token', v);
     localStorage.setItem('scanner_token_date', new Date().toDateString());
     setTokenState(v); setTokenExpired(false); setBooted(true);
-    if (gh?.token && gh?.user && gh?.repo) syncUpstoxTokenToGithub(gh, v, lg);
+    if (gh?.token && gh?.user && gh?.repo) syncUpstoxTokenToGithub(gh, v, lg, showToast);
     return null;
-  }, [gh, lg]);
+  }, [gh, lg, showToast]);
 
   const clearToken = useCallback(() => {
     localStorage.removeItem('scanner_token');
@@ -158,7 +158,9 @@ export function AppProvider({ children }) {
     localStorage.setItem('scanner_gh_user',  newGh.user  || '');
     localStorage.setItem('scanner_gh_repo',  newGh.repo  || '');
     setGhState(newGh);
-  }, []);
+    const accessToken = resolveAccessToken(token);
+    if (newGh?.token && newGh?.user && newGh?.repo && accessToken) syncUpstoxTokenToGithub(newGh, accessToken, lg, showToast);
+  }, [token, lg, showToast]);
 
   const setActiveTab = useCallback((tab) => {
     const nextTab = tab || 'stocks';
