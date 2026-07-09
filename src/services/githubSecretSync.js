@@ -19,12 +19,21 @@ async function ghFetch(gh, path, opts = {}) {
   return r;
 }
 
-export async function syncUpstoxTokenToGithub(gh, upstoxToken, lg = () => {}) {
+export async function syncUpstoxTokenToGithub(gh, upstoxToken, lg = () => {}, showToast = () => {}) {
   if (!gh?.token || !gh?.user || !gh?.repo || !upstoxToken) return false;
   try {
     // 1. Get the repo's secret-encryption public key
     const keyRes = await ghFetch(gh, '/actions/secrets/public-key');
-    if (!keyRes.ok) { lg('GH secret sync: could not fetch public key (' + keyRes.status + ')', 'w'); return false; }
+    if (!keyRes.ok) {
+      const reason = keyRes.status === 404
+        ? 'repo not found or PAT lacks access'
+        : keyRes.status === 403 || keyRes.status === 401
+        ? 'PAT missing "Secrets: write" permission — add it manually instead (see Settings)'
+        : `HTTP ${keyRes.status}`;
+      lg('GH secret sync: could not fetch public key — ' + reason, 'w');
+      showToast(`⚠ Could not auto-sync Upstox token to GitHub: ${reason}`, '#d97706', 8000);
+      return false;
+    }
     const { key, key_id } = await keyRes.json();
 
     // 2. Encrypt the token with libsodium sealed box (GitHub's required format)
@@ -36,7 +45,11 @@ export async function syncUpstoxTokenToGithub(gh, upstoxToken, lg = () => {}) {
       method: 'PUT',
       body: JSON.stringify({ encrypted_value: encryptedB64, key_id }),
     });
-    if (!putRes.ok) { lg('GH secret sync: PUT failed (' + putRes.status + ')', 'w'); return false; }
+    if (!putRes.ok) {
+      lg('GH secret sync: PUT failed (' + putRes.status + ')', 'w');
+      showToast(`⚠ Could not save UPSTOX_ACCESS_TOKEN secret (HTTP ${putRes.status}) — add it manually in Settings`, '#d97706', 8000);
+      return false;
+    }
 
     // 4. Trigger the monitor workflow immediately (instead of waiting for the next cron tick)
     await ghFetch(gh, `/actions/workflows/${WORKFLOW_FILE}/dispatches`, {
@@ -45,9 +58,11 @@ export async function syncUpstoxTokenToGithub(gh, upstoxToken, lg = () => {}) {
     }).catch(() => {}); // non-fatal — cron will still pick it up within 3 min
 
     lg('✅ Server-side monitor synced with new token', 'o');
+    showToast('✅ Server-side monitor synced with your new token', '#16a34a', 4000);
     return true;
   } catch (e) {
     lg('GH secret sync error: ' + e.message, 'w');
+    showToast('⚠ Auto-sync to GitHub failed: ' + e.message, '#d97706', 8000);
     return false;
   }
 }
