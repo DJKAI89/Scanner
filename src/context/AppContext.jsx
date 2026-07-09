@@ -2,6 +2,19 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { DEF, CFG_VERSION } from '../constants/config';
 import { localIsOpen, getMarketStatusLocal, getIST, getISTDate } from '../utils/marketTime';
 import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken, fetchFIIDIIData } from '../services/api';
+
+// One-time migration: rename legacy 'friday_*' localStorage keys to 'scanner_*'
+// so existing users' token/settings/ML models survive the FRIDAY→Scanner rename.
+(function migrateLegacyStorageKeys() {
+  if (localStorage.getItem('scanner_migrated_v1')) return;
+  const keys = ['token', 'token_date', 'cfg', 'user_name', 'user_id', 'gh_token', 'gh_user', 'gh_repo',
+    'active_tab', 'ml_models', 'ml_snapshots', 'stocks_loaded_date', 'fiidii_date', 'log_migrated_v2'];
+  keys.forEach((k) => {
+    const old = localStorage.getItem(`friday_${k}`);
+    if (old != null && localStorage.getItem(`scanner_${k}`) == null) localStorage.setItem(`scanner_${k}`, old);
+  });
+  localStorage.setItem('scanner_migrated_v1', '1');
+})();
 import { interpretFIIDII } from '../services/technical';
 import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded, ghReadIndex, ghReadDay, ghWriteDay, pullAiModelFromGH, pushAiModelToGH, appendAiHistoryToGH, pullAiHistoryFromGH } from '../services/github';
 import { evaluateSignalExit } from '../services/tradeManagement';
@@ -13,17 +26,17 @@ const AppContext = createContext(null);
 
 export function AppProvider({ children }) {
   // ── Token ──
-  const [token, setTokenState] = useState(() => localStorage.getItem('friday_token') || '');
+  const [token, setTokenState] = useState(() => localStorage.getItem('scanner_token') || '');
   const [tokenExpired, setTokenExpired] = useState(false);
   const [booted, setBooted] = useState(false);
 
   // ── Config — exact same init logic as HTML ──
   const [cfg, setCfgState] = useState(() => {
     try {
-      const saved = JSON.parse(localStorage.getItem('friday_cfg') || 'null');
+      const saved = JSON.parse(localStorage.getItem('scanner_cfg') || 'null');
       if (saved && saved._v === CFG_VERSION) return { ...DEF, ...saved };
       // Old/mismatched version — clear and use DEF (same as HTML)
-      localStorage.removeItem('friday_cfg');
+      localStorage.removeItem('scanner_cfg');
     } catch (e) {}
     return { ...DEF };
   });
@@ -35,14 +48,14 @@ export function AppProvider({ children }) {
   const _mktCacheTs = useRef(0);
 
   // ── User ──
-  const [userName, setUserName] = useState(() => localStorage.getItem('friday_user_name') || '');
-  const [userId,   setUserId]   = useState(() => localStorage.getItem('friday_user_id')   || '');
+  const [userName, setUserName] = useState(() => localStorage.getItem('scanner_user_name') || '');
+  const [userId,   setUserId]   = useState(() => localStorage.getItem('scanner_user_id')   || '');
 
   // ── GitHub ──
   const [gh, setGhState] = useState(() => ({
-    token: localStorage.getItem('friday_gh_token') || '',
-    user:  localStorage.getItem('friday_gh_user')  || '',
-    repo:  localStorage.getItem('friday_gh_repo')  || '',
+    token: localStorage.getItem('scanner_gh_token') || '',
+    user:  localStorage.getItem('scanner_gh_user')  || '',
+    repo:  localStorage.getItem('scanner_gh_repo')  || '',
   }));
 
   // ── Stocks ──
@@ -54,7 +67,7 @@ export function AppProvider({ children }) {
   const [fiiInterp, setFiiInterp] = useState(null);
 
   // ── UI state ──
-  const [activeTab, setActiveTabState] = useState(() => localStorage.getItem('friday_active_tab') || 'stocks');
+  const [activeTab, setActiveTabState] = useState(() => localStorage.getItem('scanner_active_tab') || 'stocks');
   const [scanning, setScanning]   = useState(false);
   const [statusDot, setStatusDot] = useState('live');
   const [statusTxt, setStatusTxt] = useState('Live');
@@ -66,10 +79,10 @@ export function AppProvider({ children }) {
   const [confCalibration, setConfCalibration] = useState(null);
   const [adaptWeights,    setAdaptWeights]    = useState(null); // per-indicator win-rate adjustments
   const [mlModels,        setMlModels]        = useState(() => {
-    try { return JSON.parse(localStorage.getItem('friday_ml_models') || 'null'); } catch (_) { return null; }
+    try { return JSON.parse(localStorage.getItem('scanner_ml_models') || 'null'); } catch (_) { return null; }
   });
   const [mlSnapshots,     setMlSnapshots]     = useState(() => {
-    try { return JSON.parse(localStorage.getItem('friday_ml_snapshots') || '[]'); } catch (_) { return []; }
+    try { return JSON.parse(localStorage.getItem('scanner_ml_snapshots') || '[]'); } catch (_) { return []; }
   });
   const [openSignalCount, setOpenSignalCount] = useState(0);   // live OPEN signal count (global monitor)
   const signalMonitorRef  = useRef(null);  // interval ref for global signal monitor
@@ -104,26 +117,26 @@ export function AppProvider({ children }) {
   }, [gh]); // eslint-disable-line
 
   const onTokenExpired = useCallback(() => {
-    localStorage.removeItem('friday_token');
-    localStorage.removeItem('friday_token_date');
+    localStorage.removeItem('scanner_token');
+    localStorage.removeItem('scanner_token_date');
     setTokenState(''); setBooted(false); setTokenExpired(true);
   }, []);
 
   const saveToken = useCallback((newToken) => {
     const v = normalizeAccessToken(newToken);
     if (!v || v.length < 20) return 'Token too short';
-    localStorage.setItem('friday_token', v);
-    localStorage.setItem('friday_token_date', new Date().toDateString());
+    localStorage.setItem('scanner_token', v);
+    localStorage.setItem('scanner_token_date', new Date().toDateString());
     setTokenState(v); setTokenExpired(false); setBooted(true);
     if (gh?.token && gh?.user && gh?.repo) syncUpstoxTokenToGithub(gh, v, lg);
     return null;
   }, [gh, lg]);
 
   const clearToken = useCallback(() => {
-    localStorage.removeItem('friday_token');
-    localStorage.removeItem('friday_token_date');
-    localStorage.removeItem('friday_user_name');
-    localStorage.removeItem('friday_user_id');
+    localStorage.removeItem('scanner_token');
+    localStorage.removeItem('scanner_token_date');
+    localStorage.removeItem('scanner_user_name');
+    localStorage.removeItem('scanner_user_id');
     setTokenState(''); setUserName(''); setUserId('');
     setBooted(false); setStocks([]);
   }, []);
@@ -131,25 +144,25 @@ export function AppProvider({ children }) {
   // ── saveCfg — saves to localStorage + state ──
   const saveCfg = useCallback((newCfg) => {
     const merged = { ...newCfg, _v: CFG_VERSION };
-    localStorage.setItem('friday_cfg', JSON.stringify(merged));
+    localStorage.setItem('scanner_cfg', JSON.stringify(merged));
     setCfgState(merged);
   }, []);
 
   const resetCfg = useCallback(() => {
-    localStorage.removeItem('friday_cfg');
+    localStorage.removeItem('scanner_cfg');
     setCfgState({ ...DEF });
   }, []);
 
   const saveGh = useCallback((newGh) => {
-    localStorage.setItem('friday_gh_token', newGh.token || '');
-    localStorage.setItem('friday_gh_user',  newGh.user  || '');
-    localStorage.setItem('friday_gh_repo',  newGh.repo  || '');
+    localStorage.setItem('scanner_gh_token', newGh.token || '');
+    localStorage.setItem('scanner_gh_user',  newGh.user  || '');
+    localStorage.setItem('scanner_gh_repo',  newGh.repo  || '');
     setGhState(newGh);
   }, []);
 
   const setActiveTab = useCallback((tab) => {
     const nextTab = tab || 'stocks';
-    localStorage.setItem('friday_active_tab', nextTab);
+    localStorage.setItem('scanner_active_tab', nextTab);
     setActiveTabState(nextTab);
   }, []);
 
@@ -174,7 +187,7 @@ export function AppProvider({ children }) {
     const g = ghCfg || gh;
     if (!g.token || !g.user || !g.repo) return;
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-    if (!force && localStorage.getItem('friday_stocks_loaded_date') === today && stocks.length > 0) {
+    if (!force && localStorage.getItem('scanner_stocks_loaded_date') === today && stocks.length > 0) {
       lg(`stocks.json: already loaded today (${stocks.length} stocks)`, 'o');
       return;
     }
@@ -203,7 +216,7 @@ export function AppProvider({ children }) {
         step: item.step || 0,
       })).filter((s) => s.key && s.s);
       setStocks(list);
-      localStorage.setItem('friday_stocks_loaded_date', today);
+      localStorage.setItem('scanner_stocks_loaded_date', today);
       const foCount = list.filter((s) => s.fo && s.lot > 0).length;
       const updDate = parsed.updated_at ? ' · ' + parsed.updated_at.split('T')[0] : '';
       setStocksStatus(`✅ ${list.length} stocks · ${foCount} F&O${updDate}`);
@@ -218,7 +231,7 @@ export function AppProvider({ children }) {
   const loadFIIDII = useCallback(async (ghCfg, force = false) => {
     const g = ghCfg || gh;
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-    if (!force && localStorage.getItem('friday_fiidii_date') === today && fiiData) return;
+    if (!force && localStorage.getItem('scanner_fiidii_date') === today && fiiData) return;
 
     const accessToken = resolveAccessToken(token);
     if (accessToken) {
@@ -227,7 +240,7 @@ export function AppProvider({ children }) {
         if (data) {
           setFiiData(data);
           setFiiInterp(interpretFIIDII(data));
-          localStorage.setItem('friday_fiidii_date', today);
+          localStorage.setItem('scanner_fiidii_date', today);
           lg('FII/DII loaded live (Upstox)', 'o');
           return;
         }
@@ -245,10 +258,10 @@ export function AppProvider({ children }) {
       if (r.status === 403) { lg('FII/DII: token lacks repo access or rate-limited', 'w'); return; }
       if (!r.ok) return;
       const d    = await r.json();
-      const data = JSON.parse(atob(d.content.replace(/\n/g, '')));
+      const data = { ...JSON.parse(atob(d.content.replace(/\n/g, ''))), source: 'github' };
       setFiiData(data);
       setFiiInterp(interpretFIIDII(data));
-      localStorage.setItem('friday_fiidii_date', today);
+      localStorage.setItem('scanner_fiidii_date', today);
       const age = data.fetched_at
         ? Math.round((Date.now() - new Date(data.fetched_at)) / 3600000)
         : '?';
@@ -267,20 +280,20 @@ export function AppProvider({ children }) {
       if (!g?.token || !g?.user || !g?.repo) return;
       try {
         const signals = await ghReadMultipleDays(g, 60); // 60 days for better sample size
-        if (!signals?.length) { setMlModels(null); localStorage.removeItem('friday_ml_models'); return; }
+        if (!signals?.length) { setMlModels(null); localStorage.removeItem('scanner_ml_models'); return; }
         const closed = signals.filter(s => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
-        if (closed.length < 10) { setMlModels(null); localStorage.removeItem('friday_ml_models'); lg(`Calibration: need 10+ closed signals, have ${closed.length}`, 'w'); return; }
+        if (closed.length < 10) { setMlModels(null); localStorage.removeItem('scanner_ml_models'); lg(`Calibration: need 10+ closed signals, have ${closed.length}`, 'w'); return; }
         // Browser-safe mode:
         // Use cached/remote AI model and avoid heavy on-page retraining that can freeze UI.
         let activeModels = null;
         const remoteModel = await pullAiModelFromGH(g).catch(() => null);
         if (remoteModel?.version) {
           const prevComputedAt = (() => {
-            try { return JSON.parse(localStorage.getItem('friday_ml_models') || 'null')?.computedAt; } catch (_) { return null; }
+            try { return JSON.parse(localStorage.getItem('scanner_ml_models') || 'null')?.computedAt; } catch (_) { return null; }
           })();
           activeModels = remoteModel;
           setMlModels(remoteModel);
-          localStorage.setItem('friday_ml_models', JSON.stringify(remoteModel));
+          localStorage.setItem('scanner_ml_models', JSON.stringify(remoteModel));
           lg('ML ranker loaded from GitHub', 'o');
 
           if (remoteModel.computedAt && remoteModel.computedAt !== prevComputedAt) {
@@ -294,14 +307,14 @@ export function AppProvider({ children }) {
                   seen.add(s.computedAt);
                   return true;
                 }).sort((a, b) => new Date(b.computedAt) - new Date(a.computedAt)).slice(0, 20);
-                localStorage.setItem('friday_ml_snapshots', JSON.stringify(deduped));
+                localStorage.setItem('scanner_ml_snapshots', JSON.stringify(deduped));
                 return deduped;
               });
             }
           }
         } else {
           const cachedModel = (() => {
-            try { return JSON.parse(localStorage.getItem('friday_ml_models') || 'null'); } catch (_) { return null; }
+            try { return JSON.parse(localStorage.getItem('scanner_ml_models') || 'null'); } catch (_) { return null; }
           })();
           if (cachedModel?.version) {
             activeModels = cachedModel;
@@ -313,12 +326,12 @@ export function AppProvider({ children }) {
             if (trainedModels) {
               activeModels = trainedModels;
               setMlModels(trainedModels);
-              localStorage.setItem('friday_ml_models', JSON.stringify(trainedModels));
+              localStorage.setItem('scanner_ml_models', JSON.stringify(trainedModels));
               const snap = buildModelSnapshot(trainedModels);
               if (snap) {
                 setMlSnapshots((prev) => {
                   const next = [snap, ...prev].slice(0, 20);
-                  localStorage.setItem('friday_ml_snapshots', JSON.stringify(next));
+                  localStorage.setItem('scanner_ml_snapshots', JSON.stringify(next));
                   return next;
                 });
               }
@@ -606,7 +619,7 @@ export function AppProvider({ children }) {
       if (pulled) {
         // Merge remote settings into cfg (preserve local token — same as HTML)
         const merged = { ...DEF, ...pulled, _v: CFG_VERSION };
-        localStorage.setItem('friday_cfg', JSON.stringify(merged));
+        localStorage.setItem('scanner_cfg', JSON.stringify(merged));
         setCfgState(merged);
         setGhSettingsPulled((n) => n + 1); // trigger SettingsPane to re-sync local state
         lg('✅ Settings pulled from GitHub', 'o');
@@ -632,16 +645,16 @@ export function AppProvider({ children }) {
       const name = user.user_name || user.name || user.email?.split('@')[0] || 'Trader';
       const id   = user.user_id   || user.client_id || '';
       setUserName(name); setUserId(id);
-      localStorage.setItem('friday_user_name', name);
-      localStorage.setItem('friday_user_id',   id);
+      localStorage.setItem('scanner_user_name', name);
+      localStorage.setItem('scanner_user_id',   id);
       lg('✅ User: ' + name + (id ? ' (' + id + ')' : ''), 'o');
 
       // 2. Pull GH settings 2s after profile (same timing as HTML)
       setTimeout(async () => {
         const currentGH = {
-          token: localStorage.getItem('friday_gh_token') || '',
-          user:  localStorage.getItem('friday_gh_user')  || '',
-          repo:  localStorage.getItem('friday_gh_repo')  || '',
+          token: localStorage.getItem('scanner_gh_token') || '',
+          user:  localStorage.getItem('scanner_gh_user')  || '',
+          repo:  localStorage.getItem('scanner_gh_repo')  || '',
         };
         if (currentGH.token && currentGH.user && currentGH.repo) {
           const pulled = await pullGHSettings(currentGH);
@@ -649,7 +662,7 @@ export function AppProvider({ children }) {
           const remoteModel = await pullAiModelFromGH(currentGH);
           if (remoteModel?.version) {
             setMlModels(remoteModel);
-            localStorage.setItem('friday_ml_models', JSON.stringify(remoteModel));
+            localStorage.setItem('scanner_ml_models', JSON.stringify(remoteModel));
             lg('✅ AI model pulled from GitHub', 'o');
           }
         }
@@ -664,11 +677,11 @@ export function AppProvider({ children }) {
     }).catch((e) => {
       lg('User profile: ' + e.message, 'w');
       // Restore from cache
-      const cached = localStorage.getItem('friday_user_name');
-      if (cached) { setUserName(cached); setUserId(localStorage.getItem('friday_user_id') || ''); }
+      const cached = localStorage.getItem('scanner_user_name');
+      if (cached) { setUserName(cached); setUserId(localStorage.getItem('scanner_user_id') || ''); }
       // Still load stocks/FII even if profile fails
       setTimeout(() => {
-        const g = { token: localStorage.getItem('friday_gh_token') || '', user: localStorage.getItem('friday_gh_user') || '', repo: localStorage.getItem('friday_gh_repo') || '' };
+        const g = { token: localStorage.getItem('scanner_gh_token') || '', user: localStorage.getItem('scanner_gh_user') || '', repo: localStorage.getItem('scanner_gh_repo') || '' };
         if (g.token) {
           loadStocks(g); loadFIIDII(g); ghMigrateIfNeeded(g, lg);
           scheduleMlRefresh(g, mlModels ? 20000 : 12000);
