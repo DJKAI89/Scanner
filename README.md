@@ -1,4 +1,4 @@
-# F.R.I.D.A.Y — NSE Stock & Option Scanner (React)
+# Scanner — NSE Stock & Option Scanner (React)
 
 React + Vite app for NSE stock and F&O option scanning via the **Upstox v3 API**, with a GitHub-repo-backed signal log, an ML-based confidence ranker, and a server-side signal monitor.
 
@@ -90,17 +90,17 @@ Tokens expire ~3:30am IST daily — paste a fresh one each morning. Pasting it a
 
 **Enable Pages:** repo → Settings → Pages → Source: **GitHub Actions**.
 
-**Enable server-side monitoring:** add repo secrets `GH_TOKEN` (PAT, repo + Actions-secrets write), `FRIDAY_USER_ID` (your `friday_user_id` value). `UPSTOX_ACCESS_TOKEN` is set automatically once you paste a token in the app.
+**Enable server-side monitoring:** add repo secrets `GH_TOKEN` (PAT, repo + Actions-secrets write), `SCANNER_USER_ID` (your `scanner_user_id` value). `UPSTOX_ACCESS_TOKEN` is set automatically once you paste a token in the app.
 
 ---
 
 ## 📋 Signal Log (GitHub-backed)
 
 ```
-signal-logs/{friday_user_id}/{date}.json   ← signals + stats for that day
-signal-logs/{friday_user_id}/index.json    ← date index + daily open/hit/sl counts
-settings/{friday_user_id}.json             ← saved config
-ai-models/{friday_user_id}/...             ← trained ML ranker snapshots
+signal-logs/{scanner_user_id}/{date}.json   ← signals + stats for that day
+signal-logs/{scanner_user_id}/index.json    ← date index + daily open/hit/sl counts
+settings/{scanner_user_id}.json             ← saved config
+ai-models/{scanner_user_id}/...             ← trained ML ranker snapshots
 ```
 
 Configure in **Settings → Signal Log (GitHub)**: token (`repo` scope), username, repo name.

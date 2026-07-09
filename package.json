@@ -1,8 +1,8 @@
 {
-  "name": "friday-nse-scanner",
+  "name": "nse-scanner",
   "version": "2.0.0",
   "private": true,
-  "description": "F.R.I.D.A.Y — Professional NSE Scanner (React)",
+  "description": "Scanner — Professional NSE Scanner (React)",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
