@@ -2,6 +2,7 @@
   "name": "nse-scanner",
   "version": "2.0.0",
   "private": true,
+  "type": "module",
   "description": "Scanner — Professional NSE Scanner (React)",
   "scripts": {
     "dev": "vite",
