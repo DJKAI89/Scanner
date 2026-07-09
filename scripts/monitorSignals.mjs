@@ -28,6 +28,8 @@ async function ghGet(path) {
     headers: { Authorization: `Bearer ${gh.token}`, Accept: 'application/vnd.github+json' },
   });
   if (r.status === 404) return null;
+  if (r.status === 401) throw new Error(`GH read ${path}: 401 Unauthorized — AI_GH_TOKEN is invalid/expired`);
+  if (r.status === 403) throw new Error(`GH read ${path}: 403 Forbidden — AI_GH_TOKEN lacks repo access, or check GH_USER/GH_REPO are correct (currently "${gh.user}/${gh.repo}")`);
   if (!r.ok) throw new Error(`GH read ${path}: ${r.status}`);
   return r.json();
 }
@@ -42,6 +44,8 @@ async function ghPut(path, contentObj, sha) {
     headers: { Authorization: `Bearer ${gh.token}`, Accept: 'application/vnd.github+json' },
     body: JSON.stringify(body),
   });
+  if (r.status === 401) throw new Error(`GH write ${path}: 401 Unauthorized — AI_GH_TOKEN is invalid/expired`);
+  if (r.status === 403) throw new Error(`GH write ${path}: 403 Forbidden — AI_GH_TOKEN needs "Contents: write" permission`);
   if (!r.ok) throw new Error(`GH write ${path}: ${r.status} ${await r.text()}`);
 }
 
@@ -123,8 +127,14 @@ async function processUser(uid, today, now) {
 }
 
 async function main() {
-  if (!gh.token || !gh.user || !gh.repo || !upstoxToken) {
-    console.error('Missing GH_TOKEN/GH_USER/GH_REPO/UPSTOX_ACCESS_TOKEN'); process.exit(1);
+  const missing = [];
+  if (!gh.token) missing.push('GH_TOKEN (AI_GH_TOKEN secret)');
+  if (!gh.user) missing.push('GH_USER (AI_GH_USER secret)');
+  if (!gh.repo) missing.push('GH_REPO (AI_GH_REPO secret)');
+  if (!upstoxToken) missing.push('UPSTOX_ACCESS_TOKEN — not set yet. Paste your Upstox token in the app once (Settings/TokenGate) to auto-create this secret, or set it manually in repo Secrets.');
+  if (missing.length) {
+    console.error('Missing required config:\n- ' + missing.join('\n- '));
+    process.exit(1);
   }
   const today0 = todayIST();
   const holidays = await fetchNseHolidays();
