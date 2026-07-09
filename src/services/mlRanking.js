@@ -439,14 +439,14 @@ function optimizeThresholds(dataset, model, type) {
         }
         return bestG.v;
       };
-      deltaGate = sweepGate('delta', [0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55]);
-      ivGate = sweepGate('iv', [8, 10, 12, 15, 18, 22, 26]);
+      deltaGate = clamp(sweepGate('delta', [0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55]), 0.25, 0.45);
+      ivGate = clamp(sweepGate('iv', [8, 10, 12, 15, 18, 22, 26]), 8, 18);
     }
   }
 
   return {
-    probability: best.probability,
-    minConfidence: Math.round(best.probability * 100),
+    probability: clamp(best.probability, 0.55, 0.68),
+    minConfidence: Math.round(clamp(best.probability, 0.55, 0.68) * 100),
     maxRisk: type === 'STOCK' ? 48 : 58,
     minRR: type === 'STOCK' ? 1.4 : 1.3,
     maxCapital: type === 'OPTION' ? 120000 : 0,

@@ -29,7 +29,7 @@ export function normalizeAccessToken(raw) {
 
 export function getStoredAccessToken() {
   try {
-    return normalizeAccessToken(localStorage.getItem('friday_token') || '');
+    return normalizeAccessToken(localStorage.getItem('scanner_token') || '');
   } catch (e) {
     return '';
   }
@@ -253,9 +253,9 @@ export async function fetchPortfolio(token, onTokenExpired) {
 
   // Warn in console if one of the two calls failed
   if (posRes.status === 'rejected')
-    console.warn('[FRIDAY] fetchPortfolio positions failed:', posRes.reason?.message || posRes.reason);
+    console.warn('[SCANNER] fetchPortfolio positions failed:', posRes.reason?.message || posRes.reason);
   if (holdRes.status === 'rejected')
-    console.warn('[FRIDAY] fetchPortfolio holdings failed:', holdRes.reason?.message || holdRes.reason);
+    console.warn('[SCANNER] fetchPortfolio holdings failed:', holdRes.reason?.message || holdRes.reason);
 
   return { positions, holdings };
 }

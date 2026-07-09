@@ -2,7 +2,7 @@
 
 // ── userId helper — sanitised same as HTML ──
 function _uid() {
-  return (localStorage.getItem('friday_user_id') || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
+  return (localStorage.getItem('scanner_user_id') || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
 // ── Settings path — MATCHES HTML exactly ──
@@ -87,11 +87,11 @@ export async function pushSettingsToGH(gh, cfg) {
     delete settingsPayload._token; // never store token in GitHub
     const payload = {
       settings: settingsPayload,
-      upstoxId: localStorage.getItem('friday_user_id') || 'unknown',
+      upstoxId: localStorage.getItem('scanner_user_id') || 'unknown',
       savedAt:  new Date().toISOString(),
       version:  'v4',
     };
-    const r = await _ghPut(gh, path, payload, sha, 'FRIDAY settings sync');
+    const r = await _ghPut(gh, path, payload, sha, 'SCANNER settings sync');
     return r?.ok ?? false;
   } catch (e) { return false; }
 }
@@ -125,7 +125,7 @@ export async function pushAiModelToGH(gh, modelPayload) {
       savedAt: new Date().toISOString(),
       upstoxId: _uid(),
     };
-    const r = await _ghPut(gh, getAiLatestPath(), payload, sha, `FRIDAY AI model · ${_uid()}`);
+    const r = await _ghPut(gh, getAiLatestPath(), payload, sha, `SCANNER AI model · ${_uid()}`);
     return r?.ok ?? false;
   } catch (_) { return false; }
 }
@@ -136,13 +136,13 @@ export async function appendAiHistoryToGH(gh, snapshot) {
     const today = new Date().toISOString().slice(0, 10);
     const dayPath = getAiHistoryDayPath(today);
     const dayExisting = await _ghFetch(gh, dayPath);
-    const dayR = await _ghPut(gh, dayPath, { date: today, snapshot, upstoxId: _uid() }, dayExisting?.sha || null, `FRIDAY AI history · ${_uid()} · ${today}`);
+    const dayR = await _ghPut(gh, dayPath, { date: today, snapshot, upstoxId: _uid() }, dayExisting?.sha || null, `SCANNER AI history · ${_uid()} · ${today}`);
 
     const indexPath = getAiHistoryIndexPath();
     const indexExisting = await _ghFetch(gh, indexPath);
     const prevIndex = indexExisting ? _decode(indexExisting.content) : { dates: [] };
     const dates = Array.from(new Set([...(prevIndex?.dates || []), today])).sort().slice(-100);
-    const indexR = await _ghPut(gh, indexPath, { dates, updatedAt: new Date().toISOString() }, indexExisting?.sha || null, `FRIDAY AI history index · ${_uid()}`);
+    const indexR = await _ghPut(gh, indexPath, { dates, updatedAt: new Date().toISOString() }, indexExisting?.sha || null, `SCANNER AI history index · ${_uid()}`);
 
     return (dayR?.ok ?? false) && (indexR?.ok ?? false);
   } catch (_) { return false; }
@@ -221,7 +221,7 @@ export async function ghWriteDay(gh, signals, sha, date, retryCount = 0) {
     date,
     stats:       computeLogStats(signals),
   };
-  let r = await _ghPut(gh, getLogDayPath(date), payload, sha, `FRIDAY signal log · ${_uid()} · ${date}`);
+  let r = await _ghPut(gh, getLogDayPath(date), payload, sha, `SCANNER signal log · ${_uid()} · ${date}`);
   if (r?.ok) {
     const rd = await r.json();
     const newSha = rd?.content?.sha || sha;
@@ -231,7 +231,7 @@ export async function ghWriteDay(gh, signals, sha, date, retryCount = 0) {
 
   if (r && r.status !== 409 && r.status !== 422) {
     // Unexpected failure — log status for debugging
-    console.warn(`[FRIDAY] ghWriteDay: GitHub PUT returned HTTP ${r.status} for ${getLogDayPath(date)}`);
+    console.warn(`[SCANNER] ghWriteDay: GitHub PUT returned HTTP ${r.status} for ${getLogDayPath(date)}`);
   }
 
   if (r && (r.status === 409 || r.status === 422) && retryCount < 2) {
@@ -279,9 +279,9 @@ export async function ghUpdateIndex(gh, date, stats) {
     const r = await _ghPut(gh, getLogIndexPath(), {
       dates: pruned, dailyStats: newStats,
       lastUpdated: new Date().toISOString(), upstoxId: _uid(),
-    }, sha, `FRIDAY index · ${_uid()}`);
-    if (r && !r.ok) console.warn(`[FRIDAY] ghUpdateIndex: HTTP ${r.status}`);
-  } catch (e) { console.warn('[FRIDAY] ghUpdateIndex failed:', e.message); }
+    }, sha, `SCANNER index · ${_uid()}`);
+    if (r && !r.ok) console.warn(`[SCANNER] ghUpdateIndex: HTTP ${r.status}`);
+  } catch (e) { console.warn('[SCANNER] ghUpdateIndex failed:', e.message); }
 }
 
 export async function ghReadMultipleDays(gh, maxDays = 30) {
@@ -472,7 +472,7 @@ export function buildOptionSignal(p, vixVal) {
 // ── One-time migration from legacy single file → daily files (exact HTML port) ──
 export async function ghMigrateIfNeeded(gh, lg = () => {}) {
   if (!gh.token || !gh.user || !gh.repo) return;
-  const migKey = `friday_log_migrated_v2_${_uid()}`;
+  const migKey = `scanner_log_migrated_v2_${_uid()}`;
   if (localStorage.getItem(migKey)) return; // already done
   try {
     const legacyPath = `signal-logs/${_uid()}.json`;
