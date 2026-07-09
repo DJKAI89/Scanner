@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 const GH_TOKEN = process.env.AI_GH_TOKEN || process.env.GH_TOKEN || '';
 const GH_USER = process.env.GH_USER || '';
 const GH_REPO = process.env.GH_REPO || '';
-const FRIDAY_USER_ID = (process.env.FRIDAY_USER_ID || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+const SCANNER_USER_ID = (process.env.SCANNER_USER_ID || '').replace(/[^a-zA-Z0-9_-]/g, '_');
 const LOOKBACK_DAYS = Number(process.env.AI_LOOKBACK_DAYS || 90);
 
 // ═══════════════════════════════════════════════════════════════════
@@ -13,7 +13,7 @@ const config = {
   GH_TOKEN,
   GH_USER,
   GH_REPO,
-  FRIDAY_USER_ID,
+  SCANNER_USER_ID,
   LOOKBACK_DAYS,
 };
 
@@ -30,7 +30,7 @@ if (missingConfig.length > 0) {
   console.error('  export AI_GH_TOKEN="ghp_..."');
   console.error('  export GH_USER="your-username"');
   console.error('  export GH_REPO="your-repo"');
-  console.error('  export FRIDAY_USER_ID="user-id" (optional, processes all if not set)');
+  console.error('  export SCANNER_USER_ID="user-id" (optional, processes all if not set)');
   process.exit(1);
 }
 
@@ -38,7 +38,7 @@ console.log('✅ Configuration OK');
 console.log(`  Repository: ${GH_USER}/${GH_REPO}`);
 console.log(`  Token length: ${GH_TOKEN.length} chars`);
 console.log(`  Lookback: ${LOOKBACK_DAYS} days`);
-if (FRIDAY_USER_ID) console.log(`  Target user: ${FRIDAY_USER_ID}`);
+if (SCANNER_USER_ID) console.log(`  Target user: ${SCANNER_USER_ID}`);
 console.log('');
 
 async function loadBrainModule() {
@@ -184,7 +184,7 @@ function decodeContent(content) {
 }
 
 async function readSignalHistory() {
-  const indexPath = `signal-logs/${FRIDAY_USER_ID}/index.json`;
+  const indexPath = `signal-logs/${SCANNER_USER_ID}/index.json`;
   const indexFile = await ghFetch(indexPath);
   if (!indexFile) return [];
   const index = decodeContent(indexFile.content);
@@ -192,7 +192,7 @@ async function readSignalHistory() {
   const dates = (index.dates || []).slice(-LOOKBACK_DAYS);
   const signals = [];
   for (const date of dates) {
-    const day = await ghFetch(`signal-logs/${FRIDAY_USER_ID}/${date}.json`);
+    const day = await ghFetch(`signal-logs/${SCANNER_USER_ID}/${date}.json`);
     if (!day) continue;
     const payload = decodeContent(day.content);
     if (!payload) continue;
@@ -202,7 +202,7 @@ async function readSignalHistory() {
 }
 
 async function listUserIds() {
-  if (FRIDAY_USER_ID) return [FRIDAY_USER_ID];
+  if (SCANNER_USER_ID) return [SCANNER_USER_ID];
   const folder = await ghFetch('signal-logs');
   if (!Array.isArray(folder)) return [];
   return folder
@@ -250,7 +250,7 @@ async function main() {
       break;
     }
 
-    globalThis.FRIDAY_USER_ID = userId;
+    globalThis.SCANNER_USER_ID = userId;
     const userStartTime = Date.now();
 
     try {
@@ -304,15 +304,15 @@ async function main() {
       const historyDayPath = `ai-models/${userId}/history/${today}.json`;
 
       const latestExisting = await ghFetch(latestPath);
-      await ghPut(latestPath, { ...models, trainedOffline: true, userId }, latestExisting?.sha || null, `FRIDAY AI offline retrain · ${userId}`);
+      await ghPut(latestPath, { ...models, trainedOffline: true, userId }, latestExisting?.sha || null, `SCANNER AI offline retrain · ${userId}`);
 
       const historyDayExisting = await ghFetch(historyDayPath);
-      await ghPut(historyDayPath, { date: today, snapshot, trainedOffline: true, userId }, historyDayExisting?.sha || null, `FRIDAY AI history · ${userId} · ${today}`);
+      await ghPut(historyDayPath, { date: today, snapshot, trainedOffline: true, userId }, historyDayExisting?.sha || null, `SCANNER AI history · ${userId} · ${today}`);
 
       const historyIndexExisting = await ghFetch(historyIndexPath);
       const historyIndex = decodeContent(historyIndexExisting?.content) || { dates: [] };
       const dates = Array.from(new Set([...(historyIndex.dates || []), today])).sort().slice(-LOOKBACK_DAYS);
-      await ghPut(historyIndexPath, { dates, updatedAt: new Date().toISOString() }, historyIndexExisting?.sha || null, `FRIDAY AI history index · ${userId}`);
+      await ghPut(historyIndexPath, { dates, updatedAt: new Date().toISOString() }, historyIndexExisting?.sha || null, `SCANNER AI history index · ${userId}`);
 
       const elapsed = Math.round((Date.now() - userStartTime) / 1000);
       console.log(`✅ Trained ${userId}: ${closed.length} closed signals in ${elapsed}s`);
