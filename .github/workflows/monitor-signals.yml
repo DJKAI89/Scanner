@@ -11,10 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: '20' }
+        with: { node-version: '24' }
       - run: node scripts/monitorSignals.mjs
         env:
-          GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
-          GH_USER: ${{ secrets.AI_GH_USER }}
-          GH_REPO: ${{ secrets.AI_GH_REPO }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.AI_GH_TOKEN }}
+          SCANNER_USER_ID: ${{ secrets.SCANNER_USER_ID }}
           UPSTOX_ACCESS_TOKEN: ${{ secrets.UPSTOX_ACCESS_TOKEN }}

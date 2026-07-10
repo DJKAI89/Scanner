@@ -1,19 +1,25 @@
 // Server-side signal monitor. Runs headlessly under GitHub Actions cron —
 // same evaluateSignalExit logic as AppContext.jsx's runSignalMonitor, just
-// without a browser. Requires UPSTOX_ACCESS_TOKEN + GH_TOKEN/GH_USER/GH_REPO
-// env vars (set as repo secrets). Upstox tokens expire ~3:30am IST daily —
+// without a browser. Requires UPSTOX_ACCESS_TOKEN + GH_TOKEN env vars.
+// GH_USER/GH_REPO are optional and fall back to GITHUB_REPOSITORY.
+// Upstox tokens expire ~3:30am IST daily —
 // you (or a separate login-automation step) must refresh the secret once a
 // day; there is no refresh-token grant in Upstox's API to avoid this.
 //
-// If GH_USER_ID is unset, auto-discovers every user folder under
+// If SCANNER_USER_ID / GH_USER_ID is unset, auto-discovers every user folder under
 // signal-logs/ (same pattern as scripts/train-ai-model.mjs) — no per-user
 // secret needed.
 import { evaluateSignalExit } from '../src/services/tradeManagement.js';
 
 const GH_API = 'https://api.github.com';
-const gh = { token: process.env.GH_TOKEN, user: process.env.GH_USER, repo: process.env.GH_REPO };
+const [repoOwner = '', repoName = ''] = (process.env.GITHUB_REPOSITORY || '').split('/');
+const gh = {
+  token: process.env.GH_TOKEN,
+  user: process.env.GH_USER || repoOwner,
+  repo: process.env.GH_REPO || repoName,
+};
 const upstoxToken = process.env.UPSTOX_ACCESS_TOKEN;
-const fixedUid = process.env.GH_USER_ID ? process.env.GH_USER_ID.replace(/[^a-zA-Z0-9_-]/g, '_') : null;
+const fixedUid = (process.env.SCANNER_USER_ID || process.env.GH_USER_ID || '').replace(/[^a-zA-Z0-9_-]/g, '_') || null;
 
 function computeLogStats(signals) {
   const hits = signals.filter((s) => s.status === 'TARGET_HIT').length;
@@ -47,6 +53,19 @@ async function ghPut(path, contentObj, sha) {
   if (r.status === 401) throw new Error(`GH write ${path}: 401 Unauthorized — AI_GH_TOKEN is invalid/expired`);
   if (r.status === 403) throw new Error(`GH write ${path}: 403 Forbidden — AI_GH_TOKEN needs "Contents: write" permission`);
   if (!r.ok) throw new Error(`GH write ${path}: ${r.status} ${await r.text()}`);
+}
+
+async function ghUpdateIndex(uid, date, stats) {
+  const path = `signal-logs/${uid}/index.json`;
+  const index = await ghGet(path);
+  const decoded = index ? JSON.parse(Buffer.from(index.content, 'base64').toString('utf8')) : { dates: [], dailyStats: {} };
+  const dates = decoded.dates?.includes(date) ? decoded.dates : [...(decoded.dates || []), date].sort();
+  const dailyStats = { ...(decoded.dailyStats || {}), [date]: stats };
+  await ghPut(path, {
+    dates: dates.slice(-90),
+    dailyStats,
+    lastUpdated: new Date().toISOString(),
+  }, index?.sha);
 }
 
 async function listUserFolders() {
@@ -120,17 +139,19 @@ async function processUser(uid, today, now) {
     });
 
     if (changed) {
-      const payload = { signals: updated, lastUpdated: new Date().toISOString(), date, stats: computeLogStats(updated) };
+      const stats = computeLogStats(updated);
+      const payload = { signals: updated, lastUpdated: new Date().toISOString(), date, stats };
       await ghPut(`${folder}/${date}.json`, payload, file.sha);
+      await ghUpdateIndex(uid, date, stats);
     }
   }
 }
 
 async function main() {
   const missing = [];
-  if (!gh.token) missing.push('GH_TOKEN (AI_GH_TOKEN secret)');
-  if (!gh.user) missing.push('GH_USER (AI_GH_USER secret)');
-  if (!gh.repo) missing.push('GH_REPO (AI_GH_REPO secret)');
+  if (!gh.token) missing.push('GH_TOKEN');
+  if (!gh.user) missing.push('GH_USER or GITHUB_REPOSITORY owner');
+  if (!gh.repo) missing.push('GH_REPO or GITHUB_REPOSITORY repo');
   if (!upstoxToken) missing.push('UPSTOX_ACCESS_TOKEN — not set yet. Paste your Upstox token in the app once (Settings/TokenGate) to auto-create this secret, or set it manually in repo Secrets.');
   if (missing.length) {
     console.error('Missing required config:\n- ' + missing.join('\n- '));

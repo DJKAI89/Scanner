@@ -182,10 +182,10 @@ function _num(v) { return typeof v === 'number' ? v : parseFloat(v) || 0; }
 
 async function _fetchInstitutionalActivity(path, token, onTokenExpired) {
   const d = await withRetry(
-    () => apiGet(`/v2/market/${path}?data_type=NSE_FO%7CINDEX_OPTIONS&data_type=NSE_FO%7CINDEX_FUTURES&data_type=NSE_FO%7CSTOCK_FUTURES&interval=1D`, token, onTokenExpired),
+    () => apiGet(`/v2/market/${path}?data_type=${encodeURIComponent('NSE_EQ|CASH')}&interval=1D`, token, onTokenExpired),
     `fetch${path}`
   );
-  return d?.data || [];
+  return d?.data?.['NSE_EQ|CASH'] || [];
 }
 
 export async function fetchFIIDIIData(token, onTokenExpired) {
@@ -197,17 +197,18 @@ export async function fetchFIIDIIData(token, onTokenExpired) {
 
   const latest = (rows) => rows[rows.length - 1] || rows[0] || {};
   const netOf = (row) => _num(row.buy_value ?? row.buy_amount ?? row.buyValue) - _num(row.sell_value ?? row.sell_amount ?? row.sellValue);
-  const idxFutRow = (rows) => rows.find((r) => (r.data_type || r.segment || '').toString().toUpperCase().includes('INDEX_FUT')) || {};
 
   const fiiLatest = latest(fiiRows);
   const diiLatest = latest(diiRows);
-  const fiiIdxFut = idxFutRow(fiiRows);
 
   return {
     fii_net: +netOf(fiiLatest).toFixed(2),
     dii_net: +netOf(diiLatest).toFixed(2),
-    fii_idx_fut_long: _num(fiiIdxFut.long_contracts ?? fiiIdxFut.longContracts ?? fiiIdxFut.long_qty),
-    fii_idx_fut_short: _num(fiiIdxFut.short_contracts ?? fiiIdxFut.shortContracts ?? fiiIdxFut.short_qty),
+    // This endpoint is NSE_EQ|CASH only — no index-futures long/short
+    // breakdown available here, so applyFIIBias falls back to net-value-only
+    // scoring for these two (still functional, just less granular).
+    fii_idx_fut_long: 0,
+    fii_idx_fut_short: 0,
     fetched_at: new Date().toISOString(),
     source: 'upstox',
   };
