@@ -282,6 +282,23 @@ async function main() {
         continue;
       }
 
+      // Data-quality check — surfaces the kind of silent skew that has
+      // corrupted training before (EXPIRED signals miscounted as wins,
+      // missing greeks on option signals) instead of baking it in unnoticed.
+      {
+        const expiredCount = signals.filter((s) => s.status === 'EXPIRED').length;
+        const optClosed = closed.filter((s) => s.type === 'OPTION');
+        const optMissingGreeks = optClosed.filter((s) => s.delta == null && s.iv == null).length;
+        const winRate = (closed.filter((s) => s.status === 'TARGET_HIT').length / closed.length * 100).toFixed(0);
+        console.log(`  Data quality: ${closed.length} closed (${winRate}% win rate), ${expiredCount} expired (excluded), ${optClosed.length} option signals (${optMissingGreeks} missing greeks)`);
+        if (optClosed.length > 5 && optMissingGreeks / optClosed.length > 0.5) {
+          console.log(`  ⚠️ Over half of option signals are missing delta/iv — option model quality will be degraded until logging captures greeks.`);
+        }
+        if (winRate == 0 || winRate == 100) {
+          console.log(`  ⚠️ Win rate is ${winRate}% — suspiciously uniform, check signal resolution logic before trusting this model.`);
+        }
+      }
+
       const models = brain.trainSignalMlModels(closed);
       if (!models) {
         console.log(`⚠️ Skip ${userId}: training returned null (insufficient/unbalanced data)`);
