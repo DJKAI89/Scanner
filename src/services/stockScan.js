@@ -301,7 +301,7 @@ export async function runPicksScan(ctx, callbacks) {
     conf=applyFIIBias(conf,preRec==='BUY'||preRec==='STRONG BUY',null);
     conf=applyCalibration(conf, confCalibration||null);
     const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(nChgPct) / 1.0), vixVal);
-    conf=applyRegimeAdjustment(conf, stockRegime, cfg);
+    conf=applyRegimeAdjustment(conf, stockRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties);
     // Confluence — 6 independent modules vote bullish/bearish/no-opinion; stocks are
     // always a bullish thesis (no short stock picks), so actionDir is always +1.
     // Rewards genuine multi-module agreement (doc's "Stock B") over scattered weak
@@ -519,7 +519,7 @@ export function interpVIXSc(vix) {
 // ctx: { token, stocks, cfg, scanStats, onTokenExpired, lg, marketStatus }
 // callbacks: { setBoProgress, setBoCards }
 export async function runBreakoutScan(ctx, callbacks) {
-  const { token, stocks, cfg, onTokenExpired, lg, marketStatus, scanStats } = ctx;
+  const { token, stocks, cfg, onTokenExpired, lg, marketStatus, scanStats, mlModels } = ctx;
   const { setBoProgress, setBoCards } = callbacks;
 
   if (!stocks?.length) {
@@ -627,7 +627,7 @@ export async function runBreakoutScan(ctx, callbacks) {
       trade, atr:t.atr, isBull, phase, sectorScore, sec:item.sec||item.s||'NSE',
       ivPct, primaryType,
       rec:isBull?(score>=7?'STRONG BUY':'BUY'):(score>=7?'SELL':'WATCH'),
-      conf:applyConfluenceAdjustment(applyRegimeAdjustment(Math.min(95,score*10), marketRegime, cfg), boConfluence, cfg),
+      conf:applyConfluenceAdjustment(applyRegimeAdjustment(Math.min(95,score*10), marketRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties), boConfluence, cfg),
       sl:trade.sl, target:trade.target,
       regime: marketRegime, confluence: boConfluence,
       pot:{cons:trade.sl,mod:trade.target,agg:trade.target,rr:trade.rr,wr:0,base:0,adj:0,ev:0},

@@ -423,14 +423,18 @@ export function classifyMarketRegime(normTrendStrength, vix) {
   return 'NEUTRAL';
 }
 
-export function applyRegimeAdjustment(conf, regime, cfg = {}) {
-  const adj = {
+export function applyRegimeAdjustment(conf, regime, cfg = {}, learned = null) {
+  const base = {
     CHOPPY_HIGH_VOL: cfg.regimeChoppyHighVolPenalty ?? -18,
     CHOPPY:          cfg.regimeChoppyPenalty ?? -8,
     TRENDING_CALM:   cfg.regimeTrendingBonus ?? 4,
     TRENDING:        Math.round((cfg.regimeTrendingBonus ?? 4) * 0.5),
     NEUTRAL: 0,
-  }[regime] ?? 0;
+  };
+  // Learned per-regime adjustment (mlRanking.calibrateRegimePenalties) — only
+  // used per-bucket once that bucket has enough closed signals to be trusted;
+  // buckets without enough data keep the static default above.
+  const adj = (learned?.[regime] != null ? learned[regime] : base[regime]) ?? 0;
   return Math.min(99, Math.max(1, Math.round((conf || 0) + adj)));
 }
 

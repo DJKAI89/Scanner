@@ -107,7 +107,7 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
     const indSnap = buildIndicatorSnapshot(p);
     let c = applyFIIBias(p.confidence, p.action === 'BUY', fiiData);
     c = applyCalibration(c, confCalibration || null);
-    c = applyRegimeAdjustment(c, regime, cfg);
+    c = applyRegimeAdjustment(c, regime, cfg, mlModels?.thresholds?.option?.regimePenalties);
     // Confluence — same 6-module framework as stocks/breakout. actionDir is based
     // on option type (CE wants underlying up, PE wants underlying down) — the same
     // basis trendAligned/action already use in scanChain, not raw BUY/SELL (a SELL
