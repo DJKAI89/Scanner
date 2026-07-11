@@ -164,9 +164,13 @@ export async function runOptionsScan(ctx, caches, callbacks) {
   // ── F&O-eligible universe: prefer the live stocks.json list (all ~500 stocks,
   // each carrying its own lot/step) and fall back to the static NIFTY50 list only
   // if stocks.json hasn't loaded yet. Ranked by volume at scan time (Step 3). ──
-  const eligibleFOStocks = (stocks && stocks.length > 0)
-    ? stocks.filter(s => s.fo && s.lot > 0 && s.key)
+  const foFromJson = (stocks || []).filter(s => s.fo && s.lot > 0 && s.key);
+  const eligibleFOStocks = foFromJson.length > 0
+    ? foFromJson
     : NIFTY50_FALLBACK.filter(s => s.fo && TOP_FO_SYMBOLS.includes(s.s));
+  if (stocks?.length > 0 && foFromJson.length === 0) {
+    lg(`⚠ stocks.json has ${stocks.length} stocks but none flagged fo:true — using static F&O fallback list instead. Check your stocks.json data.`, 'w');
+  }
   const scanCount = Math.max(1, cfg.optStockScanCount || 20);
   const totalSteps = eligibleFOStocks.length > 0 ? 4 : 3;
 
