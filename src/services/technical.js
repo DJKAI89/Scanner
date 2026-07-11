@@ -567,19 +567,18 @@ export function getSector(sym) {
 
 // ── countIndicatorsEx — EXACT port from HTML ──────────────────
 export function countIndicatorsEx(rsi, macdBull, a50, a200, volOk, nearSupp, patterns, rec, macdObj, bbObj, adxObj, rsiDivObj) {
-  const isBuy = rec === 'BUY' || rec === 'STRONG BUY' || rec === 'MODERATE';
   let count = 0;
   if (rsi !== null && rsi !== undefined && rsi >= 40 && rsi <= 70) count++;
-  if (macdObj?.bullCross && isBuy)     count++;
-  else if (macdBull === true && isBuy) count++;
-  if (a50  === true && isBuy) count++;
-  if (a200 === true && isBuy) count++;
+  if (macdObj?.bullCross)     count++;
+  else if (macdBull === true) count++;
+  if (a50  === true) count++;
+  if (a200 === true) count++;
   if (volOk === true)         count++;
-  if (nearSupp && isBuy)      count++;
+  if (nearSupp)      count++;
   if (patterns && (patterns.bullishEngulfing || patterns.hammer || patterns.morningStar)) count++;
-  if (bbObj?.nearLowerBand && isBuy)  count++;
-  if (adxObj?.bullTrend && isBuy)     count++;
-  if (rsiDivObj?.bullish && isBuy)    count++;
+  if (bbObj?.nearLowerBand)  count++;
+  if (adxObj?.bullTrend)     count++;
+  if (rsiDivObj?.bullish)    count++;
   return count;
 }
 
