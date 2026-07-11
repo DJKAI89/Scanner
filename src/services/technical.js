@@ -1045,7 +1045,7 @@ export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, 
       else if (priceZone === 'nearPDH'  &&  isCEOpt) zoneAdj =  +5;
       else if (priceZone === 'belowPDL' && !isCEOpt) zoneAdj = +10;
       else if (priceZone === 'nearPDL'  && !isCEOpt) zoneAdj =  +5;
-      else if (priceZone === 'mid')                   zoneAdj = -18;
+      else if (priceZone === 'mid')                   zoneAdj = -6;
       if (priceZone === 'belowPDL' &&  isCEOpt) zoneAdj = -25;
       if (priceZone === 'abovePDH' && !isCEOpt) zoneAdj = -25;
       const baseConfidence = Math.round(Math.min(100, Math.max(0, confidence + zoneAdj + dirFlipPenalty)));
@@ -1592,7 +1592,7 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       else if (priceZone === 'nearPDH'  &&  isCE_) zoneAdj =  +5;
       else if (priceZone === 'belowPDL' && !isCE_) zoneAdj = +10;
       else if (priceZone === 'nearPDL'  && !isCE_) zoneAdj =  +5;
-      else if (priceZone === 'mid')                 zoneAdj = -18;
+      else if (priceZone === 'mid')                 zoneAdj = -6;
       if (priceZone === 'belowPDL' &&  isCE_) zoneAdj = -25;
       if (priceZone === 'abovePDH' && !isCE_) zoneAdj = -25;
 
