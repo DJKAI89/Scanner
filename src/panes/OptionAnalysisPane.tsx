@@ -260,6 +260,8 @@ export default function OptionAnalysisPane() {
   const liveVix  = live[VIX_KEY]?.ltp || meta?.vixVal || 0;
   const { txt: vixTxt } = interpVIX(liveVix);
   const spotChgLive = live[idx.key]?.chgPct ?? meta?.spotChg ?? 0;
+  const spotCp = liveSpot > 0 && spotChgLive != null ? liveSpot / (1 + spotChgLive / 100) : liveSpot;
+  const spotPts = liveSpot - spotCp;
 
   return (
     <div>
@@ -289,7 +291,7 @@ export default function OptionAnalysisPane() {
           )}
 
           <div className="stats-g" style={{ marginBottom: 10 }}>
-            <StatCard label={filter} value={`₹${fmt(liveSpot, 0)}`} sub={fmtC(spotChgLive)} valClass={spotChgLive >= 0 ? 'up' : 'dn'} />
+            <StatCard label={filter} value={`₹${fmt(liveSpot, 0)}`} sub={`${spotPts >= 0 ? '+' : ''}${spotPts.toFixed(2)} pts`} valClass={spotChgLive >= 0 ? 'up' : 'dn'} />
             <StatCard label="INDIA VIX" value={liveVix.toFixed(2)} sub={vixTxt} valClass={liveVix < 16 ? 'up' : liveVix > 22 ? 'dn' : 'am'} />
             <StatCard label="FEED" value={wsMode === 'ws' ? 'LIVE' : wsMode === 'poll' ? 'POLLING' : '...'} sub={`${feedKeys.length - 2} strikes`} valClass={wsMode === 'ws' ? 'up' : 'am'} />
           </div>
