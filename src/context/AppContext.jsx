@@ -298,8 +298,8 @@ export function AppProvider({ children }) {
           localStorage.setItem('scanner_ml_models', JSON.stringify(remoteModel));
           lg('ML ranker loaded from GitHub', 'o');
 
-          if (remoteModel.computedAt && remoteModel.computedAt !== prevComputedAt) {
-            const remoteHistory = await pullAiHistoryFromGH(g, 20).catch(() => []);
+          if (remoteModel.computedAt && (remoteModel.computedAt !== prevComputedAt || mlSnapshots.length === 0)) {
+            const remoteHistory = await pullAiHistoryFromGH(g, 20).catch((e) => { lg('AI history pull failed: ' + e.message, 'w'); return []; });
             if (remoteHistory?.length) {
               setMlSnapshots((prev) => {
                 const merged = [...remoteHistory, ...prev];
