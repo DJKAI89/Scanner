@@ -645,7 +645,15 @@ export function AppProvider({ children }) {
     fetchUserProfile(token, onTokenExpired).then((user) => {
       if (!user) return;
       const name = user.user_name || user.name || user.email?.split('@')[0] || 'Trader';
-      const id   = user.user_id   || user.client_id || '';
+      // client_id is Upstox's stable broker trading code — prefer it over
+      // user_id, which has been observed to vary between logins for the
+      // same account depending on which field Upstox's API populates.
+      const id   = user.client_id || user.user_id || '';
+      const prevId = localStorage.getItem('scanner_user_id') || '';
+      if (prevId && id && prevId !== id) {
+        lg(`⚠ User ID changed: was "${prevId}", now "${id}" — your signal history/ML model live under the OLD id. Update Settings if this is unexpected.`, 'w');
+        showToast(`⚠ Account ID changed (${prevId} → ${id}) — your trading history is under the old ID`, '#d97706', 10000);
+      }
       setUserName(name); setUserId(id);
       localStorage.setItem('scanner_user_name', name);
       localStorage.setItem('scanner_user_id',   id);
