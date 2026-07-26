@@ -7,6 +7,7 @@ import { getIST } from '../utils/marketTime';
 import { INDEX_OPTS, isWeeklyExpiryDay } from '../constants/config';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote } from '../components/cardKit';
+import { ConfidenceBreakdown } from '../components/ConfidenceBreakdown';
 import { runOptionsScan, getOptionKey, withLiveOI, calcStructure, VIX_KEY } from '../services/optionScan';
 
 const OPT_FILTERS = [
@@ -159,6 +160,7 @@ function OptionCard({ pick, cfg: cardCfg }) {
       <SignalTags tags={tags} />
 
       <ProgressStat label="Confidence" pct={pick.confidence||0} color={pick.confidence>=minConf?'#16a34a':pick.confidence>=minConf-15?'#d97706':'#dc2626'} valueLabel={`${pick.confidence}%`} />
+      <ConfidenceBreakdown pick={pick} kind="option" />
 
       {/* Greeks */}
       <MetricGrid cols={4}>
