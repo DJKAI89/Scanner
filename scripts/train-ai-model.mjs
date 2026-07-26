@@ -148,7 +148,18 @@ async function ghPut(path, payload, sha, message, retries = 3) {
         console.error(`[ghPut] 403 Forbidden for ${path}. Response: ${responseText}`);
         throw new Error(`GitHub 403 for ${path} — Check token permissions. Ensure fine-grained PAT has 'Contents' read/write permission for this repo.`);
       }
-      
+
+      if (r.status === 409 && attempt < retries - 1) {
+        // Stale SHA — another run wrote this file in between our read and
+        // write (e.g. overlapping cron + manual dispatch). Refetch the
+        // current SHA and retry, instead of throwing and leaving history
+        // out of sync with a model that already trained successfully.
+        console.warn(`[ghPut] 409 conflict for ${path} — refetching SHA and retrying (attempt ${attempt + 1}/${retries})`);
+        const fresh = await ghFetch(path).catch(() => null);
+        sha = fresh?.sha || sha;
+        continue;
+      }
+
       if (!r.ok) throw new Error(`GitHub PUT ${r.status} for ${path}`);
       return r.json();
     } catch (e) {
