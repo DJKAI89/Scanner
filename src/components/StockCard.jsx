@@ -5,6 +5,7 @@ import {
   AccentCard, CardHeader, VerdictRow, LevelsStrip, StatusTag,
   MetricGrid, MetricMini, ProgressStat, TargetTiers, SignalTags, Banner, FooterNote,
 } from './cardKit';
+import { ConfidenceBreakdown } from './ConfidenceBreakdown';
 
 function dirOf(rec) {
   if (!rec) return 'neutral';
@@ -119,6 +120,7 @@ export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
       )}
 
       <ProgressStat label="Confidence" pct={p.conf||0} color={(p.conf||0)>=minConf?'#16a34a':(p.conf||0)>=(minConf-10)?'#d97706':'#dc2626'} valueLabel={`${p.conf||0}%`} />
+      <ConfidenceBreakdown pick={p} kind="stock" />
       <ProgressStat label="Risk"       pct={p.risk||0} color={(p.risk||0)<30?'#16a34a':(p.risk||0)<50?'#d97706':'#dc2626'} valueLabel={`${p.risk||0}%`} />
       <ProgressStat label="Potential"  pct={Math.min(100,(p.pot?.adj||0)*5)} color="#1d4ed8" valueLabel={`${(p.pot?.adj||0).toFixed(1)}%`} />
 
