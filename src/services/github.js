@@ -172,12 +172,14 @@ export async function pullAiHistoryFromGH(gh, limit = 100) {
 
 // In-memory day cache: date → { signals, sha, loadedAt }
 const _ghDayCache = {};
+let _lastWriteFailReason = null;
 function _cachePut(date, signals, sha) { _ghDayCache[date] = { signals, sha, loadedAt: Date.now() }; }
 function _cacheGet(date, maxAgeMs = 90000) {
   const c = _ghDayCache[date];
   if (!c || Date.now() - c.loadedAt > maxAgeMs) return null;
   return c;
 }
+export function getLastSignalLogFailReason() { return _lastWriteFailReason; }
 
 export async function ghReadDay(gh, date) {
   const cached = _cacheGet(date);
@@ -230,8 +232,13 @@ export async function ghWriteDay(gh, signals, sha, date, retryCount = 0) {
   }
 
   if (r && r.status !== 409 && r.status !== 422) {
-    // Unexpected failure — log status for debugging
-    console.warn(`[SCANNER] ghWriteDay: GitHub PUT returned HTTP ${r.status} for ${getLogDayPath(date)}`);
+    // Unexpected failure — log status + specific reason for debugging
+    const reason = r.status === 401 ? 'token invalid/expired'
+      : r.status === 403 ? (r.headers?.get?.('x-ratelimit-remaining') === '0' ? 'GitHub API rate limit hit' : 'token lacks "Contents: write" permission for this repo')
+      : r.status === 404 ? 'repo not found — check username/repo name in Settings'
+      : `HTTP ${r.status}`;
+    console.warn(`[SCANNER] ghWriteDay: ${reason} for ${getLogDayPath(date)}`);
+    _lastWriteFailReason = reason;
   }
 
   if (r && (r.status === 409 || r.status === 422) && retryCount < 2) {
@@ -552,7 +559,7 @@ export async function logSignals(gh, newSignals, vixVal, lg = () => {}) {
       ghUpdateIndex(gh, istDate, stats).catch(() => {});
       lg(`Signal log: ✅ +${added} saved · ${skipped} unchanged`, 'o');
     } else {
-      lg(`Signal log: ⚠ GitHub write failed — ${added} signals NOT saved. Check repo/token in ⚙ Settings`, 'w');
+      lg(`Signal log: ⚠ GitHub write failed (${_lastWriteFailReason || 'unknown reason'}) — ${added} signals NOT saved. Check ⚙ Settings.`, 'w');
     }
   } catch (e) { lg('logSignals: ' + e.message, 'w'); }
 }
