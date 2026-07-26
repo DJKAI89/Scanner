@@ -2,12 +2,12 @@
 // Extracted from OptionsPane.jsx so the pane only handles UI/state wiring.
 // All calculation, scoring, and API-call logic for the Options tab lives here.
 
-import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api';
-import { getIST, sleep } from '../utils/marketTime';
-import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config';
-import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment } from './technical';
-import { logSignals, buildOptionSignal } from './github';
-import { applyMlRanking } from './mlRanking';
+import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api.js';
+import { getIST, sleep } from '../utils/marketTime.js';
+import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config.js';
+import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment } from './technical.js';
+import { logSignals, buildOptionSignal } from './github.js';
+import { applyMlRanking } from './mlRanking.js';
 
 export const VIX_KEY = 'NSE_INDEX|India VIX';
 
@@ -91,9 +91,9 @@ function buildIndicatorSnapshot(p) {
     momentumFresh: p.momentumFresh || false,
     volSpike: (p.volRatio ?? 0) >= 1.5,
     lowVol: (p.volRatio ?? 1) < 0.7,
-    nearPDH: p.priceZone === 'PDH_BREAK' || p.priceZone === 'NEAR_PDH',
-    nearPDL: p.priceZone === 'PDL_BREAK' || p.priceZone === 'NEAR_PDL',
-    oiBuildUp: p.oiBuildType === 'CE_BUILD' || p.oiBuildType === 'PE_BUILD',
+    nearPDH: p.priceZone === 'abovePDH' || p.priceZone === 'nearPDH',
+    nearPDL: p.priceZone === 'belowPDL' || p.priceZone === 'nearPDL',
+    oiBuildUp: p.oiBuildType === 'LONG_BUILD' || p.oiBuildType === 'SHORT_COVER',
     compositeHigh: Math.abs(p.compositeScore ?? 0) >= 2,
     compositeMed: Math.abs(p.compositeScore ?? 0) >= 1,
     atm: p.atm || false,
@@ -117,8 +117,8 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
       trend: Math.sign((p.emaTrendBull===true?1:p.emaTrendBull===false?-1:0) + (p.emaCross==='bullish_cross'?1:p.emaCross==='bearish_cross'?-1:0)),
       momentum: p.momentumFresh ? Math.sign(p.compositeScore || 0) : 0,
       volume: (p.volRatio >= 1.5) ? Math.sign(p.compositeScore || 0) : 0,
-      priceAction: (p.priceZone==='PDH_BREAK'||p.priceZone==='NEAR_PDH') ? 1 : (p.priceZone==='PDL_BREAK'||p.priceZone==='NEAR_PDL') ? -1 : 0,
-      institutional: p.oiBuildType==='CE_BUILD' ? 1 : p.oiBuildType==='PE_BUILD' ? -1 : 0,
+      priceAction: (p.priceZone==='abovePDH'||p.priceZone==='nearPDH') ? 1 : (p.priceZone==='belowPDL'||p.priceZone==='nearPDL') ? -1 : 0,
+      institutional: p.oiBuildType==='LONG_BUILD' ? 1 : p.oiBuildType==='SHORT_BUILD' ? -1 : 0,
       marketContext: p.stockPCR != null ? (p.stockPCR > 1.2 ? 1 : p.stockPCR < 0.8 ? -1 : 0) : 0,
     };
     const confluence = computeConfluence(confluenceModules, actionDir);

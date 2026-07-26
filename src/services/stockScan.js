@@ -2,9 +2,9 @@
 // Extracted from StocksPane.jsx so the pane only handles UI/state wiring.
 // All calculation, scoring, and API-call logic for the Stocks tab lives here.
 
-import { fetchQ, fetchCandles, fetchOptions } from './api';
-import { fetchScanQuotesViaWS } from '../hooks/useMarketFeed';
-import { logSignals, buildStockSignal } from './github';
+import { fetchQ, fetchCandles, fetchOptions } from './api.js';
+import { fetchScanQuotesViaWS } from '../hooks/useMarketFeed.js';
+import { logSignals, buildStockSignal } from './github.js';
 import {
   calcRSI, calcEMACrossover, calcATR, calcSupertrend, calcBBSqueeze, calcNR7, calcADX,
   detectPDHLBreakout, calc52WkBreakout, calcVolumeSurge, detectGap, calcWickRejection,
@@ -14,10 +14,10 @@ import {
   calcMACD, isNearSupport, calcRSIDivergence, getSector, calcConfidence, calcVWAP,
   calcVWAPBands, applyFIIBias, applyCalibration, applyAdaptWeights, calcEMA, calcIVPercentile,
   applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment,
-} from './technical';
-import { applyMlRanking } from './mlRanking';
-import { getIST, getISTDate, sleep } from '../utils/marketTime';
-import { fetchIntraday } from './api';
+} from './technical.js';
+import { applyMlRanking } from './mlRanking.js';
+import { getIST, getISTDate, sleep } from '../utils/marketTime.js';
+import { fetchIntraday } from './api.js';
 
 // ── Pure helpers ──────────────────────────────────────────────
 export function getDeliveryPct(q) {

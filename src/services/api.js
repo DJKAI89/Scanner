@@ -1,6 +1,6 @@
-import { THROTTLE_MS } from '../constants/config';
-import { sleep } from '../utils/marketTime';
-import { localIsOpen } from '../utils/marketTime';
+import { THROTTLE_MS } from '../constants/config.js';
+import { sleep } from '../utils/marketTime.js';
+import { localIsOpen } from '../utils/marketTime.js';
 
 // ── Per-proxy cooldown registry ──
 const _proxyCooldown = { corsproxy: 0 };
@@ -180,35 +180,37 @@ export async function fetchOptionGreeks(keys, token, onTokenExpired) {
 // already expect: { fii_net, dii_net, fii_idx_fut_long, fii_idx_fut_short, fetched_at }
 function _num(v) { return typeof v === 'number' ? v : parseFloat(v) || 0; }
 
-async function _fetchInstitutionalActivity(path, token, onTokenExpired) {
+async function _fetchInstitutionalActivity(kind, dataType, token, onTokenExpired) {
   const d = await withRetry(
-    () => apiGet(`/v2/market/${path}?data_type=${encodeURIComponent('NSE_EQ|CASH')}&interval=1D`, token, onTokenExpired),
-    `fetch${path}`
+    () => apiGet(`/v2/market/${kind}?data_type=${encodeURIComponent(dataType)}&interval=1D`, token, onTokenExpired),
+    `fetch${kind}`
   );
-  return d?.data?.['NSE_EQ|CASH'] || [];
+  return d?.data?.[dataType] || [];
 }
 
 export async function fetchFIIDIIData(token, onTokenExpired) {
-  const [fiiRows, diiRows] = await Promise.all([
-    _fetchInstitutionalActivity('fii', token, onTokenExpired),
-    _fetchInstitutionalActivity('dii', token, onTokenExpired).catch(() => []),
+  // DII is confirmed CASH-segment only (Upstox rejects any other data_type
+  // for /v2/market/dii). FII, however, DOES support NSE_FO|INDEX_FUTURES for
+  // real long/short positioning — fetch both segments for FII.
+  const [fiiCashRows, fiiIdxFutRows, diiRows] = await Promise.all([
+    _fetchInstitutionalActivity('fii', 'NSE_EQ|CASH', token, onTokenExpired),
+    _fetchInstitutionalActivity('fii', 'NSE_FO|INDEX_FUTURES', token, onTokenExpired).catch(() => []),
+    _fetchInstitutionalActivity('dii', 'NSE_EQ|CASH', token, onTokenExpired).catch(() => []),
   ]);
-  if (!fiiRows.length && !diiRows.length) return null;
+  if (!fiiCashRows.length && !diiRows.length) return null;
 
   const latest = (rows) => rows[rows.length - 1] || rows[0] || {};
   const netOf = (row) => _num(row.buy_value ?? row.buy_amount ?? row.buyValue) - _num(row.sell_value ?? row.sell_amount ?? row.sellValue);
 
-  const fiiLatest = latest(fiiRows);
+  const fiiLatest = latest(fiiCashRows);
   const diiLatest = latest(diiRows);
+  const fiiIdxFutLatest = latest(fiiIdxFutRows);
 
   return {
     fii_net: +netOf(fiiLatest).toFixed(2),
     dii_net: +netOf(diiLatest).toFixed(2),
-    // This endpoint is NSE_EQ|CASH only — no index-futures long/short
-    // breakdown available here, so applyFIIBias falls back to net-value-only
-    // scoring for these two (still functional, just less granular).
-    fii_idx_fut_long: 0,
-    fii_idx_fut_short: 0,
+    fii_idx_fut_long: _num(fiiIdxFutLatest.total_long_contracts),
+    fii_idx_fut_short: _num(fiiIdxFutLatest.total_short_contracts),
     fetched_at: new Date().toISOString(),
     source: 'upstox',
   };
