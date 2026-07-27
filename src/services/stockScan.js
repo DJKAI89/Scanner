@@ -298,10 +298,14 @@ export async function runPicksScan(ctx, callbacks) {
     if(vwapBands?.position==='FAR_ABOVE'||vwapBands?.position==='ABOVE_1SD') conf=Math.max(1,conf-4);
     const delivBoost=delivPct!=null?(delivPct>=60?1:delivPct<=25?-1:0):0;
     conf=Math.min(100,Math.max(0,conf+delivBoost*5));
+    const _confBase = conf;
     conf=applyFIIBias(conf,preRec==='BUY'||preRec==='STRONG BUY',null);
+    const _fiiAdj = conf - _confBase; let _prev = conf;
     conf=applyCalibration(conf, confCalibration||null);
+    const _calAdj = conf - _prev; _prev = conf;
     const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(nChgPct) / 1.0), vixVal);
     conf=applyRegimeAdjustment(conf, stockRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties);
+    const _regimeAdj = conf - _prev; _prev = conf;
     // Confluence — 6 independent modules vote bullish/bearish/no-opinion; stocks are
     // always a bullish thesis (no short stock picks), so actionDir is always +1.
     // Rewards genuine multi-module agreement (doc's "Stock B") over scattered weak
@@ -316,6 +320,7 @@ export async function runPicksScan(ctx, callbacks) {
     };
     const confluence = computeConfluence(confluenceModules, 1);
     conf = applyConfluenceAdjustment(conf, confluence, cfg);
+    const _confluenceAdj = conf - _prev; _prev = conf;
     // Layer 3: per-indicator learned adjustment from past signal outcomes
     const reversal = detectReversal(ltp,t.rsi,patterns,sr,vixVal,pcr,nBull,chgPct,t.atr||0,high,low);
     const _indSnap = {
@@ -332,6 +337,7 @@ export async function runPicksScan(ctx, callbacks) {
       delivHigh: (delivPct??0)>=60, delivLow: (delivPct??100)<=25,
     };
     conf=applyAdaptWeights(conf, adaptWeights?.stock||null, _indSnap);
+    const _adaptAdj = conf - _prev;
 
     const risk2=(ltp-sl); const useS1=sl>0&&sr?.pivotS1>0&&Math.abs(sl-sr.pivotS1)<risk2*0.3;
     const slTargets={consMethod:useS1?'S1 support':'ATR+VIX',modMethod:'2:1 R:R'};
@@ -352,6 +358,11 @@ export async function runPicksScan(ctx, callbacks) {
     });
     conf = mlRank.confidence;
     conf=Math.min(99,Math.max(1,Math.round(conf)));
+    const confBreakdown = {
+      base: Math.round(_confBase), fiiAdj: Math.round(_fiiAdj), calAdj: Math.round(_calAdj),
+      regimeAdj: Math.round(_regimeAdj), confluenceAdj: Math.round(_confluenceAdj),
+      adaptAdj: Math.round(_adaptAdj), mlAdj: Math.round(mlRank.mlAdj || 0), final: conf,
+    };
     const rec  = getRec(conf,pot.base,risk,pot.rr);
     const aiThresholds = mlModels?.thresholds?.stock || null;
     // Raised minStockConf default 50→65 and excluded WATCH/AVOID — your data shows <30% WR below 65%
@@ -374,7 +385,7 @@ export async function runPicksScan(ctx, callbacks) {
       a50, a200, nearSupp:nearSuppF, patterns,
       vwap, aboveVWAP, vwapType:'daily', vwapBands,
       vol, avgVol20, high, low, delivPct, regime: stockRegime, confluence,
-      _indSnap,
+      _indSnap, confBreakdown,
       mlProbability: mlRank.mlProbability,
       mlAdj: mlRank.mlAdj,
       mlExplain: mlRank.explanation,

@@ -105,9 +105,14 @@ function buildIndicatorSnapshot(p) {
 function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalibration, regime, cfg, maxPain = 0, spot = 0 }) {
   return picks.map(p => {
     const indSnap = buildIndicatorSnapshot(p);
-    let c = applyFIIBias(p.confidence, p.action === 'BUY', fiiData);
+    const base = p.confidence;
+    let c = applyFIIBias(base, p.action === 'BUY', fiiData);
+    const fiiAdj = c - base;
+    let prev = c;
     c = applyCalibration(c, confCalibration || null);
+    const calAdj = c - prev; prev = c;
     c = applyRegimeAdjustment(c, regime, cfg, mlModels?.thresholds?.option?.regimePenalties);
+    const regimeAdj = c - prev; prev = c;
     // Confluence — same 6-module framework as stocks/breakout. actionDir is based
     // on option type (CE wants underlying up, PE wants underlying down) — the same
     // basis trendAligned/action already use in scanChain, not raw BUY/SELL (a SELL
@@ -123,13 +128,17 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
     };
     const confluence = computeConfluence(confluenceModules, actionDir);
     c = applyConfluenceAdjustment(c, confluence, cfg);
+    const confluenceAdj = c - prev; prev = c;
     c = applyAdaptWeights(c, adaptWeights?.option || null, indSnap);
+    const adaptAdj = c - prev;
     const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap: indSnap });
+    const finalConf = Math.min(99, Math.max(1, Math.round(mlRank.confidence)));
     return {
       ...p,
-      confidence: Math.min(99, Math.max(1, Math.round(mlRank.confidence))),
+      confidence: finalConf,
       regime,
       confluence,
+      confBreakdown: { base, fiiAdj, calAdj, regimeAdj, confluenceAdj, adaptAdj, mlAdj: mlRank.mlAdj, final: finalConf },
       _indSnap: indSnap,
       _dte: p._dte ?? null,
       nearMaxPain: maxPain > 0 && spot > 0 && Math.abs(p.strike - maxPain) / spot < 0.01,
