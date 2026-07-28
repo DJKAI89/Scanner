@@ -299,8 +299,11 @@ export function AppProvider({ children }) {
           lg('ML ranker loaded from GitHub', 'o');
 
           if (remoteModel.computedAt && (remoteModel.computedAt !== prevComputedAt || mlSnapshots.length === 0)) {
+            lg(`AI history: fetching (model computedAt ${remoteModel.computedAt}, cached was ${prevComputedAt || 'none'})`, 'o');
             const remoteHistory = await pullAiHistoryFromGH(g, 20).catch((e) => { lg('AI history pull failed: ' + e.message, 'w'); return []; });
             if (remoteHistory?.length) {
+              const newestFetched = remoteHistory.reduce((max, s) => (s?.computedAt && s.computedAt > max ? s.computedAt : max), '');
+              lg(`AI history: fetched ${remoteHistory.length} entries, newest = ${newestFetched}`, 'o');
               setMlSnapshots((prev) => {
                 const merged = [...remoteHistory, ...prev];
                 const seen = new Set();
@@ -310,9 +313,14 @@ export function AppProvider({ children }) {
                   return true;
                 }).sort((a, b) => new Date(b.computedAt) - new Date(a.computedAt)).slice(0, 20);
                 localStorage.setItem('scanner_ml_snapshots', JSON.stringify(deduped));
+                lg(`AI history: mlSnapshots now shows newest = ${deduped[0]?.computedAt || 'none'}`, 'o');
                 return deduped;
               });
+            } else {
+              lg('AI history: pull returned 0 entries — check ai-models/{uid}/history/index.json exists and has dates', 'w');
             }
+          } else {
+            lg(`AI history: skipped (computedAt unchanged: ${remoteModel.computedAt}, ${mlSnapshots.length} snapshots already cached)`, 'o');
           }
         } else {
           const cachedModel = (() => {
