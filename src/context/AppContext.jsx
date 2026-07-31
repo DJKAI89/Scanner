@@ -277,7 +277,7 @@ export function AppProvider({ children }) {
   //   Layer 1 (confCalibration): bucket-level win-rate correction (existing)
   //   Layer 2 (adaptWeights): per-indicator win-rate adjustment — learns which
   //     indicators actually predict wins vs losses from YOUR signal history
-  const loadConfCalibration = useCallback(async (ghCfg) => {
+  const loadConfCalibration = useCallback(async (ghCfg, force = false) => {
       const g = ghCfg || gh;
       if (!g?.token || !g?.user || !g?.repo) return;
       try {
@@ -298,8 +298,8 @@ export function AppProvider({ children }) {
           localStorage.setItem('scanner_ml_models', JSON.stringify(remoteModel));
           lg('ML ranker loaded from GitHub', 'o');
 
-          if (remoteModel.computedAt && (remoteModel.computedAt !== prevComputedAt || mlSnapshots.length === 0)) {
-            lg(`AI history: fetching (model computedAt ${remoteModel.computedAt}, cached was ${prevComputedAt || 'none'})`, 'o');
+          if (force || (remoteModel.computedAt && (remoteModel.computedAt !== prevComputedAt || mlSnapshots.length === 0))) {
+            lg(`AI history: fetching (model computedAt ${remoteModel.computedAt}, cached was ${prevComputedAt || 'none'}${force ? ', forced' : ''})`, 'o');
             const remoteHistory = await pullAiHistoryFromGH(g, 20).catch((e) => { lg('AI history pull failed: ' + e.message, 'w'); return []; });
             if (remoteHistory?.length) {
               const newestFetched = remoteHistory.reduce((max, s) => (s?.computedAt && s.computedAt > max ? s.computedAt : max), '');
