@@ -85,6 +85,8 @@ export function AppProvider({ children }) {
     try { return JSON.parse(localStorage.getItem('scanner_ml_snapshots') || '[]'); } catch (_) { return []; }
   });
   const [openSignalCount, setOpenSignalCount] = useState(0);   // live OPEN signal count (global monitor)
+  const [pendingLookupSymbol, setPendingLookupSymbol] = useState(null); // heatmap tile tap → Lookup pane
+  const [openSignalSymbols, setOpenSignalSymbols] = useState(new Set()); // symbols with a currently-OPEN signal (for heatmap badges)
   const signalMonitorRef  = useRef(null);  // interval ref for global signal monitor
   const resolvedSigIds    = useRef(new Set()); // in-memory set of already-resolved signal IDs — never re-checked
   const mlRefreshTimerRef = useRef(null);
@@ -489,7 +491,7 @@ export function AppProvider({ children }) {
       // Read index — only dates that index reports as having open > 0
       const { dates, dailyStats } = await ghReadIndex(g);
       const datesWithOpen = dates.filter(d => (dailyStats[d]?.open || 0) > 0);
-      if (!datesWithOpen.length) { setOpenSignalCount(0); return; }
+      if (!datesWithOpen.length) { setOpenSignalCount(0); setOpenSignalSymbols(new Set()); return; }
 
       // Read day files in parallel
       const reads = await Promise.allSettled(datesWithOpen.map(d => ghReadDay(g, d)));
@@ -522,6 +524,7 @@ export function AppProvider({ children }) {
       }
 
       setOpenSignalCount(pendingSigs.length);
+      setOpenSignalSymbols(new Set(pendingSigs.map(s => s.stock).filter(Boolean)));
       if (!pendingSigs.length) {
         lg('Signal monitor: no pending open signals to check', 'o');
         return;
@@ -772,6 +775,7 @@ export function AppProvider({ children }) {
     tickerStats, setTickerStats,
     confCalibration, setConfCalibration, loadConfCalibration,
     openSignalCount, runSignalMonitor,
+    pendingLookupSymbol, setPendingLookupSymbol, openSignalSymbols,
     // helpers
     lg, showToast, refreshMarketStatus,
   };
