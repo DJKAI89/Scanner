@@ -24,7 +24,7 @@ export async function loadBasePrices(ctx) {
         for (const [k, q] of Object.entries(raw)) {
           const ltp = q.last_price || 0;
           const cp  = q.ohlc?.close || 0;
-          if (ltp > 0) results[k] = { ltp, cp };
+          if (ltp > 0) results[k] = { ltp, cp, volume: q.volume || 0 };
         }
       })
     )
@@ -44,8 +44,9 @@ export function enrichHeatmapRows(stocks, basePrices, lastPrices) {
     const live   = lastPrices[key];
     const ltp    = live?.ltp || base?.ltp || 0;
     const cp     = live?.cp  || base?.cp  || 0;
+    const volume = live?.volume || base?.volume || 0;
     const chgPct = (ltp > 0 && cp > 0) ? +((ltp - cp) / cp * 100).toFixed(2) : 0;
     const chgPt  = (ltp > 0 && cp > 0) ? +(ltp - cp).toFixed(2) : 0;
-    return { ...stock, ltp, cp, chgPct, chgPt, isLive: !!live?.ltp };
+    return { ...stock, ltp, cp, volume, chgPct, chgPt, isLive: !!live?.ltp };
   });
 }
