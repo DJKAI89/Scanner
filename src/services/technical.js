@@ -1063,6 +1063,7 @@ export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, 
       out[optType] = {
         ltp: +ltp.toFixed(2), ltpChgPct, oi, oiChg: +oiChg.toFixed(1), delta: +delta.toFixed(2), iv: +iv.toFixed(1), theta: +theta.toFixed(2),
         confidence, baseConfidence, prevOI, isCE: isCEOpt, oiBuildType, oiBuildBonus, marginEst,
+        signals, zoneAdj, dirFlipPenalty, stockPCR,
         instrKey: opt.instrument_key || null,
       };
     }
