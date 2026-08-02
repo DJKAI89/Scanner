@@ -6,6 +6,7 @@ import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import { loadOptionMeta, loadChainForExpiry, mergeLiveIntoRows, selectStrikesAroundATM } from '../services/optionAnalysisService';
+import { buildConfidenceRows } from '../components/ConfidenceBreakdown';
 
 const INDEX_FILTERS = [
   { id: 'NIFTY',     key: 'NSE_INDEX|Nifty 50',  step: 50,  lot: 75, color: '#7c3aed' },
@@ -50,8 +51,10 @@ function fmtMargin(v) {
 
 // ── One side (CE or PE) of a strike row — LTP, confidence, margin ──
 function SideCell({ cell, align }) {
+  const [open, setOpen] = useState(false);
   if (!cell) return <div style={{ flex: 1, padding: '8px 6px' }} />;
   const ltpColor = chgColor(cell.ltpChgPct);
+  const rows = open ? buildConfidenceRows(cell, 'option') : [];
   return (
     <div style={{ flex: 1, padding: '8px 9px', textAlign: align }}>
       <div style={{ fontSize: 13.5, fontWeight: 800, color: ltpColor, display: 'flex', alignItems: 'baseline', gap: 4, justifyContent: align === 'left' ? 'flex-start' : 'flex-end' }}>
@@ -59,13 +62,24 @@ function SideCell({ cell, align }) {
       </div>
       <div style={{ fontSize: 9.5, fontWeight: 700, color: ltpColor }}>{cell.ltpChgPct >= 0 ? '+' : ''}{cell.ltpChgPct}%</div>
       <ChgBar pct={cell.ltpChgPct} align={align} />
-      <div style={{
-        display: 'inline-flex', justifyContent: align === 'left' ? 'flex-start' : 'flex-end', alignItems: 'center', gap: 4,
+      <button onClick={() => setOpen(v => !v)} style={{
+        border: 'none', cursor: 'pointer', display: 'inline-flex', justifyContent: align === 'left' ? 'flex-start' : 'flex-end', alignItems: 'center', gap: 4,
         marginTop: 4, background: confBg(cell.confidence), borderRadius: 5, padding: '1.5px 5px',
       }}>
-        <span style={{ fontSize: 9.5, fontWeight: 800, color: confColor(cell.confidence) }}>{cell.confidence}%</span>
-      </div>
+        <span style={{ fontSize: 9.5, fontWeight: 800, color: confColor(cell.confidence) }}>{cell.confidence}% {open ? '▾' : '▸'}</span>
+      </button>
       <div style={{ fontSize: 8.5, color: '#94a3b8', marginTop: 2 }}>{fmtMargin(cell.marginEst)} margin</div>
+      {open && rows.length > 0 && (
+        <div style={{ marginTop: 5, background: '#fafbfc', border: '1px solid #f1f5f9', borderRadius: 6, padding: '5px 7px', textAlign: 'left' }}>
+          <div style={{ fontSize: 7.5, fontWeight: 800, color: '#94a3b8', marginBottom: 2 }}>RAW SIGNAL — grid shows base score only, not the full ranked pipeline</div>
+          {rows.map((r, i) => (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9 }}>
+              <span style={{ color: '#64748b' }}>{r.label}</span>
+              <span style={{ fontWeight: 700, color: r.dir > 0 ? '#16a34a' : r.dir < 0 ? '#dc2626' : '#64748b' }}>{r.val}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
