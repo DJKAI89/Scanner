@@ -1,4 +1,5 @@
 import React from 'react';
+import { useApp } from '../context/AppContext';
 import { fmt, fmtVol } from '../utils/formatters';
 import { getSignalStrength } from '../services/technical';
 import {
@@ -16,6 +17,8 @@ function dirOf(rec) {
 }
 
 export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
+  const { openSignalSymbols } = useApp();
+  const alreadyOpen = openSignalSymbols?.has(p.s);
   const rec     = p.rec || p.signal || 'WATCH';
   const dir     = dirOf(rec);
   const ltp     = p.ltp || p.entry || 0;
@@ -78,6 +81,10 @@ export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
             ? `AI model vetoed this pick — its win-probability estimate is ${p.mlProbability}% (well below its learned threshold), despite the ${p.conf}% rule-based score. Not related to your Settings thresholds.`
             : "Showing as fallback — lower ⚙ Settings thresholds for normal picks"
         } />
+      )}
+
+      {alreadyOpen && (
+        <Banner tone="blue" icon="🎯" title="Already have an open position" detail={`You have an existing open signal for ${p.s} — check your Log before adding another.`} />
       )}
 
       <CardHeader
