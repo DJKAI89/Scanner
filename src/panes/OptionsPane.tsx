@@ -6,7 +6,7 @@ import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST } from '../utils/marketTime';
 import { INDEX_OPTS, isWeeklyExpiryDay } from '../constants/config';
 import { useMarketFeed } from '../hooks/useMarketFeed';
-import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote } from '../components/cardKit';
+import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote, Banner } from '../components/cardKit';
 import { ConfidenceBreakdown } from '../components/ConfidenceBreakdown';
 import { runOptionsScan, getOptionKey, withLiveOI, calcStructure, VIX_KEY } from '../services/optionScan';
 
@@ -44,6 +44,8 @@ function IndexLiveCard({ group, live, ctx }) {
 }
 
 function OptionCard({ pick, cfg: cardCfg }) {
+  const { openSignalSymbols } = useApp();
+  const alreadyOpen = openSignalSymbols?.has(pick.und);
   const isBuy   = pick.action === 'BUY';
   const dir     = isBuy ? 'bull' : pick.action === 'SELL' ? 'bear' : 'neutral';
   const dc      = Math.abs(pick.delta || 0) >= 0.5 ? '#16a34a' : Math.abs(pick.delta || 0) >= 0.3 ? '#d97706' : '#dc2626';
@@ -117,6 +119,9 @@ function OptionCard({ pick, cfg: cardCfg }) {
 
   return (
     <AccentCard dir={dir}>
+      {alreadyOpen && (
+        <Banner tone="blue" icon="🎯" title="Already have an open position" detail={`You have an existing open signal for ${pick.und} — check your Log before adding another.`} />
+      )}
       <CardHeader
         rank={null}
         symbol={`${pick.und} ${pick.strike} ${pick.type}`}
