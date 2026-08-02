@@ -3,7 +3,7 @@ import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
 import { resolveAccessToken } from '../services/api';
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
-import { getIST } from '../utils/marketTime';
+import { getIST, getISTDate } from '../utils/marketTime';
 import { INDEX_OPTS, isWeeklyExpiryDay } from '../constants/config';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote, Banner } from '../components/cardKit';
@@ -46,6 +46,12 @@ function IndexLiveCard({ group, live, ctx }) {
 function OptionCard({ pick, cfg: cardCfg }) {
   const { openSignalSymbols } = useApp();
   const alreadyOpen = openSignalSymbols?.has(pick.und);
+  const dte = (() => {
+    if (!pick.expiry) return null;
+    const today = new Date(getISTDate());
+    const exp = new Date(pick.expiry);
+    return Math.round((exp - today) / 86400000);
+  })();
   const isBuy   = pick.action === 'BUY';
   const dir     = isBuy ? 'bull' : pick.action === 'SELL' ? 'bear' : 'neutral';
   const dc      = Math.abs(pick.delta || 0) >= 0.5 ? '#16a34a' : Math.abs(pick.delta || 0) >= 0.3 ? '#d97706' : '#dc2626';
@@ -84,6 +90,9 @@ function OptionCard({ pick, cfg: cardCfg }) {
 
   // ── Unified signal tags ──
   const tags = [];
+  if (dte != null && dte <= 3) {
+    tags.push({ label: dte <= 0 ? '⏰ EXPIRES TODAY' : dte === 1 ? '⏰ 1 DTE' : `⏰ ${dte} DTE`, tone: dte <= 1 ? 'red' : 'amber' });
+  }
   const regimeMap = {
     CHOPPY_HIGH_VOL: { txt: '🌊 CHOPPY + HIGH VIX', tone: 'red' },
     CHOPPY:          { txt: '🌊 CHOPPY', tone: 'amber' },
@@ -119,6 +128,13 @@ function OptionCard({ pick, cfg: cardCfg }) {
 
   return (
     <AccentCard dir={dir}>
+      {pick._fallback && (
+        <Banner tone="amber" icon="⚠" title="Below filter threshold" detail={
+          pick.aiBlock
+            ? `AI model vetoed this pick — its win-probability estimate is ${pick.mlProbability}% (well below its learned threshold), despite the ${pick.confidence}% rule-based score. Not related to your Settings thresholds.`
+            : "Showing as fallback — lower ⚙ Settings thresholds for normal picks"
+        } />
+      )}
       {alreadyOpen && (
         <Banner tone="blue" icon="🎯" title="Already have an open position" detail={`You have an existing open signal for ${pick.und} — check your Log before adding another.`} />
       )}
