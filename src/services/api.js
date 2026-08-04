@@ -188,10 +188,22 @@ async function _fetchInstitutionalActivity(kind, dataType, token, onTokenExpired
   return d?.data?.[dataType] || [];
 }
 
+// Picks the truly most-recent row by timestamp — does NOT assume the API
+// returns rows in any particular order (a prior version assumed oldest-first
+// and could silently show stale data if Upstox returns newest-first instead).
+function _latestRow(rows) {
+  if (!rows?.length) return {};
+  return rows.reduce((latest, r) => {
+    const t = Number(r?.time_stamp) || 0;
+    const bestT = Number(latest?.time_stamp) || 0;
+    return t >= bestT ? r : latest;
+  }, rows[0]);
+}
+
 export async function fetchFIIDIIData(token, onTokenExpired) {
   // DII is confirmed CASH-segment only (Upstox rejects any other data_type
-  // for /v2/market/dii). FII, however, DOES support NSE_FO|INDEX_FUTURES for
-  // real long/short positioning — fetch both segments for FII.
+  // for /v2/market/dii). FII DOES support NSE_FO|INDEX_FUTURES for real
+  // long/short positioning — fetch both segments for FII.
   const [fiiCashRows, fiiIdxFutRows, diiRows] = await Promise.all([
     _fetchInstitutionalActivity('fii', 'NSE_EQ|CASH', token, onTokenExpired),
     _fetchInstitutionalActivity('fii', 'NSE_FO|INDEX_FUTURES', token, onTokenExpired).catch(() => []),
@@ -199,12 +211,11 @@ export async function fetchFIIDIIData(token, onTokenExpired) {
   ]);
   if (!fiiCashRows.length && !diiRows.length) return null;
 
-  const latest = (rows) => rows[rows.length - 1] || rows[0] || {};
   const netOf = (row) => _num(row.buy_value ?? row.buy_amount ?? row.buyValue) - _num(row.sell_value ?? row.sell_amount ?? row.sellValue);
 
-  const fiiLatest = latest(fiiCashRows);
-  const diiLatest = latest(diiRows);
-  const fiiIdxFutLatest = latest(fiiIdxFutRows);
+  const fiiLatest = _latestRow(fiiCashRows);
+  const diiLatest = _latestRow(diiRows);
+  const fiiIdxFutLatest = _latestRow(fiiIdxFutRows);
 
   return {
     fii_net: +netOf(fiiLatest).toFixed(2),
@@ -212,6 +223,8 @@ export async function fetchFIIDIIData(token, onTokenExpired) {
     fii_idx_fut_long: _num(fiiIdxFutLatest.total_long_contracts),
     fii_idx_fut_short: _num(fiiIdxFutLatest.total_short_contracts),
     fetched_at: new Date().toISOString(),
+    _fiiTimestamp: fiiLatest?.time_stamp || null,
+    _diiTimestamp: diiLatest?.time_stamp || null,
     source: 'upstox',
   };
 }
