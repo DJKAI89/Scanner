@@ -245,7 +245,11 @@ export function AppProvider({ children }) {
           setFiiData(data);
           setFiiInterp(interpretFIIDII(data));
           localStorage.setItem('scanner_fiidii_date', today);
-          lg('FII/DII loaded live (Upstox)', 'o');
+          const fiiDate = data._fiiTimestamp ? new Date(Number(data._fiiTimestamp)).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) : 'unknown';
+          lg(`FII/DII loaded live (Upstox) — FII data dated ${fiiDate}, FII net ₹${data.fii_net}Cr, DII net ₹${data.dii_net}Cr`, 'o');
+          if (fiiDate !== 'unknown' && fiiDate !== today) {
+            lg(`⚠ FII/DII data is from ${fiiDate}, not today (${today}) — Upstox may not have published today's figures yet`, 'w');
+          }
           return;
         }
       } catch (e) { lg('loadFIIDII (Upstox): ' + e.message + ' — falling back to GitHub file', 'w'); }
