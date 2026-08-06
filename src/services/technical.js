@@ -423,14 +423,18 @@ export function classifyMarketRegime(normTrendStrength, vix) {
   return 'NEUTRAL';
 }
 
-export function applyRegimeAdjustment(conf, regime, cfg = {}) {
-  const adj = {
+export function applyRegimeAdjustment(conf, regime, cfg = {}, learned = null) {
+  const base = {
     CHOPPY_HIGH_VOL: cfg.regimeChoppyHighVolPenalty ?? -18,
     CHOPPY:          cfg.regimeChoppyPenalty ?? -8,
     TRENDING_CALM:   cfg.regimeTrendingBonus ?? 4,
     TRENDING:        Math.round((cfg.regimeTrendingBonus ?? 4) * 0.5),
     NEUTRAL: 0,
-  }[regime] ?? 0;
+  };
+  // Learned per-regime adjustment (mlRanking.calibrateRegimePenalties) — only
+  // used per-bucket once that bucket has enough closed signals to be trusted;
+  // buckets without enough data keep the static default above.
+  const adj = (learned?.[regime] != null ? learned[regime] : base[regime]) ?? 0;
   return Math.min(99, Math.max(1, Math.round((conf || 0) + adj)));
 }
 
@@ -567,19 +571,18 @@ export function getSector(sym) {
 
 // ── countIndicatorsEx — EXACT port from HTML ──────────────────
 export function countIndicatorsEx(rsi, macdBull, a50, a200, volOk, nearSupp, patterns, rec, macdObj, bbObj, adxObj, rsiDivObj) {
-  const isBuy = rec === 'BUY' || rec === 'STRONG BUY' || rec === 'MODERATE';
   let count = 0;
   if (rsi !== null && rsi !== undefined && rsi >= 40 && rsi <= 70) count++;
-  if (macdObj?.bullCross && isBuy)     count++;
-  else if (macdBull === true && isBuy) count++;
-  if (a50  === true && isBuy) count++;
-  if (a200 === true && isBuy) count++;
+  if (macdObj?.bullCross)     count++;
+  else if (macdBull === true) count++;
+  if (a50  === true) count++;
+  if (a200 === true) count++;
   if (volOk === true)         count++;
-  if (nearSupp && isBuy)      count++;
+  if (nearSupp)      count++;
   if (patterns && (patterns.bullishEngulfing || patterns.hammer || patterns.morningStar)) count++;
-  if (bbObj?.nearLowerBand && isBuy)  count++;
-  if (adxObj?.bullTrend && isBuy)     count++;
-  if (rsiDivObj?.bullish && isBuy)    count++;
+  if (bbObj?.nearLowerBand)  count++;
+  if (adxObj?.bullTrend)     count++;
+  if (rsiDivObj?.bullish)    count++;
   return count;
 }
 
@@ -1045,7 +1048,7 @@ export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, 
       else if (priceZone === 'nearPDH'  &&  isCEOpt) zoneAdj =  +5;
       else if (priceZone === 'belowPDL' && !isCEOpt) zoneAdj = +10;
       else if (priceZone === 'nearPDL'  && !isCEOpt) zoneAdj =  +5;
-      else if (priceZone === 'mid')                   zoneAdj = -18;
+      else if (priceZone === 'mid')                   zoneAdj = -6;
       if (priceZone === 'belowPDL' &&  isCEOpt) zoneAdj = -25;
       if (priceZone === 'abovePDH' && !isCEOpt) zoneAdj = -25;
       const baseConfidence = Math.round(Math.min(100, Math.max(0, confidence + zoneAdj + dirFlipPenalty)));
@@ -1060,6 +1063,7 @@ export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, 
       out[optType] = {
         ltp: +ltp.toFixed(2), ltpChgPct, oi, oiChg: +oiChg.toFixed(1), delta: +delta.toFixed(2), iv: +iv.toFixed(1), theta: +theta.toFixed(2),
         confidence, baseConfidence, prevOI, isCE: isCEOpt, oiBuildType, oiBuildBonus, marginEst,
+        signals, zoneAdj, dirFlipPenalty, stockPCR,
         instrKey: opt.instrument_key || null,
       };
     }
@@ -1592,7 +1596,7 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       else if (priceZone === 'nearPDH'  &&  isCE_) zoneAdj =  +5;
       else if (priceZone === 'belowPDL' && !isCE_) zoneAdj = +10;
       else if (priceZone === 'nearPDL'  && !isCE_) zoneAdj =  +5;
-      else if (priceZone === 'mid')                 zoneAdj = -18;
+      else if (priceZone === 'mid')                 zoneAdj = -6;
       if (priceZone === 'belowPDL' &&  isCE_) zoneAdj = -25;
       if (priceZone === 'abovePDH' && !isCE_) zoneAdj = -25;
 

@@ -228,7 +228,7 @@ function OptionSuggestionCard({ pick, cfg, showTools = true }) {
 }
 
 export default function LookupPane() {
-  const { token, cfg, onTokenExpired, lg, stocks, fiiData, fiiInterp, adaptWeights, mlModels, confCalibration } = useApp();
+  const { token, cfg, onTokenExpired, lg, stocks, fiiData, fiiInterp, adaptWeights, mlModels, confCalibration, pendingLookupSymbol, setPendingLookupSymbol } = useApp();
   const [sym, setSym] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -239,6 +239,15 @@ export default function LookupPane() {
   const [chartOpen, setChartOpen] = useState(false);
 
   const activeKey = result?.inst?.key ? [result.inst.key] : [];
+
+  useEffect(() => {
+    if (pendingLookupSymbol) {
+      setSym(pendingLookupSymbol);
+      lookup(pendingLookupSymbol);
+      setPendingLookupSymbol(null);
+    }
+  }, [pendingLookupSymbol]); // eslint-disable-line
+
   const { connected: liveConnected, lastPrices: livePrices, wsMode: liveMode } = useMarketFeed(
     token,
     activeKey,

@@ -1,6 +1,6 @@
-import { THROTTLE_MS } from '../constants/config';
-import { sleep } from '../utils/marketTime';
-import { localIsOpen } from '../utils/marketTime';
+import { THROTTLE_MS } from '../constants/config.js';
+import { sleep } from '../utils/marketTime.js';
+import { localIsOpen } from '../utils/marketTime.js';
 
 // ── Per-proxy cooldown registry ──
 const _proxyCooldown = { corsproxy: 0 };
@@ -29,7 +29,7 @@ export function normalizeAccessToken(raw) {
 
 export function getStoredAccessToken() {
   try {
-    return normalizeAccessToken(localStorage.getItem('friday_token') || '');
+    return normalizeAccessToken(localStorage.getItem('scanner_token') || '');
   } catch (e) {
     return '';
   }
@@ -175,6 +175,60 @@ export async function fetchOptionGreeks(keys, token, onTokenExpired) {
   return out;
 }
 
+// ── Live FII/DII activity (replaces manually-updated fii-dii/latest.json
+// GitHub file). Normalizes into the exact shape interpretFIIDII/applyFIIBias
+// already expect: { fii_net, dii_net, fii_idx_fut_long, fii_idx_fut_short, fetched_at }
+function _num(v) { return typeof v === 'number' ? v : parseFloat(v) || 0; }
+
+async function _fetchInstitutionalActivity(kind, dataType, token, onTokenExpired) {
+  const d = await withRetry(
+    () => apiGet(`/v2/market/${kind}?data_type=${encodeURIComponent(dataType)}&interval=1D`, token, onTokenExpired),
+    `fetch${kind}`
+  );
+  return d?.data?.[dataType] || [];
+}
+
+// Picks the truly most-recent row by timestamp — does NOT assume the API
+// returns rows in any particular order (a prior version assumed oldest-first
+// and could silently show stale data if Upstox returns newest-first instead).
+function _latestRow(rows) {
+  if (!rows?.length) return {};
+  return rows.reduce((latest, r) => {
+    const t = Number(r?.time_stamp) || 0;
+    const bestT = Number(latest?.time_stamp) || 0;
+    return t >= bestT ? r : latest;
+  }, rows[0]);
+}
+
+export async function fetchFIIDIIData(token, onTokenExpired) {
+  // DII is confirmed CASH-segment only (Upstox rejects any other data_type
+  // for /v2/market/dii). FII DOES support NSE_FO|INDEX_FUTURES for real
+  // long/short positioning — fetch both segments for FII.
+  const [fiiCashRows, fiiIdxFutRows, diiRows] = await Promise.all([
+    _fetchInstitutionalActivity('fii', 'NSE_EQ|CASH', token, onTokenExpired),
+    _fetchInstitutionalActivity('fii', 'NSE_FO|INDEX_FUTURES', token, onTokenExpired).catch(() => []),
+    _fetchInstitutionalActivity('dii', 'NSE_EQ|CASH', token, onTokenExpired).catch(() => []),
+  ]);
+  if (!fiiCashRows.length && !diiRows.length) return null;
+
+  const netOf = (row) => _num(row.buy_value ?? row.buy_amount ?? row.buyValue) - _num(row.sell_value ?? row.sell_amount ?? row.sellValue);
+
+  const fiiLatest = _latestRow(fiiCashRows);
+  const diiLatest = _latestRow(diiRows);
+  const fiiIdxFutLatest = _latestRow(fiiIdxFutRows);
+
+  return {
+    fii_net: +netOf(fiiLatest).toFixed(2),
+    dii_net: +netOf(diiLatest).toFixed(2),
+    fii_idx_fut_long: _num(fiiIdxFutLatest.total_long_contracts),
+    fii_idx_fut_short: _num(fiiIdxFutLatest.total_short_contracts),
+    fetched_at: new Date().toISOString(),
+    _fiiTimestamp: fiiLatest?.time_stamp || null,
+    _diiTimestamp: diiLatest?.time_stamp || null,
+    source: 'upstox',
+  };
+}
+
 // ── Options chain ──
 export async function fetchOptions(instrKey, expiry, token, onTokenExpired) {
   const d = await withRetry(
@@ -215,9 +269,9 @@ export async function fetchPortfolio(token, onTokenExpired) {
 
   // Warn in console if one of the two calls failed
   if (posRes.status === 'rejected')
-    console.warn('[FRIDAY] fetchPortfolio positions failed:', posRes.reason?.message || posRes.reason);
+    console.warn('[SCANNER] fetchPortfolio positions failed:', posRes.reason?.message || posRes.reason);
   if (holdRes.status === 'rejected')
-    console.warn('[FRIDAY] fetchPortfolio holdings failed:', holdRes.reason?.message || holdRes.reason);
+    console.warn('[SCANNER] fetchPortfolio holdings failed:', holdRes.reason?.message || holdRes.reason);
 
   return { positions, holdings };
 }

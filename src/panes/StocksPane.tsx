@@ -616,8 +616,8 @@ export default function StocksPane() {
 
   useEffect(() => {
     const onScan = () => { mode==='breakout' ? runBreakout() : runPicks(); };
-    document.addEventListener('friday:scan', onScan);
-    return () => document.removeEventListener('friday:scan', onScan);
+    document.addEventListener('scanner:scan', onScan);
+    return () => document.removeEventListener('scanner:scan', onScan);
   }, [mode]); // eslint-disable-line
 
   useEffect(() => {

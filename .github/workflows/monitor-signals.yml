@@ -1,0 +1,20 @@
+name: Monitor Signals
+
+on:
+  schedule:
+    - cron: '*/15 3-10 * * 1-5'  # loose fallback only — see README, use external trigger for real cadence
+  workflow_dispatch: {}
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: node scripts/monitorSignals.mjs
+        env:
+          GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
+          GH_USER: ${{ secrets.AI_GH_USER }}
+          GH_REPO: ${{ secrets.AI_GH_REPO }}
+          UPSTOX_ACCESS_TOKEN: ${{ secrets.UPSTOX_ACCESS_TOKEN }}

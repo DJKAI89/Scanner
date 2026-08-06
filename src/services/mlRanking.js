@@ -408,25 +408,81 @@ function summarizeBacktest(rows, type, thresholds) {
   };
 }
 
+// Learns the actual confidence adjustment per market regime from logged
+// outcomes — replaces the static -18/-8/+4 guesses in applyRegimeAdjustment
+// with real observed win-rate deltas, once a regime bucket has enough
+// samples (≥15) to trust. Buckets below that stay on the static default
+// (returned as null so the caller knows to fall back).
+function calibrateRegimePenalties(closedSignals) {
+  const buckets = { CHOPPY_HIGH_VOL: [], CHOPPY: [], TRENDING_CALM: [], TRENDING: [], NEUTRAL: [] };
+  for (const s of closedSignals) {
+    const r = s.regime;
+    if (r && buckets[r]) buckets[r].push(s.status === 'TARGET_HIT' ? 1 : 0);
+  }
+  const overall = closedSignals.length
+    ? closedSignals.filter((s) => s.status === 'TARGET_HIT').length / closedSignals.length
+    : 0.5;
+
+  const out = {};
+  for (const [regime, results] of Object.entries(buckets)) {
+    if (results.length < 15) continue; // not enough data — caller keeps static default
+    const wr = results.reduce((a, b) => a + b, 0) / results.length;
+    // Scale the win-rate delta vs overall into a confidence-point adjustment,
+    // same rough magnitude as the original hand-tuned constants (-18..+4).
+    out[regime] = Math.round(clamp((wr - overall) * 60, -20, 8));
+  }
+  return out;
+}
+
 function optimizeThresholds(dataset, model, type) {
   const rows = buildBacktestRows(dataset.map((d) => d.signal || d), model, type);
-  if (!rows.length) return { probability: 0.62, minConfidence: 65, maxRisk: 55, minRR: 1.2, maxCapital: 0 };
+  const SAFE_DEFAULTS = { probability: 0.62, minConfidence: 65, maxRisk: 55, minRR: 1.2, maxCapital: 0, deltaGate: 0.40, ivGate: 15, sampleSize: rows.length };
+  // Hard floor: below 40 closed signals, learned thresholds are too easily
+  // overfit to noise (this exact failure mode silently starved all option
+  // picks in production once already) — stay on safe defaults entirely.
+  if (rows.length < 40) return SAFE_DEFAULTS;
+
   const candidates = [0.55, 0.58, 0.6, 0.62, 0.65, 0.68, 0.7, 0.74];
   let best = { probability: 0.62, score: -Infinity };
   for (const p of candidates) {
     const filtered = rows.filter((r) => r.mlProb >= p);
-    if (filtered.length < Math.max(6, rows.length * 0.08)) continue;
+    if (filtered.length < Math.max(10, rows.length * 0.1)) continue;
     const wr = filtered.filter((r) => r.y === 1).length / filtered.length;
     const avgNet = filtered.reduce((sum, r) => sum + (r.pnlPct - (BASE_COST_PCT[type] || 0.2)), 0) / filtered.length;
     const score = wr * 0.7 + (avgNet / 100) * 0.3;
     if (score > best.score) best = { probability: p, score };
   }
+
+  // Same sweep, but for the raw delta/IV signal gates (calcOptConfidenceFull's
+  // hardcoded 0.40 / 15) — only meaningful for options, needs the signal's
+  // own delta/iv, not present on stock rows.
+  let deltaGate = 0.40, ivGate = 15;
+  if (type === 'OPTION') {
+    const withGreeks = dataset.map((d) => d.signal || d).filter((s) => s.delta != null || s.iv != null);
+    if (withGreeks.length >= 40) {
+      const sweepGate = (field, candidates) => {
+        let bestG = { v: candidates[0], score: -Infinity };
+        for (const v of candidates) {
+          const f = withGreeks.filter((s) => Math.abs(s[field] ?? 0) >= v);
+          if (f.length < Math.max(10, withGreeks.length * 0.1)) continue;
+          const wr = f.filter((s) => s.status === 'TARGET_HIT').length / f.length;
+          if (wr > bestG.score) bestG = { v, score: wr };
+        }
+        return bestG.v;
+      };
+      deltaGate = clamp(sweepGate('delta', [0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55]), 0.25, 0.45);
+      ivGate = clamp(sweepGate('iv', [8, 10, 12, 15, 18, 22, 26]), 8, 18);
+    }
+  }
+
   return {
-    probability: best.probability,
-    minConfidence: Math.round(best.probability * 100),
+    probability: clamp(best.probability, 0.55, 0.68),
+    minConfidence: Math.round(clamp(best.probability, 0.55, 0.68) * 100),
     maxRisk: type === 'STOCK' ? 48 : 58,
     minRR: type === 'STOCK' ? 1.4 : 1.3,
     maxCapital: type === 'OPTION' ? 120000 : 0,
+    deltaGate, ivGate,
+    sampleSize: rows.length,
   };
 }
 
@@ -596,6 +652,7 @@ function trainFamily(signals, type, featureNames) {
 
   const servingModel = chooseRollback(globalModel, segmentModels);
   const thresholds = optimizeThresholds(baseDataset, servingModel, type);
+  thresholds.regimePenalties = calibrateRegimePenalties(signals.filter((s) => s.type === type));
   return {
     global: globalModel,
     segments: Object.fromEntries(segmentModels.map((m) => [m.label, m])),

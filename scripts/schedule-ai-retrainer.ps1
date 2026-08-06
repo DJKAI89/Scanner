@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 param(
-  [string]$TaskName = "FridayAiRetrainer",
+  [string]$TaskName = "ScannerAiRetrainer",
   [string]$WorkDir = "E:\Dhaval\Scanner",
   [string]$NodeExe = "node",
   [string]$RunAt = "18:10",

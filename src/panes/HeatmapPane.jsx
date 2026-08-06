@@ -1,13 +1,19 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
-import { resolveAccessToken } from '../services/api';
+import { resolveAccessToken, fetchIntraday } from '../services/api';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import { loadBasePrices, enrichHeatmapRows } from '../services/heatmapService';
+import { calcBBSqueeze } from '../services/technical';
 import { getIST } from '../utils/marketTime';
 
 const fmt  = v => v >= 1000 ? v.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : v.toFixed(2);
 const fmtP = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
 const fmtC = v => (v >= 0 ? '+' : '') + v.toFixed(2);
+
+// How many of the biggest movers (by |chgPct|) get a live BB Squeeze check —
+// computing this for all 500 stocks would mean 500 extra candle fetches every
+// refresh, so it's scoped to the tiles most likely to matter.
+const SQUEEZE_CHECK_COUNT = 24;
 
 // ── Color scale ───────────────────────────────────────────────
 function heatColor(chg) {
@@ -26,17 +32,32 @@ function heatColor(chg) {
 }
 
 // ── Tile ──────────────────────────────────────────────────────
-function HeatTile({ stock, ltp, chgPct, chgPt }) {
+// volRank: 0-1, this tile's volume rank among currently visible tiles (1 = highest volume shown)
+// hasSignal: true if an OPEN signal currently exists for this symbol
+// squeeze: 'extreme' | 'squeeze' | null
+function HeatTile({ stock, ltp, chgPct, chgPt, volRank, hasSignal, squeeze, onTap }) {
   const colors  = heatColor(chgPct);
   const hasData = ltp > 0;
+  // Border thickness scales with relative volume — a quiet mover and a
+  // heavily-traded mover at the same % change now look visibly different.
+  const borderW = hasData ? 1 + Math.round((volRank || 0) * 3) : 1;
   return (
-    <div style={{
+    <div onClick={onTap} style={{
       background: hasData ? colors.bg : '#e2e8f0',
       borderRadius: 4, padding: '4px 5px 3px',
       display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
-      height: 52, boxSizing: 'border-box', overflow: 'hidden',
-      border: '1px solid rgba(0,0,0,0.06)', transition: 'background .3s',
+      height: 52, boxSizing: 'border-box', overflow: 'hidden', position: 'relative',
+      border: `${borderW}px solid ${hasData && volRank > 0.6 ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.06)'}`,
+      transition: 'background .3s', cursor: 'pointer',
     }}>
+      {(hasSignal || squeeze) && (
+        <div style={{ position: 'absolute', top: 2, right: 3, display: 'flex', gap: 2 }}>
+          {hasSignal && <span title="Open signal" style={{ fontSize: 8 }}>🎯</span>}
+          {squeeze === 'extreme' && <span title="Extreme BB squeeze — breakout imminent" style={{ fontSize: 8 }}>⚡</span>}
+          {squeeze === 'squeeze' && <span title="BB squeeze — consolidating" style={{ fontSize: 8 }}>🔸</span>}
+        </div>
+      )}
+
       <div style={{
         fontSize: 10, fontWeight: 800,
         color: hasData ? colors.text : '#94a3b8',
@@ -89,31 +110,60 @@ function BreadthBar({ enriched }) {
   );
 }
 
+// ── Sector aggregate row — avg change per sector, tap to filter ──
+function SectorAggregateRow({ enriched, sector, setSector }) {
+  const bySector = useMemo(() => {
+    const map = {};
+    for (const s of enriched) {
+      if (!s.sec || !s.ltp) continue;
+      if (!map[s.sec]) map[s.sec] = { sum: 0, count: 0 };
+      map[s.sec].sum += s.chgPct;
+      map[s.sec].count++;
+    }
+    return Object.entries(map)
+      .map(([sec, { sum, count }]) => ({ sec, avg: +(sum / count).toFixed(2), count }))
+      .sort((a, b) => b.avg - a.avg);
+  }, [enriched]);
+
+  if (!bySector.length) return null;
+
+  return (
+    <div style={{ marginBottom: 10, overflowX: 'auto', display: 'flex', gap: 6, paddingBottom: 2 }}>
+      {bySector.map(({ sec, avg, count }) => {
+        const c = heatColor(avg);
+        return (
+          <button key={sec} onClick={() => setSector(sector === sec ? 'ALL' : sec)} style={{
+            flexShrink: 0, padding: '5px 9px', borderRadius: 7, border: sector === sec ? '2px solid #0f172a' : '1px solid rgba(0,0,0,0.08)',
+            background: c.bg, color: c.text, fontSize: 9.5, fontWeight: 800, cursor: 'pointer', textAlign: 'left',
+          }}>
+            <div style={{ whiteSpace: 'nowrap' }}>{sec}</div>
+            <div style={{ fontSize: 9, opacity: 0.85 }}>{fmtP(avg)} · {count}</div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Main ──────────────────────────────────────────────────────
 export default function HeatmapPane() {
-  const { token, stocks, marketStatus, lg, updateBadge, onTokenExpired } = useApp();
+  const { token, stocks, marketStatus, lg, updateBadge, onTokenExpired, setActiveTab, setPendingLookupSymbol, openSignalSymbols, onTokenExpired: onTokExp } = useApp();
 
   const [sector,   setSector]   = useState('ALL');
   const [sortBy,   setSortBy]   = useState('chg');
-  // REST base prices — loaded on mount, same as Portfolio's load()
-  const [basePrices, setBasePrices] = useState({}); // { instrKey: { ltp, cp } }
+  const [basePrices, setBasePrices] = useState({});
   const [loading,    setLoading]    = useState(false);
   const [updTime,    setUpdTime]    = useState('');
   const [error,      setError]      = useState('');
+  const [squeezeMap, setSqueezeMap] = useState({}); // instrKey → 'extreme' | 'squeeze'
 
   const accessToken = resolveAccessToken(token);
-
-  // All keys — always pass to useMarketFeed regardless of market status
-  // Same as Portfolio: no marketStatus.open gate on useMarketFeed
   const allKeys = useMemo(() => stocks.map(s => s.key).filter(Boolean), [stocks]);
 
-  // ── Persistent WebSocket — always on, pollFallback handles closed market ──
-  // Exact same call signature as PortfolioPane
   const { connected: wsConnected, lastPrices } = useMarketFeed(
     accessToken, allKeys, allKeys.length > 0, { pollFallback: true, mode: 'ltpc' }
   );
 
-  // ── REST base load — runs on mount like Portfolio's load() ──
   const loadBase = useCallback(async () => {
     if (!accessToken || !allKeys.length) return;
     setLoading(true); setError('');
@@ -129,27 +179,21 @@ export default function HeatmapPane() {
     }
   }, [accessToken, allKeys, onTokenExpired, lg, updateBadge]); // eslint-disable-line
 
-  // Mount — same as Portfolio's useEffect
   useEffect(() => { if (accessToken) loadBase(); }, [accessToken]); // eslint-disable-line
 
-  // Update timestamp when WS ticks arrive — same as Portfolio
   useEffect(() => {
     if (Object.keys(lastPrices).length > 0) {
       setUpdTime('Live: ' + getIST());
     }
   }, [lastPrices]);
 
-  // ── Enrich — same pattern as Portfolio's enrich() ──
-  // REST base gives ltp+cp, WS lastPrices overrides ltp when live
   const enriched = useMemo(() => enrichHeatmapRows(stocks, basePrices, lastPrices), [stocks, basePrices, lastPrices]);
 
-  // Sectors
   const sectors = useMemo(() =>
     ['ALL', ...Array.from(new Set(stocks.map(s => s.sec).filter(Boolean))).sort()],
     [stocks]
   );
 
-  // Filtered + sorted
   const filtered = useMemo(() =>
     sector === 'ALL' ? enriched : enriched.filter(s => s.sec === sector),
     [enriched, sector]
@@ -164,7 +208,50 @@ export default function HeatmapPane() {
     });
   }, [filtered, sortBy]);
 
+  // Relative volume rank (0-1) among currently visible/loaded tiles — cheap,
+  // reuses volume already present in the quote data (no extra API calls).
+  const volRankMap = useMemo(() => {
+    const vols = sorted.filter(s => s.ltp > 0 && s.volume > 0).map(s => s.volume).sort((a, b) => a - b);
+    if (!vols.length) return {};
+    const map = {};
+    for (const s of sorted) {
+      if (!s.volume) { map[s.key] = 0; continue; }
+      const idx = vols.findIndex(v => v >= s.volume);
+      map[s.key] = idx / vols.length;
+    }
+    return map;
+  }, [sorted]);
+
+  // BB Squeeze check — only for the top N biggest movers currently visible,
+  // to avoid firing hundreds of candle fetches on every refresh.
+  useEffect(() => {
+    if (!accessToken || !marketStatus.open) return;
+    const candidates = [...sorted].filter(s => s.ltp > 0).sort((a, b) => Math.abs(b.chgPct) - Math.abs(a.chgPct)).slice(0, SQUEEZE_CHECK_COUNT);
+    if (!candidates.length) return;
+    let cancelled = false;
+    (async () => {
+      const results = {};
+      for (const s of candidates) {
+        if (cancelled) return;
+        try {
+          const candles = await fetchIntraday(s.key, '30minute', accessToken, onTokExp);
+          const closes = (candles || []).map(c => c[4]).reverse(); // oldest-first
+          const sq = calcBBSqueeze(closes);
+          if (sq?.extremeSqueeze) results[s.key] = 'extreme';
+          else if (sq?.squeeze) results[s.key] = 'squeeze';
+        } catch (_) { /* skip on error, non-critical */ }
+      }
+      if (!cancelled) setSqueezeMap(results);
+    })();
+    return () => { cancelled = true; };
+  }, [accessToken, marketStatus.open, sector]); // eslint-disable-line
+
   const loadedCount = enriched.filter(s => s.ltp > 0).length;
+
+  const openTile = useCallback((stock) => {
+    setPendingLookupSymbol(stock.s);
+    setActiveTab('lookup');
+  }, [setPendingLookupSymbol, setActiveTab]);
 
   if (!stocks.length) {
     return (
@@ -178,7 +265,6 @@ export default function HeatmapPane() {
 
   return (
     <div>
-      {/* WS status — same as Portfolio */}
       {allKeys.length > 0 && (
         <div style={{ fontSize: 9, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 5 }}>
           <div style={{ width: 6, height: 6, borderRadius: '50%', background: wsConnected ? '#16a34a' : '#94a3b8', flexShrink: 0 }} />
@@ -197,12 +283,13 @@ export default function HeatmapPane() {
         </div>
       )}
 
-      {/* Breadth bar */}
       {loadedCount > 0 && (
         <div style={{ marginBottom: 10 }}>
           <BreadthBar enriched={filtered} />
         </div>
       )}
+
+      {loadedCount > 0 && <SectorAggregateRow enriched={enriched} sector={sector} setSector={setSector} />}
 
       {/* Sector pills */}
       <div className="sector-pills">
@@ -214,7 +301,6 @@ export default function HeatmapPane() {
         ))}
       </div>
 
-      {/* Sort + refresh */}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
         <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{
           flex: 1, background: '#fff', border: '1px solid #e2e8f0',
@@ -234,7 +320,6 @@ export default function HeatmapPane() {
         }}>{loading ? '⏳' : '↻'}</button>
       </div>
 
-      {/* Info */}
       <div style={{ fontSize: 9, color: '#94a3b8', marginBottom: 8, display: 'flex', justifyContent: 'space-between' }}>
         <span>{filtered.length} stocks{sector !== 'ALL' ? ` · ${sector}` : ''}</span>
         <span>{loadedCount}/{allKeys.length} prices loaded</span>
@@ -246,7 +331,6 @@ export default function HeatmapPane() {
         </div>
       )}
 
-      {/* Heatmap grid — responsive: 3 cols mobile, 4 tablet, 5 desktop */}
       <div className="heatmap-grid">
         {sorted.map(stock => (
           <HeatTile
@@ -255,7 +339,10 @@ export default function HeatmapPane() {
             ltp={stock.ltp}
             chgPct={stock.chgPct}
             chgPt={stock.chgPt}
-            isLive={stock.isLive}
+            volRank={volRankMap[stock.key] || 0}
+            hasSignal={openSignalSymbols?.has(stock.s)}
+            squeeze={squeezeMap[stock.key] || null}
+            onTap={() => openTile(stock)}
           />
         ))}
       </div>
@@ -270,6 +357,12 @@ export default function HeatmapPane() {
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontSize: 9, color: '#94a3b8' }}>
           <span>≥+3%</span><span>0%</span><span>≤-3%</span>
+        </div>
+        <div style={{ marginTop: 8, fontSize: 9, color: '#94a3b8', display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <span>🎯 Open signal</span>
+          <span>⚡ Extreme squeeze</span>
+          <span>🔸 BB squeeze</span>
+          <span>Thicker border = higher relative volume</span>
         </div>
       </div>
     </div>

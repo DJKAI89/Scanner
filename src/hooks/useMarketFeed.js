@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { fetchQ, resolveAccessToken } from '../services/api';
-import { sleep } from '../utils/marketTime';
+import { fetchQ, resolveAccessToken } from '../services/api.js';
+import { sleep } from '../utils/marketTime.js';
 
 // ── Minimal Protobuf binary reader for Upstox v3 ltpc feed ───
 // Upstox v3 sends binary protobuf FeedResponse:

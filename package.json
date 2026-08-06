@@ -1,18 +1,33 @@
 {
-  "name": "friday-nse-scanner",
+  "name": "nse-scanner",
   "version": "2.0.0",
   "private": true,
-  "description": "F.R.I.D.A.Y — Professional NSE Scanner (React)",
+  "type": "module",
+  "description": "Scanner — Professional NSE Scanner (React)",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "eslint src --ext .js,.jsx",
+    "lint": "eslint src --ext .js,.jsx,.tsx",
+    "format": "prettier --write \"src/**/*.{js,jsx,tsx}\" \"scripts/**/*.mjs\"",
+    "format:check": "prettier --check \"src/**/*.{js,jsx,tsx}\" \"scripts/**/*.mjs\"",
+    "prepare": "husky",
     "ai:train": "node scripts/train-ai-model.mjs"
+  },
+  "lint-staged": {
+    "src/**/*.{js,jsx,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "scripts/**/*.mjs": [
+      "prettier --write"
+    ]
   },
   "dependencies": {
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-sealedbox-js": "^1.2.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.1",
@@ -21,6 +36,9 @@
     "eslint": "^9.0.0",
     "eslint-plugin-react": "^7.37.0",
     "eslint-plugin-react-hooks": "^5.2.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.8",
+    "prettier": "^3.9.5",
     "vite": "^5.4.0"
   },
   "engines": {

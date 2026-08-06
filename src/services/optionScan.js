@@ -2,12 +2,12 @@
 // Extracted from OptionsPane.jsx so the pane only handles UI/state wiring.
 // All calculation, scoring, and API-call logic for the Options tab lives here.
 
-import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api';
-import { getIST, sleep } from '../utils/marketTime';
-import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config';
-import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment } from './technical';
-import { logSignals, buildOptionSignal } from './github';
-import { applyMlRanking } from './mlRanking';
+import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api.js';
+import { getIST, sleep } from '../utils/marketTime.js';
+import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config.js';
+import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment } from './technical.js';
+import { logSignals, buildOptionSignal } from './github.js';
+import { applyMlRanking } from './mlRanking.js';
 
 export const VIX_KEY = 'NSE_INDEX|India VIX';
 
@@ -91,9 +91,9 @@ function buildIndicatorSnapshot(p) {
     momentumFresh: p.momentumFresh || false,
     volSpike: (p.volRatio ?? 0) >= 1.5,
     lowVol: (p.volRatio ?? 1) < 0.7,
-    nearPDH: p.priceZone === 'PDH_BREAK' || p.priceZone === 'NEAR_PDH',
-    nearPDL: p.priceZone === 'PDL_BREAK' || p.priceZone === 'NEAR_PDL',
-    oiBuildUp: p.oiBuildType === 'CE_BUILD' || p.oiBuildType === 'PE_BUILD',
+    nearPDH: p.priceZone === 'abovePDH' || p.priceZone === 'nearPDH',
+    nearPDL: p.priceZone === 'belowPDL' || p.priceZone === 'nearPDL',
+    oiBuildUp: p.oiBuildType === 'LONG_BUILD' || p.oiBuildType === 'SHORT_COVER',
     compositeHigh: Math.abs(p.compositeScore ?? 0) >= 2,
     compositeMed: Math.abs(p.compositeScore ?? 0) >= 1,
     atm: p.atm || false,
@@ -105,9 +105,14 @@ function buildIndicatorSnapshot(p) {
 function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalibration, regime, cfg, maxPain = 0, spot = 0 }) {
   return picks.map(p => {
     const indSnap = buildIndicatorSnapshot(p);
-    let c = applyFIIBias(p.confidence, p.action === 'BUY', fiiData);
+    const base = p.confidence;
+    let c = applyFIIBias(base, p.action === 'BUY', fiiData);
+    const fiiAdj = c - base;
+    let prev = c;
     c = applyCalibration(c, confCalibration || null);
-    c = applyRegimeAdjustment(c, regime, cfg);
+    const calAdj = c - prev; prev = c;
+    c = applyRegimeAdjustment(c, regime, cfg, mlModels?.thresholds?.option?.regimePenalties);
+    const regimeAdj = c - prev; prev = c;
     // Confluence — same 6-module framework as stocks/breakout. actionDir is based
     // on option type (CE wants underlying up, PE wants underlying down) — the same
     // basis trendAligned/action already use in scanChain, not raw BUY/SELL (a SELL
@@ -117,19 +122,23 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
       trend: Math.sign((p.emaTrendBull===true?1:p.emaTrendBull===false?-1:0) + (p.emaCross==='bullish_cross'?1:p.emaCross==='bearish_cross'?-1:0)),
       momentum: p.momentumFresh ? Math.sign(p.compositeScore || 0) : 0,
       volume: (p.volRatio >= 1.5) ? Math.sign(p.compositeScore || 0) : 0,
-      priceAction: (p.priceZone==='PDH_BREAK'||p.priceZone==='NEAR_PDH') ? 1 : (p.priceZone==='PDL_BREAK'||p.priceZone==='NEAR_PDL') ? -1 : 0,
-      institutional: p.oiBuildType==='CE_BUILD' ? 1 : p.oiBuildType==='PE_BUILD' ? -1 : 0,
+      priceAction: (p.priceZone==='abovePDH'||p.priceZone==='nearPDH') ? 1 : (p.priceZone==='belowPDL'||p.priceZone==='nearPDL') ? -1 : 0,
+      institutional: p.oiBuildType==='LONG_BUILD' ? 1 : p.oiBuildType==='SHORT_BUILD' ? -1 : 0,
       marketContext: p.stockPCR != null ? (p.stockPCR > 1.2 ? 1 : p.stockPCR < 0.8 ? -1 : 0) : 0,
     };
     const confluence = computeConfluence(confluenceModules, actionDir);
     c = applyConfluenceAdjustment(c, confluence, cfg);
+    const confluenceAdj = c - prev; prev = c;
     c = applyAdaptWeights(c, adaptWeights?.option || null, indSnap);
+    const adaptAdj = c - prev;
     const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap: indSnap });
+    const finalConf = Math.min(99, Math.max(1, Math.round(mlRank.confidence)));
     return {
       ...p,
-      confidence: Math.min(99, Math.max(1, Math.round(mlRank.confidence))),
+      confidence: finalConf,
       regime,
       confluence,
+      confBreakdown: { base, fiiAdj, calAdj, regimeAdj, confluenceAdj, adaptAdj, mlAdj: mlRank.mlAdj, final: finalConf },
       _indSnap: indSnap,
       _dte: p._dte ?? null,
       nearMaxPain: maxPain > 0 && spot > 0 && Math.abs(p.strike - maxPain) / spot < 0.01,
@@ -153,16 +162,24 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
 // caches: { prevAvgIVCache, prevPCRCache } — refs persisted across scans for trend deltas
 // callbacks: { setProgress, setMarketCtxMap, setVix }
 export async function runOptionsScan(ctx, caches, callbacks) {
-  const { accessToken, cfg, stocks, fiiData, adaptWeights, mlModels, confCalibration, gh, onTokenExpired, lg } = ctx;
+  const { accessToken, cfg: cfgIn, stocks, fiiData, adaptWeights, mlModels, confCalibration, gh, onTokenExpired, lg } = ctx;
+  // Learned delta/IV gates (mlRanking.optimizeThresholds) override the static
+  // 0.40/15 defaults once enough logged option signals exist to sweep them.
+  const optGates = mlModels?.thresholds?.option;
+  const cfg = optGates?.deltaGate != null ? { ...cfgIn, delta: optGates.deltaGate, iv: optGates.ivGate } : cfgIn;
   const { prevAvgIVCache, prevPCRCache } = caches;
   const { setProgress, setMarketCtxMap, setVix } = callbacks;
 
   // ── F&O-eligible universe: prefer the live stocks.json list (all ~500 stocks,
   // each carrying its own lot/step) and fall back to the static NIFTY50 list only
   // if stocks.json hasn't loaded yet. Ranked by volume at scan time (Step 3). ──
-  const eligibleFOStocks = (stocks && stocks.length > 0)
-    ? stocks.filter(s => s.fo && s.lot > 0 && s.key)
+  const foFromJson = (stocks || []).filter(s => s.fo && s.lot > 0 && s.key);
+  const eligibleFOStocks = foFromJson.length > 0
+    ? foFromJson
     : NIFTY50_FALLBACK.filter(s => s.fo && TOP_FO_SYMBOLS.includes(s.s));
+  if (stocks?.length > 0 && foFromJson.length === 0) {
+    lg(`⚠ stocks.json has ${stocks.length} stocks but none flagged fo:true — using static F&O fallback list instead. Check your stocks.json data.`, 'w');
+  }
   const scanCount = Math.max(1, cfg.optStockScanCount || 20);
   const totalSteps = eligibleFOStocks.length > 0 ? 4 : 3;
 

@@ -3,7 +3,7 @@ name: FRIDAY — Deploy to GitHub Pages
 on:
   push:
   workflow_dispatch:
-  
+
 permissions:
   contents: read
   pages: write
@@ -22,10 +22,10 @@ jobs:
 
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 🟢 Setup Node 24
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '24'
           cache: 'npm'
@@ -44,7 +44,7 @@ jobs:
           ls -la dist/assets/
 
       - name: 📤 Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: ./dist
 

@@ -16,7 +16,7 @@
 // A signal's pnlPct on a fully-closed trade is the size-weighted blend across
 // every partial tranche, not just the last fill.
 
-import { isBullSignal } from './github';
+import { isBullSignal } from './github.js';
 
 const DEFAULTS = {
   t1ClosePct:    50,   // % of original position closed at T1

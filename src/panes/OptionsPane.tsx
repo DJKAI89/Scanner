@@ -3,10 +3,11 @@ import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
 import { resolveAccessToken } from '../services/api';
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
-import { getIST } from '../utils/marketTime';
+import { getIST, getISTDate } from '../utils/marketTime';
 import { INDEX_OPTS, isWeeklyExpiryDay } from '../constants/config';
 import { useMarketFeed } from '../hooks/useMarketFeed';
-import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote } from '../components/cardKit';
+import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote, Banner } from '../components/cardKit';
+import { ConfidenceBreakdown } from '../components/ConfidenceBreakdown';
 import { runOptionsScan, getOptionKey, withLiveOI, calcStructure, VIX_KEY } from '../services/optionScan';
 
 const OPT_FILTERS = [
@@ -43,6 +44,14 @@ function IndexLiveCard({ group, live, ctx }) {
 }
 
 function OptionCard({ pick, cfg: cardCfg }) {
+  const { openSignalSymbols } = useApp();
+  const alreadyOpen = openSignalSymbols?.has(pick.und);
+  const dte = (() => {
+    if (!pick.expiry) return null;
+    const today = new Date(getISTDate());
+    const exp = new Date(pick.expiry);
+    return Math.round((exp - today) / 86400000);
+  })();
   const isBuy   = pick.action === 'BUY';
   const dir     = isBuy ? 'bull' : pick.action === 'SELL' ? 'bear' : 'neutral';
   const dc      = Math.abs(pick.delta || 0) >= 0.5 ? '#16a34a' : Math.abs(pick.delta || 0) >= 0.3 ? '#d97706' : '#dc2626';
@@ -81,6 +90,9 @@ function OptionCard({ pick, cfg: cardCfg }) {
 
   // ── Unified signal tags ──
   const tags = [];
+  if (dte != null && dte <= 3) {
+    tags.push({ label: dte <= 0 ? '⏰ EXPIRES TODAY' : dte === 1 ? '⏰ 1 DTE' : `⏰ ${dte} DTE`, tone: dte <= 1 ? 'red' : 'amber' });
+  }
   const regimeMap = {
     CHOPPY_HIGH_VOL: { txt: '🌊 CHOPPY + HIGH VIX', tone: 'red' },
     CHOPPY:          { txt: '🌊 CHOPPY', tone: 'amber' },
@@ -116,6 +128,16 @@ function OptionCard({ pick, cfg: cardCfg }) {
 
   return (
     <AccentCard dir={dir}>
+      {pick._fallback && (
+        <Banner tone="amber" icon="⚠" title="Below filter threshold" detail={
+          pick.aiBlock
+            ? `AI model vetoed this pick — its win-probability estimate is ${pick.mlProbability}% (well below its learned threshold), despite the ${pick.confidence}% rule-based score. Not related to your Settings thresholds.`
+            : "Showing as fallback — lower ⚙ Settings thresholds for normal picks"
+        } />
+      )}
+      {alreadyOpen && (
+        <Banner tone="blue" icon="🎯" title="Already have an open position" detail={`You have an existing open signal for ${pick.und} — check your Log before adding another.`} />
+      )}
       <CardHeader
         rank={null}
         symbol={`${pick.und} ${pick.strike} ${pick.type}`}
@@ -159,6 +181,7 @@ function OptionCard({ pick, cfg: cardCfg }) {
       <SignalTags tags={tags} />
 
       <ProgressStat label="Confidence" pct={pick.confidence||0} color={pick.confidence>=minConf?'#16a34a':pick.confidence>=minConf-15?'#d97706':'#dc2626'} valueLabel={`${pick.confidence}%`} />
+      <ConfidenceBreakdown pick={pick} kind="option" />
 
       {/* Greeks */}
       <MetricGrid cols={4}>
@@ -264,8 +287,8 @@ export default function OptionsPane() {
     const onScan = () => {
       if (activeTab === 'options') loadOptions(true);
     };
-    document.addEventListener('friday:scan', onScan);
-    return () => document.removeEventListener('friday:scan', onScan);
+    document.addEventListener('scanner:scan', onScan);
+    return () => document.removeEventListener('scanner:scan', onScan);
   }, [activeTab, accessToken]); // eslint-disable-line
   useEffect(() => {
     const liveVix = liveIndexPrices[VIX_KEY]?.ltp;
@@ -324,6 +347,24 @@ export default function OptionsPane() {
       return true; // 'all'
     }),
   })).filter(g => g.picks.length > 0), [liveGroups, filter, cfg.maxOptCapital, cfg.minOptConf, mlModels]);
+
+  // Safety net: if the confidence/capital gate empties every group (e.g. a
+  // learned threshold overshoots on a small/noisy sample), fall back to the
+  // top picks by confidence — same pattern stocks already use — instead of
+  // silently rendering nothing.
+  const displayGroups = useMemo(() => {
+    if (filtered.length > 0 || filter !== 'all') return filtered;
+    const allRaw = liveGroups.flatMap(g => g.picks.map(p => ({ ...p, _group: g })));
+    if (!allRaw.length) return filtered;
+    const top = allRaw.sort((a, b) => b.confidence - a.confidence).slice(0, 8);
+    const byGroup = new Map();
+    for (const p of top) {
+      const key = p._group.name;
+      if (!byGroup.has(key)) byGroup.set(key, { ...p._group, picks: [] });
+      byGroup.get(key).picks.push({ ...p, _fallback: true });
+    }
+    return [...byGroup.values()];
+  }, [filtered, liveGroups, filter]);
 
   return (
     <div>
@@ -414,9 +455,15 @@ export default function OptionsPane() {
             ))}
           </div>
 
-          {filtered.length === 0
+          {displayGroups.length === 0
             ? <EmptyState>{marketStatus.open ? '🔄 No signals meet confidence ≥' + cfg.minOptConf + '% · Try lowering in ⚙ Settings' : '📅 NSE Market Closed · Mon–Fri 9:15–15:30 IST'}</EmptyState>
-            : filtered.map(g => (
+            : <>
+              {filtered.length === 0 && (
+                <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 12px', marginBottom: 10, fontSize: 10, color: '#92400e', fontWeight: 700 }}>
+                  ⚠ 0 picks met the confidence threshold — showing top picks by confidence instead. Try lowering Min Confidence in ⚙ Settings.
+                </div>
+              )}
+              {displayGroups.map(g => (
               <div key={g.name}>
                 <div className="opt-group-hdr">{g.fullName||g.name}{g.type==='stock'?' 📊':''} — ₹{fmt(g.spot)} ({fmtC(g.spotChg)}) · Exp: {g.expiries?.length > 1 ? `${g.expiries.length} expiries (${g.expiries[0]} → ${g.expiries[g.expiries.length-1]})` : g.expiry} · {g.picks.filter(p=>p.trendAligned).length} with-trend · {g.picks.length} total</div>
                 {/* With-trend first */}
@@ -440,7 +487,8 @@ export default function OptionsPane() {
                   </>
                 )}
               </div>
-            ))
+            ))}
+            </>
           }
           <div className="disc">⚠ SL/Target: IV+DTE+Delta model · Confidence: EMA 9/21 cross + VWAP + Momentum + PCR trend + IV trend + Zone + OI build · Not SEBI advice · Always DYODD.</div>
         </div>

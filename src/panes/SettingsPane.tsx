@@ -247,7 +247,46 @@ function AdaptWeightsSection({ adaptWeights }) {
   );
 }
 
-function MlRankerSection({ mlModels, mlSnapshots }) {
+function HistorySyncStatus({ mlModels, mlSnapshots, gh, loadConfCalibration, lg }) {
+  const [busy, setBusy] = useState(false);
+  const modelAt = mlModels?.computedAt;
+  const historyAt = mlSnapshots?.[0]?.computedAt;
+  const inSync = modelAt && historyAt && modelAt === historyAt;
+  const hasGap = modelAt && historyAt && modelAt !== historyAt;
+
+  const handleRefresh = async () => {
+    setBusy(true);
+    try { await loadConfCalibration?.(gh, true); } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{
+      marginTop: 10, padding: '8px 12px', borderRadius: 8, fontSize: 10,
+      background: inSync ? '#f0fdf4' : hasGap ? '#fffbeb' : '#f8fafc',
+      border: `1px solid ${inSync ? '#bbf7d0' : hasGap ? '#fde68a' : '#e2e8f0'}`,
+      display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+    }}>
+      <div>
+        <div style={{ fontWeight: 800, color: inSync ? '#16a34a' : hasGap ? '#b45309' : '#64748b' }}>
+          {inSync ? '✅ History in sync with latest model' : hasGap ? '⚠ History lagging behind latest model' : 'History status unknown'}
+        </div>
+        {hasGap && (
+          <div style={{ color: '#92400e', marginTop: 2, fontSize: 9 }}>
+            Model updated {modelAt} · newest history entry {historyAt || 'none'}
+          </div>
+        )}
+      </div>
+      <button onClick={handleRefresh} disabled={busy} style={{
+        padding: '5px 10px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff',
+        fontSize: 9.5, fontWeight: 800, color: '#334155', cursor: busy ? 'default' : 'pointer', whiteSpace: 'nowrap',
+      }}>
+        {busy ? '...' : '↻ Force Refresh'}
+      </button>
+    </div>
+  );
+}
+
+function MlRankerSection({ mlModels, mlSnapshots, gh, loadConfCalibration, lg }) {
   if (!mlModels) {
     return (
       <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '14px 16px' }}>
@@ -304,6 +343,7 @@ function MlRankerSection({ mlModels, mlSnapshots }) {
           </div>
         ))}
       </div>
+      <HistorySyncStatus mlModels={mlModels} mlSnapshots={mlSnapshots} gh={gh} loadConfCalibration={loadConfCalibration} lg={lg} />
       {!!mlSnapshots?.length && (
         <div style={{ marginTop: 12, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px' }}>
           <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', marginBottom: 8 }}>MODEL HISTORY</div>
@@ -354,9 +394,9 @@ export default function SettingsPane() {
     gh, saveGh,
     clearToken, showToast,
     stocksStatus, loadStocks,
-    fiiInterp, loadFIIDII,
+    fiiInterp, fiiData, loadFIIDII,
     ghSettingsPulled,
-    adaptWeights, mlModels, mlSnapshots,
+    adaptWeights, mlModels, mlSnapshots, loadConfCalibration, lg,
   } = useApp();
 
   const [local, setLocal]           = useState({ ...cfg });
@@ -364,7 +404,7 @@ export default function SettingsPane() {
   const [saveStatus, setSaveStatus] = useState('');
   const [ghStatus, setGhStatus]     = useState('');
   const [tokenInput, setTokenInput] = useState('');
-  const [tokenSavedDate]            = useState(() => localStorage.getItem('friday_token_date') || '');
+  const [tokenSavedDate]            = useState(() => localStorage.getItem('scanner_token_date') || '');
   const [notifPerm, setNotifPerm]   = useState(() =>
     typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'
   );
@@ -534,7 +574,7 @@ export default function SettingsPane() {
 
         <div className="setting-card" style={{ gridColumn: '1 / -1' }}>
           <h4>🤖 ML Ranker</h4>
-          <MlRankerSection mlModels={mlModels} mlSnapshots={mlSnapshots} />
+          <MlRankerSection mlModels={mlModels} mlSnapshots={mlSnapshots} gh={gh} loadConfCalibration={loadConfCalibration} lg={lg} />
         </div>
 
         {/* ── Stock Universe ── */}
@@ -557,7 +597,10 @@ export default function SettingsPane() {
         <div className="setting-card">
           <h4>🏦 FII / DII Data</h4>
           <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10, lineHeight: 1.7 }}>
-            From <code style={{ background: '#f1f5f9', padding: '1px 4px', borderRadius: 3 }}>fii-dii/latest.json</code> in your GitHub repo. Update daily.
+            Live from Upstox (<code style={{ background: '#f1f5f9', padding: '1px 4px', borderRadius: 3 }}>fii-dii/latest.json</code> in your GitHub repo used only as fallback).
+            {fiiData?.source && <span style={{ marginLeft: 6, color: fiiData.source === 'upstox' ? '#16a34a' : '#d97706', fontWeight: 700 }}>
+              {fiiData.source === 'upstox' ? '● live' : '● github fallback'}
+            </span>}
           </div>
           {fiiInterp ? (
             <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
@@ -578,7 +621,7 @@ export default function SettingsPane() {
           <h4>📋 Signal Log (GitHub)</h4>
           <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10, lineHeight: 1.7 }}>
             Logs every signal as daily JSON files. Settings sync across browsers automatically.<br />
-            <a href="https://github.com/settings/tokens/new?scopes=repo&description=FRIDAY+Signal+Log"
+            <a href="https://github.com/settings/tokens/new?scopes=repo&description=SCANNER+Signal+Log"
               target="_blank" rel="noreferrer" style={{ color: '#16a34a', fontWeight: 700 }}>
               Generate GitHub Token (repo scope) →
             </a>
@@ -638,8 +681,8 @@ export default function SettingsPane() {
               onClick={() => {
                 const v = tokenInput.trim();
                 if (!v || v.length < 20) { showToast('⚠ Token too short', '#dc2626'); return; }
-                localStorage.setItem('friday_token', v);
-                localStorage.setItem('friday_token_date', new Date().toDateString());
+                localStorage.setItem('scanner_token', v);
+                localStorage.setItem('scanner_token_date', new Date().toDateString());
                 setTokenInput('');
                 showToast('✅ Token updated! Refresh the page to apply.');
               }}>

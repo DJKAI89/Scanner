@@ -1,10 +1,12 @@
 import React from 'react';
+import { useApp } from '../context/AppContext';
 import { fmt, fmtVol } from '../utils/formatters';
 import { getSignalStrength } from '../services/technical';
 import {
   AccentCard, CardHeader, VerdictRow, LevelsStrip, StatusTag,
   MetricGrid, MetricMini, ProgressStat, TargetTiers, SignalTags, Banner, FooterNote,
 } from './cardKit';
+import { ConfidenceBreakdown } from './ConfidenceBreakdown';
 
 function dirOf(rec) {
   if (!rec) return 'neutral';
@@ -15,6 +17,8 @@ function dirOf(rec) {
 }
 
 export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
+  const { openSignalSymbols } = useApp();
+  const alreadyOpen = openSignalSymbols?.has(p.s);
   const rec     = p.rec || p.signal || 'WATCH';
   const dir     = dirOf(rec);
   const ltp     = p.ltp || p.entry || 0;
@@ -48,20 +52,6 @@ export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
   const activeCount = di.filter(Boolean).length;
 
   const tags = [];
-  const regimeMap = {
-    CHOPPY_HIGH_VOL: { txt: '🌊 CHOPPY + HIGH VIX', tone: 'red' },
-    CHOPPY:          { txt: '🌊 CHOPPY', tone: 'amber' },
-    TRENDING_CALM:   { txt: '📈 CALM TREND', tone: 'green' },
-    TRENDING:        { txt: '📈 TRENDING', tone: 'green' },
-  };
-  if (p.regime && regimeMap[p.regime]) tags.push({ label: regimeMap[p.regime].txt, tone: regimeMap[p.regime].tone });
-  if (p.confluence?.total > 0) {
-    const cf = p.confluence;
-    if (cf.conflicting >= 2) tags.push({ label: `🧩 CONFLICTING (${cf.agree}✓ ${cf.conflicting}✗)`, tone: 'red' });
-    else if (cf.ratio >= 0.8 && cf.agree >= 5) tags.push({ label: `🧩 FULL CONFLUENCE ${cf.agree}/${cf.total}`, tone: 'green' });
-    else if (cf.ratio >= 0.65 && cf.agree >= 4) tags.push({ label: `🧩 STRONG CONFLUENCE ${cf.agree}/${cf.total}`, tone: 'green' });
-    else if (cf.ratio < 0.5) tags.push({ label: `🧩 WEAK (${cf.agree}/${cf.total})`, tone: 'amber' });
-  }
   indLbls.forEach((l, j) => { if (di[j]) tags.push({ label: l, tone: 'green' }); });
   Object.entries(p.patterns||{}).filter(([,v])=>v).forEach(([k]) =>
     tags.push({ label: '📊 ' + k.replace(/([A-Z])/g,' $1').trim(), tone: 'green' })
@@ -86,7 +76,15 @@ export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
   return (
     <AccentCard dir={dir}>
       {p._fallback && (
-        <Banner tone="amber" icon="⚠" title="Below filter threshold" detail="Showing as fallback — lower ⚙ Settings thresholds for normal picks" />
+        <Banner tone="amber" icon="⚠" title="Below filter threshold" detail={
+          p.aiBlock
+            ? `AI model vetoed this pick — its win-probability estimate is ${p.mlProbability}% (well below its learned threshold), despite the ${p.conf}% rule-based score. Not related to your Settings thresholds.`
+            : "Showing as fallback — lower ⚙ Settings thresholds for normal picks"
+        } />
+      )}
+
+      {alreadyOpen && (
+        <Banner tone="blue" icon="🎯" title="Already have an open position" detail={`You have an existing open signal for ${p.s} — check your Log before adding another.`} />
       )}
 
       <CardHeader
@@ -133,6 +131,7 @@ export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
       )}
 
       <ProgressStat label="Confidence" pct={p.conf||0} color={(p.conf||0)>=minConf?'#16a34a':(p.conf||0)>=(minConf-10)?'#d97706':'#dc2626'} valueLabel={`${p.conf||0}%`} />
+      <ConfidenceBreakdown pick={p} kind="stock" />
       <ProgressStat label="Risk"       pct={p.risk||0} color={(p.risk||0)<30?'#16a34a':(p.risk||0)<50?'#d97706':'#dc2626'} valueLabel={`${p.risk||0}%`} />
       <ProgressStat label="Potential"  pct={Math.min(100,(p.pot?.adj||0)*5)} color="#1d4ed8" valueLabel={`${(p.pot?.adj||0).toFixed(1)}%`} />
 

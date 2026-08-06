@@ -2,9 +2,9 @@
 // Extracted from StocksPane.jsx so the pane only handles UI/state wiring.
 // All calculation, scoring, and API-call logic for the Stocks tab lives here.
 
-import { fetchQ, fetchCandles, fetchOptions } from './api';
-import { fetchScanQuotesViaWS } from '../hooks/useMarketFeed';
-import { logSignals, buildStockSignal } from './github';
+import { fetchQ, fetchCandles, fetchOptions } from './api.js';
+import { fetchScanQuotesViaWS } from '../hooks/useMarketFeed.js';
+import { logSignals, buildStockSignal } from './github.js';
 import {
   calcRSI, calcEMACrossover, calcATR, calcSupertrend, calcBBSqueeze, calcNR7, calcADX,
   detectPDHLBreakout, calc52WkBreakout, calcVolumeSurge, detectGap, calcWickRejection,
@@ -14,10 +14,10 @@ import {
   calcMACD, isNearSupport, calcRSIDivergence, getSector, calcConfidence, calcVWAP,
   calcVWAPBands, applyFIIBias, applyCalibration, applyAdaptWeights, calcEMA, calcIVPercentile,
   applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment,
-} from './technical';
-import { applyMlRanking } from './mlRanking';
-import { getIST, getISTDate, sleep } from '../utils/marketTime';
-import { fetchIntraday } from './api';
+} from './technical.js';
+import { applyMlRanking } from './mlRanking.js';
+import { getIST, getISTDate, sleep } from '../utils/marketTime.js';
+import { fetchIntraday } from './api.js';
 
 // ── Pure helpers ──────────────────────────────────────────────
 export function getDeliveryPct(q) {
@@ -298,10 +298,14 @@ export async function runPicksScan(ctx, callbacks) {
     if(vwapBands?.position==='FAR_ABOVE'||vwapBands?.position==='ABOVE_1SD') conf=Math.max(1,conf-4);
     const delivBoost=delivPct!=null?(delivPct>=60?1:delivPct<=25?-1:0):0;
     conf=Math.min(100,Math.max(0,conf+delivBoost*5));
+    const _confBase = conf;
     conf=applyFIIBias(conf,preRec==='BUY'||preRec==='STRONG BUY',null);
+    const _fiiAdj = conf - _confBase; let _prev = conf;
     conf=applyCalibration(conf, confCalibration||null);
+    const _calAdj = conf - _prev; _prev = conf;
     const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(nChgPct) / 1.0), vixVal);
-    conf=applyRegimeAdjustment(conf, stockRegime, cfg);
+    conf=applyRegimeAdjustment(conf, stockRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties);
+    const _regimeAdj = conf - _prev; _prev = conf;
     // Confluence — 6 independent modules vote bullish/bearish/no-opinion; stocks are
     // always a bullish thesis (no short stock picks), so actionDir is always +1.
     // Rewards genuine multi-module agreement (doc's "Stock B") over scattered weak
@@ -316,6 +320,7 @@ export async function runPicksScan(ctx, callbacks) {
     };
     const confluence = computeConfluence(confluenceModules, 1);
     conf = applyConfluenceAdjustment(conf, confluence, cfg);
+    const _confluenceAdj = conf - _prev; _prev = conf;
     // Layer 3: per-indicator learned adjustment from past signal outcomes
     const reversal = detectReversal(ltp,t.rsi,patterns,sr,vixVal,pcr,nBull,chgPct,t.atr||0,high,low);
     const _indSnap = {
@@ -332,6 +337,7 @@ export async function runPicksScan(ctx, callbacks) {
       delivHigh: (delivPct??0)>=60, delivLow: (delivPct??100)<=25,
     };
     conf=applyAdaptWeights(conf, adaptWeights?.stock||null, _indSnap);
+    const _adaptAdj = conf - _prev;
 
     const risk2=(ltp-sl); const useS1=sl>0&&sr?.pivotS1>0&&Math.abs(sl-sr.pivotS1)<risk2*0.3;
     const slTargets={consMethod:useS1?'S1 support':'ATR+VIX',modMethod:'2:1 R:R'};
@@ -352,6 +358,11 @@ export async function runPicksScan(ctx, callbacks) {
     });
     conf = mlRank.confidence;
     conf=Math.min(99,Math.max(1,Math.round(conf)));
+    const confBreakdown = {
+      base: Math.round(_confBase), fiiAdj: Math.round(_fiiAdj), calAdj: Math.round(_calAdj),
+      regimeAdj: Math.round(_regimeAdj), confluenceAdj: Math.round(_confluenceAdj),
+      adaptAdj: Math.round(_adaptAdj), mlAdj: Math.round(mlRank.mlAdj || 0), final: conf,
+    };
     const rec  = getRec(conf,pot.base,risk,pot.rr);
     const aiThresholds = mlModels?.thresholds?.stock || null;
     // Raised minStockConf default 50→65 and excluded WATCH/AVOID — your data shows <30% WR below 65%
@@ -374,7 +385,7 @@ export async function runPicksScan(ctx, callbacks) {
       a50, a200, nearSupp:nearSuppF, patterns,
       vwap, aboveVWAP, vwapType:'daily', vwapBands,
       vol, avgVol20, high, low, delivPct, regime: stockRegime, confluence,
-      _indSnap,
+      _indSnap, confBreakdown,
       mlProbability: mlRank.mlProbability,
       mlAdj: mlRank.mlAdj,
       mlExplain: mlRank.explanation,
@@ -519,7 +530,7 @@ export function interpVIXSc(vix) {
 // ctx: { token, stocks, cfg, scanStats, onTokenExpired, lg, marketStatus }
 // callbacks: { setBoProgress, setBoCards }
 export async function runBreakoutScan(ctx, callbacks) {
-  const { token, stocks, cfg, onTokenExpired, lg, marketStatus, scanStats } = ctx;
+  const { token, stocks, cfg, onTokenExpired, lg, marketStatus, scanStats, mlModels } = ctx;
   const { setBoProgress, setBoCards } = callbacks;
 
   if (!stocks?.length) {
@@ -627,7 +638,7 @@ export async function runBreakoutScan(ctx, callbacks) {
       trade, atr:t.atr, isBull, phase, sectorScore, sec:item.sec||item.s||'NSE',
       ivPct, primaryType,
       rec:isBull?(score>=7?'STRONG BUY':'BUY'):(score>=7?'SELL':'WATCH'),
-      conf:applyConfluenceAdjustment(applyRegimeAdjustment(Math.min(95,score*10), marketRegime, cfg), boConfluence, cfg),
+      conf:applyConfluenceAdjustment(applyRegimeAdjustment(Math.min(95,score*10), marketRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties), boConfluence, cfg),
       sl:trade.sl, target:trade.target,
       regime: marketRegime, confluence: boConfluence,
       pot:{cons:trade.sl,mod:trade.target,agg:trade.target,rr:trade.rr,wr:0,base:0,adj:0,ev:0},
