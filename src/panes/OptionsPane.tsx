@@ -8,7 +8,7 @@ import { INDEX_OPTS, isWeeklyExpiryDay } from '../constants/config';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote, Banner } from '../components/cardKit';
 import { ConfidenceBreakdown } from '../components/ConfidenceBreakdown';
-import { runOptionsScan, getOptionKey, withLiveOI, calcStructure, VIX_KEY, loadIvMovers } from '../services/optionScan';
+import { runOptionsScan, getOptionKey, withLiveOI, calcStructure, VIX_KEY } from '../services/optionScan';
 
 const OPT_FILTERS = [
   { id:'all',label:'All' },{ id:'nifty',label:'Nifty' },{ id:'banknifty',label:'BankNifty' },
@@ -255,19 +255,10 @@ export default function OptionsPane() {
   const [updTime, setUpdTime]   = useState('');
   const [optionsScanId, setOptionsScanId] = useState(0);
   const [marketCtxMap, setMarketCtxMap] = useState({});
-  const [ivMovers, setIvMovers] = useState([]);
   const loadingRef = useRef(false);
   const prevAvgIVCache = useRef({}), prevPCRCache = useRef({});
   const liveKeys = useMemo(() => [...INDEX_OPTS.map((idx) => idx.key), VIX_KEY], []);
 
-  useEffect(() => {
-    if (!accessToken || !marketStatus.open) return;
-    let cancelled = false;
-    const load = () => loadIvMovers(accessToken, onTokenExpired, lg).then((r) => { if (!cancelled) setIvMovers(r); }).catch(() => {});
-    load();
-    const t = setInterval(load, 120000); // every 2 min — this is a supplementary live-context panel, not the main scan
-    return () => { cancelled = true; clearInterval(t); };
-  }, [accessToken, marketStatus.open]); // eslint-disable-line
   const { lastPrices: liveIndexPrices } = useMarketFeed(
     accessToken, liveKeys, liveKeys.length > 0, { pollFallback: true }
   );
@@ -393,30 +384,6 @@ export default function OptionsPane() {
               <div style={{ fontSize:9, color:'#94a3b8', marginBottom:3 }}>FII/DII BIAS</div>
               <div style={{ fontSize:13, fontWeight:800, color:fiiInterp.color }}>{fiiInterp.label}</div>
               <div style={{ fontSize:10, color:'#64748b', marginTop:2 }}>{fiiInterp.detail}</div>
-            </div>
-          )}
-
-          {/* Live IV Movers — from Upstox Smartlist API */}
-          {ivMovers.length > 0 && (
-            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:9, padding:'10px 14px', marginBottom:12 }}>
-              <div style={{ fontSize:9, color:'#94a3b8', marginBottom:8 }}>🔥 LIVE IV MOVERS · real-time from Upstox</div>
-              {ivMovers.map(({ label, items }) => (
-                <div key={label} style={{ marginBottom: 8 }}>
-                  <div style={{ fontSize: 9.5, fontWeight: 800, color: '#334155', marginBottom: 4 }}>{label}</div>
-                  <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 2 }}>
-                    {items.map((it) => (
-                      <div key={it.instrKey} style={{
-                        flexShrink: 0, padding: '5px 9px', borderRadius: 7, background: '#f8fafc', border: '1px solid #e2e8f0',
-                      }}>
-                        <div style={{ fontSize: 9.5, fontWeight: 800, color: '#0f172a', whiteSpace: 'nowrap' }}>{it.name}</div>
-                        <div style={{ fontSize: 9, color: it.ivChgPct >= 0 ? '#16a34a' : '#dc2626', fontWeight: 700 }}>
-                          IV {it.ivChgPct != null ? (it.ivChgPct >= 0 ? '+' : '') + it.ivChgPct.toFixed(1) + '%' : '—'}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
             </div>
           )}
 
