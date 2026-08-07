@@ -823,6 +823,42 @@ export function getPortfolioAiGuidance(openSignals = [], candidateSignals = [], 
   };
 }
 
+// Every VIX band — not just low-VIX — gets a fixed, hand-tuned confidence
+// nudge baked in upstream before the ML model ever sees the signal:
+//   stock  calcConfidence()        vixAdj @ 25% weight:
+//     vix<12 -> +5.0pts | 12-15 -> +2.5pts | 15-20 -> 0 | vix>=20 -> -2.5pts
+//   option calcOptConfidenceFull() VIX impact (direct pts):
+//     vix>30 -> -15 | 25-30 -> -8 | 20-25 -> -4 | vix<14 -> +5 | 14-20 -> 0
+// These fixed rules can't tell a real low-vol trend edge from a chop trap,
+// or a real high-vol panic from a fadeable spike. Rather than hardcode a
+// second opinion here, the ML brain gets the call: as trust in the trained
+// model grows, we claw back a trust-weighted share of the fixed nudge and
+// let the model's own probability/regime read (regimeAdjustment already
+// folds VIX into `regime`) decide how much of it — if any — is warranted.
+// Below the trust floor (untrained / low-sample model) the static nudge is
+// left untouched, same fallback pattern as calibrateRegimePenalties.
+function vixStaticAdjustment(sigLike) {
+  const vix = toNum(sigLike?.vix, 0);
+  if (vix <= 0) return 0;
+  if (sigLike?.type === 'OPTION') {
+    if (vix > 30) return -15;
+    if (vix > 25) return -8;
+    if (vix > 20) return -4;
+    if (vix < 14) return 5;
+    return 0;
+  }
+  if (vix < 12) return 5.0;
+  if (vix < 15) return 2.5;
+  if (vix < 20) return 0;
+  return -2.5;
+}
+
+function lowVixUnwind(sigLike, trust) {
+  const staticAdj = vixStaticAdjustment(sigLike);
+  if (!staticAdj) return 0;
+  return -staticAdj * clamp(trust, 0, 1);
+}
+
 export function applyMlRanking(confidence, models, sigLike) {
   const model = models?.featureNames ? models : selectServingModel(models, sigLike);
   if (!model || !sigLike) return { confidence, mlProbability: null, mlAdj: 0, aiBlock: false, explanation: [] };
@@ -841,6 +877,7 @@ export function applyMlRanking(confidence, models, sigLike) {
   let adj = clamp((probability - baseProb) * 100 * trust, -18, 18);
   adj -= portfolioPenalty(sigLike);
   adj -= suppressionPenalty(sigLike, probability, familyThresholds);
+  adj += lowVixUnwind(sigLike, trust);
 
   const nextConfidence = clamp(Math.round(confidence + adj), 1, 99);
   const explanation = explainMlPrediction(sigLike, { ...models, featureNames: model.featureNames });
