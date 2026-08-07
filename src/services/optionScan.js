@@ -2,7 +2,7 @@
 // Extracted from OptionsPane.jsx so the pane only handles UI/state wiring.
 // All calculation, scoring, and API-call logic for the Options tab lives here.
 
-import { fetchQ, fetchOptions, fetchIntraday, fetchCandles, fetchSmartlist } from './api.js';
+import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api.js';
 import { getIST, sleep } from '../utils/marketTime.js';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config.js';
 import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment } from './technical.js';
@@ -406,50 +406,4 @@ export async function runOptionsScan(ctx, caches, callbacks) {
   lg(`✅ Options: ${total} signals (${withTrend} with-trend)`, 'o');
 
   return { groups: nextGroups, scanId, vixVal, withTrend, total };
-}
-
-// ── IV Movers — live from Upstox's Smartlist API ──
-// Fully independent of the main scan pipeline above (deliberately not woven
-// into scanChain's underlying-selection logic, since the smartlist only
-// returns opaque instrument_key with no strike/expiry/underlying attached —
-// resolving that mapping reliably would need real testing first). Instead
-// this surfaces the raw "what's moving right now" list as standalone
-// context, resolved to readable names via a follow-up fetchQ.
-export async function loadIvMovers(token, onTokenExpired, lg = () => {}) {
-  const categories = [
-    { assetType: 'INDEX', category: 'IV_GAINERS', label: 'Index IV ↑' },
-    { assetType: 'INDEX', category: 'IV_LOSERS',  label: 'Index IV ↓' },
-    { assetType: 'STOCK', category: 'IV_GAINERS', label: 'Stock IV ↑' },
-    { assetType: 'STOCK', category: 'IV_LOSERS',  label: 'Stock IV ↓' },
-  ];
-
-  const lists = await Promise.all(categories.map(async ({ assetType, category, label }) => {
-    try {
-      const rows = await fetchSmartlist('options', assetType, category, token, onTokenExpired, 8);
-      return { label, rows };
-    } catch (e) {
-      lg(`IV movers (${assetType}/${category}) failed: ${e.message}`, 'w');
-      return { label, rows: [] };
-    }
-  }));
-
-  // Resolve instrument_key → readable symbol/greeks in one batch fetchQ call
-  const allKeys = [...new Set(lists.flatMap(l => l.rows.map(r => r.instrument_key)).filter(Boolean))];
-  if (!allKeys.length) return [];
-  const quotes = await fetchQ(allKeys.join(','), token, onTokenExpired).catch(() => ({}));
-
-  return lists.map(({ label, rows }) => ({
-    label,
-    items: rows.map(r => {
-      const q = quotes[r.instrument_key] || {};
-      const name = q.symbol || q.trading_symbol || q.tradingsymbol || r.instrument_key;
-      return {
-        instrKey: r.instrument_key,
-        name,
-        ltp: r.price?.current ?? q.last_price ?? 0,
-        chgPct: r.price?.change_pct ?? 0,
-        ivChgPct: r.metric?.change_pct ?? null,
-      };
-    }),
-  })).filter(l => l.items.length > 0);
 }
