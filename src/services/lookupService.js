@@ -166,7 +166,7 @@ export async function lookupInstrument(ctx, callbacks) {
         delivHigh: (delivPct??0)>=60, delivLow: (delivPct??100)<=25,
       };
       conf = applyAdaptWeights(conf, adaptWeights?.stock || null, _indSnap);
-      const mlRank = applyMlRanking(conf, mlModels || null, { type:'STOCK', confidence: conf, numInds, risk, pot, rec: preRec, reversal, _indSnap });
+      const mlRank = applyMlRanking(conf, mlModels || null, { type:'STOCK', confidence: conf, numInds, risk, pot, rec: preRec, reversal, vix: vixVal, _indSnap });
       conf = mlRank.confidence;
       const finalRec = getRec(conf, pot.base, risk, pot.rr);
       const strength = getSignalStrength(numInds, conf, reversal);
