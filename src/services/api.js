@@ -229,18 +229,6 @@ export async function fetchFIIDIIData(token, onTokenExpired) {
   };
 }
 
-// ── Smartlist — real-time ranked F&O contracts (top traded, IV gainers/
-// losers, etc). Response only carries opaque instrument_key + price/metric —
-// no symbol/strike/expiry — so callers need a follow-up fetchQ to resolve
-// readable names.
-export async function fetchSmartlist(kind, assetType, category, token, onTokenExpired, pageSize = 20) {
-  const d = await withRetry(
-    () => apiGet(`/v2/market/smartlist/${kind}?asset_type=${assetType}&category=${category}&page_number=1&page_size=${pageSize}`, token, onTokenExpired),
-    `fetchSmartlist:${kind}:${category}`
-  );
-  return d?.data?.smartlist || [];
-}
-
 // ── Options chain ──
 export async function fetchOptions(instrKey, expiry, token, onTokenExpired) {
   const d = await withRetry(
