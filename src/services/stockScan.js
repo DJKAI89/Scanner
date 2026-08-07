@@ -354,6 +354,7 @@ export async function runPicksScan(ctx, callbacks) {
       aboveVWAP,
       delivPct,
       reversal,
+      vix: vixVal,
       _indSnap,
     });
     conf = mlRank.confidence;
