@@ -104,12 +104,12 @@ export function AppProvider({ children }) {
     setTimeout(() => setToast(null), duration);
   }, []);
 
-  const scheduleMlRefresh = useCallback((ghCfg, delayMs = 12000) => {
+  const scheduleMlRefresh = useCallback((ghCfg, delayMs = 12000, force = false) => {
     const g = ghCfg || gh;
     if (!g?.token || !g?.user || !g?.repo) return;
     if (mlRefreshTimerRef.current) clearTimeout(mlRefreshTimerRef.current);
     mlRefreshTimerRef.current = setTimeout(() => {
-      const run = () => loadConfCalibration(g);
+      const run = () => loadConfCalibration(g, force);
       if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
         window.requestIdleCallback(run, { timeout: 8000 });
       } else {
@@ -117,6 +117,19 @@ export function AppProvider({ children }) {
       }
     }, delayMs);
   }, [gh]); // eslint-disable-line
+
+  // Once-per-calendar-day forced ML refresh. Access tokens expire daily and
+  // TokenGate has the person paste a fresh one each morning, so "entering
+  // the token" is the natural daily trigger: the first boot of a new day
+  // forces loadConfCalibration(g, true), bypassing the computedAt-unchanged
+  // skip so the ranker picks up whatever the AI_Retrain.yml cron produced
+  // overnight instead of silently keeping yesterday's cached model/history.
+  const shouldForceMlToday = useCallback(() => {
+    const todayStr = new Date().toDateString();
+    if (localStorage.getItem('scanner_ml_forced_date') === todayStr) return false;
+    localStorage.setItem('scanner_ml_forced_date', todayStr);
+    return true;
+  }, []);
 
   const onTokenExpired = useCallback(() => {
     localStorage.removeItem('scanner_token');
@@ -695,7 +708,7 @@ export function AppProvider({ children }) {
           loadStocks(currentGH);
           loadFIIDII(currentGH);
           ghMigrateIfNeeded(currentGH, lg);
-          scheduleMlRefresh(currentGH, mlModels ? 20000 : 12000);
+          scheduleMlRefresh(currentGH, mlModels ? 20000 : 12000, shouldForceMlToday());
         }
       }, 2000);
     }).catch((e) => {
@@ -708,7 +721,7 @@ export function AppProvider({ children }) {
         const g = { token: localStorage.getItem('scanner_gh_token') || '', user: localStorage.getItem('scanner_gh_user') || '', repo: localStorage.getItem('scanner_gh_repo') || '' };
         if (g.token) {
           loadStocks(g); loadFIIDII(g); ghMigrateIfNeeded(g, lg);
-          scheduleMlRefresh(g, mlModels ? 20000 : 12000);
+          scheduleMlRefresh(g, mlModels ? 20000 : 12000, shouldForceMlToday());
           // Start global signal monitor after 10s (give market feed time to settle)
           setTimeout(() => runSignalMonitor(g), 10000);
         }
