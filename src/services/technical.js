@@ -1368,45 +1368,12 @@ export function calcOptConfidenceFull(delta, iv, oiChg, theta, signals, spot, st
       : (absCs >= 3 ? 0.20 : absCs >= 2 ? 0.30 : 0.40);
   }
 
-  // Momentum bonus
-  let momentumBonus = 0;
-  if (marketCtx?.momentumScore != null) {
-    const ms = marketCtx.momentumScore;
-    const mAligned = (isCE && ms > 0) || (!isCE && ms < 0);
-    if      (mAligned  && Math.abs(ms) >= 2) momentumBonus =  8;
-    else if (mAligned  && Math.abs(ms) >= 1) momentumBonus =  4;
-    else if (!mAligned && Math.abs(ms) >= 2) momentumBonus = -6;
-  }
-
-  // EMA crossover bonus
-  let emaBonus = 0;
-  if (marketCtx?.emaTrendBull != null) {
-    const emaAligned = (isCE && marketCtx.emaTrendBull) || (!isCE && !marketCtx.emaTrendBull);
-    const cross    = marketCtx.emaCross;
-    const crossAge = marketCtx.emaCrossCandles ?? 999;
-    if (emaAligned) {
-      emaBonus = cross === (isCE ? 'bullish_cross' : 'bearish_cross')
-        ? (crossAge <= 1 ? 15 : crossAge <= 2 ? 10 : 6)
-        : 5;
-    } else {
-      emaBonus = cross === (isCE ? 'bearish_cross' : 'bullish_cross') ? -15 : -8;
-    }
-  }
-
-  // Freshness bonus
-  let freshnessBonus = 0;
-  if (marketCtx?.momentumFresh === true) {
-    const freshAligned = (isCE && (marketCtx.compositeScore ?? 0) > 0) || (!isCE && (marketCtx.compositeScore ?? 0) < 0);
-    freshnessBonus = freshAligned ? 8 : 0;
-  }
-
-  // Volume bonus
-  let volumeBonus = 0;
-  if (marketCtx?.volRatio != null) {
-    if      (marketCtx.volRatio >= 2.0) volumeBonus =  10;
-    else if (marketCtx.volRatio >= 1.5) volumeBonus =   6;
-    else if (marketCtx.volRatio <  0.7) volumeBonus =  -8;
-  }
+  // Momentum/EMA-cross/freshness/volume are no longer scored here as fixed
+  // point bonuses — they duplicate momentumFresh/emaBull/emaBearish/freshCross/
+  // volSpike/lowVol in buildIndicatorSnapshot() (optionScan.js), which already
+  // feed applyAdaptWeights with a LEARNED win-rate-lift adjustment. Scoring
+  // them twice (once as a guessed constant here, once as a learned adjustment
+  // downstream) was the same double-count bug fixed on the stock side.
 
   // Delta score (30%)
   const deltaScore = absD >= 0.7 ? 90 : absD >= 0.5 ? 78 : absD >= 0.3 ? 60 : absD >= 0.15 ? 42 : 25;
@@ -1469,13 +1436,12 @@ export function calcOptConfidenceFull(delta, iv, oiChg, theta, signals, spot, st
 
   const _timeAdj = getTimeOfDayPenalty();
   let raw = deltaScore * 0.30 + ivScore * 0.20 + oiScore * 0.25 + atmScore * 0.15 + thetaScore * 0.10
-    + sigBonus + momentumBonus + emaBonus + freshnessBonus + volumeBonus + ivTrendBonus + expiryBonus + ivAdjFinal;
+    + sigBonus + ivTrendBonus + expiryBonus + ivAdjFinal;
 
-  // VIX impact
-  if      (vix > 30) raw -= 15;
-  else if (vix > 25) raw -= 8;
-  else if (vix > 20) raw -= 4;
-  else if (vix < 14) raw += 5;
+  // VIX impact: previously a fixed raw+=/-= band here, duplicating the
+  // vixVeryLow/vixHighFear flags in buildIndicatorSnapshot() that already
+  // feed applyAdaptWeights with a learned adjustment. Removed for the same
+  // reason as momentum/ema/freshness/volume above — see note there.
 
   // Max Pain gravity (expiry day only)
   if (maxPain && maxPain > 0 && spot > 0 && isWeeklyExpiryDay()) {

@@ -5,7 +5,7 @@
 import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api.js';
 import { getIST, sleep } from '../utils/marketTime.js';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config.js';
-import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment } from './technical.js';
+import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, interpretFIIDII } from './technical.js';
 import { logSignals, buildOptionSignal } from './github.js';
 import { applyMlRanking } from './mlRanking.js';
 
@@ -97,6 +97,8 @@ function buildIndicatorSnapshot(p) {
     compositeHigh: Math.abs(p.compositeScore ?? 0) >= 2,
     compositeMed: Math.abs(p.compositeScore ?? 0) >= 1,
     atm: p.atm || false,
+    vixVeryLow: (p.vix ?? 0) > 0 && (p.vix ?? 0) < 14,
+    vixHighFear: (p.vix ?? 0) > 20,
   };
 }
 

@@ -9,7 +9,7 @@ import {
   getRec, autoSLTarget, calcEntryTrigger, detectReversal, calcMACD,
   isNearSupport, calcRSIDivergence, getSignalStrength,
   calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain,
-  applyFIIBias, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment, calcVolumeSurge, calcEMA, calcADX,
+  applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX,
 } from './technical';
 import { applyMlRanking } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
@@ -22,10 +22,10 @@ export function getChgPct(q) {
   return prev > 0 ? (ltp - prev) / prev * 100 : 0;
 }
 
-// ctx: { symbol, token, stocks, cfg, fiiData, adaptWeights, mlModels, onTokenExpired, lg }
+// ctx: { symbol, token, stocks, cfg, fiiInterp, adaptWeights, mlModels, onTokenExpired, lg }
 // callbacks: { setProgress }
 export async function lookupInstrument(ctx, callbacks) {
-  const { symbol, token, stocks, cfg, fiiData, adaptWeights, mlModels, confCalibration, onTokenExpired, lg } = ctx;
+  const { symbol, token, stocks, cfg, fiiInterp, adaptWeights, mlModels, confCalibration, onTokenExpired, lg } = ctx;
   const { setProgress } = callbacks;
   const s = (symbol || '').trim().toUpperCase();
   if (!s) return null;
@@ -115,25 +115,6 @@ export async function lookupInstrument(ctx, callbacks) {
       const numInds = countIndicatorsEx(rsi, macd.bull, a50, a200, volOk, nearS, pats, preRec, macd, bb, adx, rsiDiv);
       const rec = numInds >= 4 ? 'BUY' : numInds >= 3 ? 'MODERATE' : numInds >= 2 ? 'WATCH' : 'AVOID';
       let conf = calcConfidence(null, vixSc, pcrSc, chgPct > 0, 0, q.volume || 0, volObj?.avgVol || 1, pats, preRec, numInds);
-      // Enhancements (parity with stockScan.js — same indicators, same weights)
-      if(macd?.bullCross)                      conf=Math.min(99,conf+6);
-      if(macd?.histRising&&macd?.bullish)       conf=Math.min(99,conf+3);
-      if(macd?.bearCross)                       conf=Math.max(1, conf-8);
-      if(bb?.squeeze)                           conf=Math.min(99,conf+5);
-      if(bb?.nearLowerBand)                     conf=Math.min(99,conf+4);
-      if(bb?.percentB>1.0)                      conf=Math.max(1, conf-5);
-      if(adx?.bullTrend)                        conf=Math.min(99,conf+5);
-      if(adx?.bearTrend)                        conf=Math.max(1, conf-6);
-      if(adx&&!adx.trending&&!adx.weakTrend)    conf=Math.max(1,conf-3);
-      if(rsiDiv?.bullish)         conf=Math.min(99,conf+7+Math.min(5,rsiDiv.strength||0));
-      if(rsiDiv?.hidden_bullish)  conf=Math.min(99,conf+4);
-      if(rsiDiv?.bearish)         conf=Math.max(1, conf-8);
-      if(rsiDiv?.hidden_bearish)  conf=Math.max(1, conf-4);
-      if(vwapBands?.nearLowerBand)              conf=Math.min(99,conf+3);
-      if(vwapBands?.position==='FAR_ABOVE'||vwapBands?.position==='ABOVE_1SD') conf=Math.max(1,conf-4);
-      const delivBoost = delivPct!=null?(delivPct>=60?1:delivPct<=25?-1:0):0;
-      conf=Math.min(100,Math.max(0,conf+delivBoost*5));
-      conf=applyFIIBias(conf, preRec==='BUY'||preRec==='STRONG BUY', null);
       conf=applyCalibration(conf, confCalibration||null);
       const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(chgPct) / 1.0), vixVal);
       conf=applyRegimeAdjustment(conf, stockRegime, cfg);
@@ -150,20 +131,45 @@ export async function lookupInstrument(ctx, callbacks) {
         marketContext: pcrSc>60?1:pcrSc<40?-1:0,
       };
       const confluence = computeConfluence(confluenceModules, 1);
-      conf = applyConfluenceAdjustment(conf, confluence, cfg);
       const risk = calcRisk(ltp, sl, target, atr, 0);
       const pot = calcPotential(ltp, target, sl, numInds, rec);
       const reversal = detectReversal(ltp, rsi, pats, sr, 0, 1.0, chgPct > 0, chgPct, atr, q.ohlc?.high || ltp, q.ohlc?.low || ltp);
       const vwap = calcVWAP(candles);
       const aboveVWAP = vwap > 0 ? ltp >= vwap : null;
+      const isBuyLean = preRec==='BUY'||preRec==='STRONG BUY';
+      // Every previously-hardcoded bonus/penalty (MACD/BB/ADX/RSI-div/VWAP/delivery,
+      // FII bias, confluence tier, reversal sub-signals) is now expressed purely as
+      // a boolean flag — applyAdaptWeights looks up each flag's LEARNED win-rate-lift
+      // adjustment from real closed-signal history, same as stockScan.js.
       const _indSnap = {
-        macdBull: macd.bull===true, macdBullCross: macd?.bullCross===true, macdBearCross: macd?.bearCross===true,
-        bbSqueeze: bb?.squeeze===true, bbNearLower: bb?.nearLowerBand===true, adxBull: adx?.bullTrend===true,
-        adxBear: adx?.bearTrend===true, rsiDiv: rsiDiv?.bullish===true, rsiDivHidden: rsiDiv?.hidden_bullish===true,
-        rsiBearDiv: rsiDiv?.bearish===true, a50: a50===true, a200: a200===true, nearSupp: !!nearS,
-        aboveVWAP: aboveVWAP===true, vwapNearLower: vwapBands?.nearLowerBand===true, engulfing: pats?.bullishEngulfing===true, hammer: pats?.hammer===true,
-        morningStar: pats?.morningStar===true, reversalFired: (reversal?.type || 'NONE') !== 'NONE',
+        macdBull: macd.bull===true, macdBullCross: macd?.bullCross===true,
+        macdHistRising: (macd?.histRising&&macd?.bullish)===true,
+        macdBearCross: macd?.bearCross===true,
+        bbSqueeze: bb?.squeeze===true, bbNearLower: bb?.nearLowerBand===true, bbAboveUpper: bb?.percentB>1.0,
+        adxBull: adx?.bullTrend===true, adxBear: adx?.bearTrend===true,
+        adxNoTrend: !!(adx && !adx.trending && !adx.weakTrend),
+        rsiDiv: rsiDiv?.bullish===true, rsiDivHidden: rsiDiv?.hidden_bullish===true,
+        rsiBearDiv: rsiDiv?.bearish===true, rsiBearDivHidden: rsiDiv?.hidden_bearish===true,
+        a50: a50===true, a200: a200===true, nearSupp: !!nearS,
+        aboveVWAP: aboveVWAP===true, vwapNearLower: vwapBands?.nearLowerBand===true,
+        vwapFarAbove: (vwapBands?.position==='FAR_ABOVE'||vwapBands?.position==='ABOVE_1SD'),
+        engulfing: pats?.bullishEngulfing===true, hammer: pats?.hammer===true,
+        morningStar: pats?.morningStar===true,
         delivHigh: (delivPct??0)>=60, delivLow: (delivPct??100)<=25,
+        reversalFired: (reversal?.type || 'NONE') !== 'NONE',
+        reversalBullish: reversal?.type==='BULLISH_REVERSAL',
+        reversalBearish: reversal?.type==='BEARISH_REVERSAL',
+        rsiOversold: rsi!=null && rsi<=32,
+        rsiOverbought: rsi!=null && rsi>=68,
+        vixVeryLow: vixVal>0 && vixVal<12,
+        vixHighFear: vixVal>=25,
+        near52wLow: !!(sr?.week52L>0 && ltp>0 && Math.abs((ltp-sr.week52L)/ltp*100)<2),
+        near52wHigh: !!(sr?.week52H>0 && ltp>0 && Math.abs((ltp-sr.week52H)/ltp*100)<2),
+        confluenceStrong: confluence.total>0 && confluence.ratio>=0.65 && confluence.agree>=4,
+        confluenceWeak: confluence.total>0 && confluence.ratio<0.5,
+        confluenceConflict: confluence.conflicting>=2,
+        fiiAligned: !!(fiiInterp && ((fiiInterp.bias>0) === isBuyLean) && fiiInterp.bias!==0),
+        fiiAgainst: !!(fiiInterp && ((fiiInterp.bias>0) !== isBuyLean) && fiiInterp.bias!==0),
       };
       conf = applyAdaptWeights(conf, adaptWeights?.stock || null, _indSnap);
       const mlRank = applyMlRanking(conf, mlModels || null, { type:'STOCK', confidence: conf, numInds, risk, pot, rec: preRec, reversal, vix: vixVal, _indSnap });
@@ -262,6 +268,7 @@ export async function lookupInstrument(ctx, callbacks) {
               volSpike: (p.volRatio??0)>=1.5, lowVol: (p.volRatio??1)<0.7, nearPDH: p.priceZone==='PDH_BREAK'||p.priceZone==='NEAR_PDH',
               nearPDL: p.priceZone==='PDL_BREAK'||p.priceZone==='NEAR_PDL', oiBuildUp: p.oiBuildType==='CE_BUILD'||p.oiBuildType==='PE_BUILD',
               compositeHigh: Math.abs(p.compositeScore??0)>=2, compositeMed: Math.abs(p.compositeScore??0)>=1, atm: p.atm||false,
+              vixVeryLow: (p.vix??0)>0 && (p.vix??0)<14, vixHighFear: (p.vix??0)>20,
             };
             let c = applyFIIBias(p.confidence, p.action === 'BUY', fiiData);
             c = applyCalibration(c, confCalibration || null);
