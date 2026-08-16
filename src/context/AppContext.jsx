@@ -413,15 +413,18 @@ export function AppProvider({ children }) {
 
       // ── Stock indicator analysis ──
       const STOCK_INDICATORS = [
-        'macdBull','macdBullCross','macdBearCross','bbSqueeze','bbNearLower',
-        'adxBull','adxBear','rsiDiv','rsiDivHidden','rsiBearDiv',
-        'a50','a200','nearSupp','aboveVWAP','vwapNearLower',
-        'engulfing','hammer','morningStar','reversalFired','delivHigh','delivLow',
+        'macdBull','macdBullCross','macdHistRising','macdBearCross','bbSqueeze','bbNearLower','bbAboveUpper',
+        'adxBull','adxBear','adxNoTrend','rsiDiv','rsiDivHidden','rsiBearDiv','rsiBearDivHidden',
+        'a50','a200','nearSupp','aboveVWAP','vwapNearLower','vwapFarAbove',
+        'engulfing','hammer','morningStar','reversalFired','reversalBullish','reversalBearish',
+        'delivHigh','delivLow','rsiOversold','rsiOverbought','vixVeryLow','vixHighFear',
+        'pcrBearishExtreme','pcrBullishExtreme','near52wLow','near52wHigh',
+        'confluenceStrong','confluenceWeak','confluenceConflict','fiiAligned','fiiAgainst',
       ];
       const OPT_INDICATORS = [
         'trendAligned','emaBull','emaBearish','freshCross','momentumFresh',
         'volSpike','lowVol','nearPDH','nearPDL','oiBuildUp',
-        'compositeHigh','compositeMed','atm',
+        'compositeHigh','compositeMed','atm','vixVeryLow','vixHighFear',
       ];
 
       const MIN_SAMPLES = 8; // minimum signals per indicator before trusting it
