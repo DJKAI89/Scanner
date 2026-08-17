@@ -560,7 +560,7 @@ function BoCard({ r, rank, onPopup }) {
 export default function StocksPane() {
   const { token, cfg, marketStatus, lg, onTokenExpired, updateBadge, gh,
             setScanning, setStatusDot, setStatusTxt,
-           stocks, fiiInterp, setTickerStats, confCalibration, adaptWeights, mlModels } = useApp();
+           stocks, fiiInterp, setTickerStats, confCalibration, adaptWeights, mlModels, vixHistorySeries } = useApp();
 
   const [mode, setMode]               = useState('picks');
   const [picksLoading, setPicksLoading] = useState(false);
@@ -635,7 +635,7 @@ export default function StocksPane() {
     try {
       const ctx = {
         token, stocks, cfg, gh, niftyLTP, niftyChgPct, vixLTP, onTokenExpired, lg,
-        marketStatus, confCalibration, adaptWeights, mlModels,
+        marketStatus, confCalibration, adaptWeights, mlModels, fiiInterp, vixHistorySeries,
       };
       const callbacks = { setPickProgress, setPicks };
       const { picks: nextPicks, scanStats: stats, vixVal } = await runPicksScan(ctx, callbacks);
@@ -659,7 +659,7 @@ export default function StocksPane() {
     if (boLoading) return;
     setBoLoading(true); setBoError(''); setBoProgress('Fetching quotes...');
     try {
-      const ctx = { token, stocks, cfg, onTokenExpired, lg, marketStatus, scanStats };
+      const ctx = { token, stocks, cfg, onTokenExpired, lg, marketStatus, scanStats, vixHistorySeries };
       const callbacks = { setBoProgress, setBoCards };
       const { boStats: stats } = await runBreakoutScan(ctx, callbacks);
       setBoStats(stats);
