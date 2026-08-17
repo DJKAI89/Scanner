@@ -425,6 +425,7 @@ export function AppProvider({ children }) {
         'trendAligned','emaBull','emaBearish','freshCross','momentumFresh',
         'volSpike','lowVol','nearPDH','nearPDL','oiBuildUp',
         'compositeHigh','compositeMed','atm','vixVeryLow','vixHighFear',
+        'confluenceStrong','confluenceWeak','confluenceConflict','fiiAligned','fiiAgainst',
       ];
 
       const MIN_SAMPLES = 8; // minimum signals per indicator before trusting it
