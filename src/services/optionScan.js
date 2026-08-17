@@ -161,7 +161,12 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
     };
   }).filter(p => {
     if (p.aiBlock) return false;
-    if (p.confidence < (mlModels?.thresholds?.option?.minConfidence || cfg.minOptConf)) return false;
+    // Same lockout risk as the stock path (see stockScan.js): only passing
+    // signals get logged, so a stale learned threshold can never self-correct.
+    // Min against the manual Settings value gives a way out without losing
+    // the learned threshold whenever it's already the more permissive one.
+    const effMinConf = Math.min(mlModels?.thresholds?.option?.minConfidence ?? 999, cfg.minOptConf);
+    if (p.confidence < effMinConf) return false;
     const capLimit = mlModels?.thresholds?.option?.maxCapital || cfg.maxOptCapital;
     if (!capLimit || capLimit <= 0) return true; // no capital cap configured
     return p.amtRequired <= capLimit;
