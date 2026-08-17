@@ -82,7 +82,7 @@ export function calcStructure(chain) {
 
 // Builds the per-pick indicator snapshot used by adaptive-weights + ML ranking.
 // Shared by both index-chain and stock-chain scoring passes below.
-function buildIndicatorSnapshot(p) {
+function buildIndicatorSnapshot(p, confluence, fiiInterp, isBuyLean) {
   return {
     trendAligned: p.trendAligned || false,
     emaBull: p.emaTrendBull === true,
@@ -99,17 +99,26 @@ function buildIndicatorSnapshot(p) {
     atm: p.atm || false,
     vixVeryLow: (p.vix ?? 0) > 0 && (p.vix ?? 0) < 14,
     vixHighFear: (p.vix ?? 0) > 20,
+    confluenceStrong: !!confluence && confluence.total > 0 && confluence.ratio >= 0.65 && confluence.agree >= 4,
+    confluenceWeak: !!confluence && confluence.total > 0 && confluence.ratio < 0.5,
+    confluenceConflict: !!confluence && confluence.conflicting >= 2,
+    fiiAligned: !!(fiiInterp && ((fiiInterp.bias > 0) === isBuyLean) && fiiInterp.bias !== 0),
+    fiiAgainst: !!(fiiInterp && ((fiiInterp.bias > 0) !== isBuyLean) && fiiInterp.bias !== 0),
   };
 }
 
-// Applies FII bias + adaptive weights + ML ranking to a raw scanChain pick,
-// then filters by confidence/capital thresholds. Shared by index + stock passes.
+// Applies calibration + regime + adaptive weights (learned) + ML ranking to a
+// raw scanChain pick, then filters by confidence/capital thresholds. FII-bias
+// and confluence-tier are no longer separate fixed-formula adjustments here —
+// they're boolean flags (fiiAligned/fiiAgainst, confluenceStrong/Weak/Conflict)
+// fed into applyAdaptWeights below, same as the stock scan path, so their
+// actual confidence impact is learned from closed-signal win rates instead of
+// a hardcoded magnitude.
 function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalibration, regime, cfg, maxPain = 0, spot = 0 }) {
+  const fiiInterp = interpretFIIDII(fiiData || null);
   return picks.map(p => {
-    const indSnap = buildIndicatorSnapshot(p);
     const base = p.confidence;
-    let c = applyFIIBias(base, p.action === 'BUY', fiiData);
-    const fiiAdj = c - base;
+    let c = base;
     let prev = c;
     c = applyCalibration(c, confCalibration || null);
     const calAdj = c - prev; prev = c;
@@ -129,8 +138,8 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
       marketContext: p.stockPCR != null ? (p.stockPCR > 1.2 ? 1 : p.stockPCR < 0.8 ? -1 : 0) : 0,
     };
     const confluence = computeConfluence(confluenceModules, actionDir);
-    c = applyConfluenceAdjustment(c, confluence, cfg);
-    const confluenceAdj = c - prev; prev = c;
+    const isBuyLean = p.action === 'BUY';
+    const indSnap = buildIndicatorSnapshot(p, confluence, fiiInterp, isBuyLean);
     c = applyAdaptWeights(c, adaptWeights?.option || null, indSnap);
     const adaptAdj = c - prev;
     const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap: indSnap });
@@ -140,7 +149,7 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
       confidence: finalConf,
       regime,
       confluence,
-      confBreakdown: { base, fiiAdj, calAdj, regimeAdj, confluenceAdj, adaptAdj, mlAdj: mlRank.mlAdj, final: finalConf },
+      confBreakdown: { base, calAdj, regimeAdj, adaptAdj, mlAdj: mlRank.mlAdj, final: finalConf },
       _indSnap: indSnap,
       _dte: p._dte ?? null,
       nearMaxPain: maxPain > 0 && spot > 0 && Math.abs(p.strike - maxPain) / spot < 0.01,
