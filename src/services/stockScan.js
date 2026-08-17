@@ -370,9 +370,17 @@ export async function runPicksScan(ctx, callbacks) {
     };
     const rec  = getRec(conf,pot.base,risk,pot.rr);
     const aiThresholds = mlModels?.thresholds?.stock || null;
-    // Raised minStockConf default 50→65 and excluded WATCH/AVOID — your data shows <30% WR below 65%
+    // The learned minConfidence can go stale relative to the CURRENT scoring
+    // formula (e.g. right after removing fixed indicator bonuses in favor of
+    // adaptWeights) — and since only PASSING signals get logged (see
+    // logSignals below), a too-high learned threshold is a lockout: nothing
+    // passes -> nothing logs -> nothing to retrain the threshold down from.
+    // Taking the min against the user's manual Settings value gives a way
+    // out of that lockout without discarding the learned threshold when it's
+    // already the more permissive (i.e. trusted) one.
+    const effMinConf = Math.min(aiThresholds?.minConfidence ?? 999, cfg.minStockConf || 65);
     const passes = !mlRank.aiBlock
-      && conf >= (aiThresholds?.minConfidence || cfg.minStockConf || 65)
+      && conf >= effMinConf
       && pot.base >= (cfg.pot || 3)
       && risk < (aiThresholds?.maxRisk || cfg.risk || 55)
       && pot.rr >= (aiThresholds?.minRR || cfg.rr || 1.2)
