@@ -9,7 +9,7 @@ import {
   getRec, autoSLTarget, calcEntryTrigger, detectReversal, calcMACD,
   isNearSupport, calcRSIDivergence, getSignalStrength,
   calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain,
-  applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX, interpretFIIDII, computeVixPercentile,
+  applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX, computeVixPercentile,
 } from './technical';
 import { applyMlRanking } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
@@ -273,7 +273,8 @@ export async function lookupInstrument(ctx, callbacks) {
             };
             const confluence = computeConfluence(confluenceModules, actionDir);
             const isBuyLean = p.action === 'BUY';
-            const fiiInterp = interpretFIIDII(fiiData || null);
+            // fiiInterp comes from ctx (already interpreted upstream in LookupPane) —
+            // do NOT re-derive it here, this file never receives raw fiiData.
             // FII-bias and confluence-tier are boolean flags fed into
             // applyAdaptWeights (learned), not fixed-formula adjustments —
             // same pattern as the stock lookup path above.
