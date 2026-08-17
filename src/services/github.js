@@ -19,6 +19,7 @@ function getAiFolder()       { return `ai-models/${_uid()}`; }
 function getAiLatestPath()   { return `${getAiFolder()}/latest.json`; }
 function getAiHistoryIndexPath()        { return `${getAiFolder()}/history/index.json`; }
 function getAiHistoryDayPath(date)      { return `${getAiFolder()}/history/${date}.json`; }
+function getVixHistoryPath()            { return `${getAiFolder()}/vix-history.json`; }
 
 // ── Base GitHub fetch ──
 const _ghInflight = new Map();
@@ -126,6 +127,24 @@ export async function pushAiModelToGH(gh, modelPayload) {
       upstoxId: _uid(),
     };
     const r = await _ghPut(gh, getAiLatestPath(), payload, sha, `SCANNER AI model · ${_uid()}`);
+    return r?.ok ?? false;
+  } catch (_) { return false; }
+}
+
+export async function pullVixHistoryFromGH(gh) {
+  try {
+    const d = await _ghFetch(gh, getVixHistoryPath());
+    if (!d) return null;
+    return _decode(d.content);
+  } catch (_) { return null; }
+}
+
+export async function pushVixHistoryToGH(gh, payload) {
+  if (!gh.token || !gh.user || !gh.repo || !payload) return false;
+  try {
+    const existing = await _ghFetch(gh, getVixHistoryPath());
+    const sha = existing?.sha || null;
+    const r = await _ghPut(gh, getVixHistoryPath(), payload, sha, `SCANNER VIX history · ${_uid()}`);
     return r?.ok ?? false;
   } catch (_) { return false; }
 }

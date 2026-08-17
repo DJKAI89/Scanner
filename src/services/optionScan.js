@@ -5,7 +5,7 @@
 import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api.js';
 import { getIST, sleep } from '../utils/marketTime.js';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config.js';
-import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, interpretFIIDII } from './technical.js';
+import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, interpretFIIDII, computeVixPercentile } from './technical.js';
 import { logSignals, buildOptionSignal } from './github.js';
 import { applyMlRanking } from './mlRanking.js';
 
@@ -173,7 +173,7 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
 // caches: { prevAvgIVCache, prevPCRCache } — refs persisted across scans for trend deltas
 // callbacks: { setProgress, setMarketCtxMap, setVix }
 export async function runOptionsScan(ctx, caches, callbacks) {
-  const { accessToken, cfg: cfgIn, stocks, fiiData, adaptWeights, mlModels, confCalibration, gh, onTokenExpired, lg } = ctx;
+  const { accessToken, cfg: cfgIn, stocks, fiiData, adaptWeights, mlModels, confCalibration, gh, onTokenExpired, lg, vixHistorySeries } = ctx;
   // Learned delta/IV gates (mlRanking.optimizeThresholds) override the static
   // 0.40/15 defaults once enough logged option signals exist to sweep them.
   const optGates = mlModels?.thresholds?.option;
@@ -302,7 +302,7 @@ export async function runOptionsScan(ctx, caches, callbacks) {
     }
 
     // Apply FII bias + adaptive weights + ML ranking, then filter
-    const idxRegime = classifyMarketRegime(Math.abs(richCtx.compositeScore || 0) / 3.5, vixVal);
+    const idxRegime = classifyMarketRegime(Math.abs(richCtx.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
     const picksWithFII = scoreAndFilterPicks(allIdxPicks, { fiiData, adaptWeights, mlModels, confCalibration, regime: idxRegime, cfg, maxPain, spot });
 
     lg(`${idx.name}: ${expiriesToScan.length} expiry(s) → ${allIdxPicks.length} raw → ${picksWithFII.length} ≥${cfg.minOptConf}% | composite=${richCtx.compositeScore} pcr=${pcr}`, 'o');
@@ -393,7 +393,7 @@ export async function runOptionsScan(ctx, caches, callbacks) {
           if (exp !== expiry) await sleep(300);
         }
 
-        const stkRegime = classifyMarketRegime(Math.abs(stkCtx.compositeScore || 0) / 3.5, vixVal);
+        const stkRegime = classifyMarketRegime(Math.abs(stkCtx.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
         const fPicks2 = scoreAndFilterPicks(allStkPicks, { fiiData, adaptWeights, mlModels, confCalibration, regime: stkRegime, cfg, maxPain: stkMaxPain, spot });
         if (fPicks2.length) { built.push({ name:inst.s, spot, spotChg, picks:fPicks2, expiry, expiries:expiriesToScan2, chain, maxPain:stkMaxPain, oiWalls:calcOIWalls(chain), pcr:pcr2, pcrTrend:stkCtx.pcrTrend, ivTrend:ivTrend2, type:'stock', fullName:inst.n }); lg(`${inst.s}: ${expiriesToScan2.length} expiry(s) → ${allStkPicks.length} raw → ${fPicks2.length} signals`, 'o'); }
       } catch(e) { lg(inst.s + ' opts: ' + e.message, 'w'); }
