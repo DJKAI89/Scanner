@@ -12,8 +12,8 @@ import {
   boSLTarget, getIntradayPhase, detectPatterns, calcRisk, calcPotential, calcSR,
   countIndicatorsEx, getRec, autoSLTarget, calcEntryTrigger, detectReversal,
   calcMACD, isNearSupport, calcRSIDivergence, getSector, calcConfidence, calcVWAP,
-  calcVWAPBands, applyFIIBias, applyCalibration, applyAdaptWeights, calcEMA, calcIVPercentile,
-  applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment,
+  calcVWAPBands, applyCalibration, applyAdaptWeights, calcEMA, calcIVPercentile,
+  applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment, computeVixPercentile,
 } from './technical.js';
 import { applyMlRanking } from './mlRanking.js';
 import { getIST, getISTDate, sleep } from '../utils/marketTime.js';
@@ -112,7 +112,7 @@ export async function fetchClosedMarketIndexPrices(token, onTokenExpired) {
 // callbacks: { setPickProgress, setPicks }  (setPicks used for the late background enrichment patch)
 export async function runPicksScan(ctx, callbacks) {
   const { token, stocks, cfg, gh, niftyLTP, niftyChgPct, vixLTP, onTokenExpired, lg,
-          marketStatus, confCalibration, adaptWeights, mlModels } = ctx;
+          marketStatus, confCalibration, adaptWeights, mlModels, fiiInterp, vixHistorySeries } = ctx;
   const { setPickProgress, setPicks } = callbacks;
 
   if (!stocks?.length) {
@@ -279,37 +279,15 @@ export async function runPicksScan(ctx, callbacks) {
 
     const numInds = countIndicatorsEx(t.rsi,t.macdBull,t.a50,t.a200,volOk,nearSupp,patterns,preRec,t.macd,t.bb,t.adx,t.rsiDiv);
     let conf = calcConfidence(null,vixSc,pcrSc,nBull,secSc,effectiveVol,avgVol20||effectiveVol,patterns,preRec,numInds);
-
-    // Enhancements (exact HTML order)
-    if(t.macd?.bullCross)                      conf=Math.min(99,conf+6);
-    if(t.macd?.histRising&&t.macd?.bullish)    conf=Math.min(99,conf+3);
-    if(t.macd?.bearCross)                      conf=Math.max(1, conf-8);
-    if(t.bb?.squeeze)                          conf=Math.min(99,conf+5);
-    if(t.bb?.nearLowerBand)                    conf=Math.min(99,conf+4);
-    if(t.bb?.percentB>1.0)                     conf=Math.max(1, conf-5);
-    if(t.adx?.bullTrend)                       conf=Math.min(99,conf+5);
-    if(t.adx?.bearTrend)                       conf=Math.max(1, conf-6);
-    if(t.adx&&!t.adx.trending&&!t.adx.weakTrend) conf=Math.max(1,conf-3);
-    if(t.rsiDiv?.bullish)        conf=Math.min(99,conf+7+Math.min(5,t.rsiDiv.strength||0));
-    if(t.rsiDiv?.hidden_bullish) conf=Math.min(99,conf+4);
-    if(t.rsiDiv?.bearish)        conf=Math.max(1, conf-8);
-    if(t.rsiDiv?.hidden_bearish) conf=Math.max(1, conf-4);
-    if(vwapBands?.nearLowerBand)               conf=Math.min(99,conf+3);
-    if(vwapBands?.position==='FAR_ABOVE'||vwapBands?.position==='ABOVE_1SD') conf=Math.max(1,conf-4);
-    const delivBoost=delivPct!=null?(delivPct>=60?1:delivPct<=25?-1:0):0;
-    conf=Math.min(100,Math.max(0,conf+delivBoost*5));
     const _confBase = conf;
-    conf=applyFIIBias(conf,preRec==='BUY'||preRec==='STRONG BUY',null);
-    const _fiiAdj = conf - _confBase; let _prev = conf;
+
     conf=applyCalibration(conf, confCalibration||null);
-    const _calAdj = conf - _prev; _prev = conf;
-    const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(nChgPct) / 1.0), vixVal);
+    const _calAdj = conf - _confBase; let _prev = conf;
+    const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(nChgPct) / 1.0), vixVal, computeVixPercentile(vixHistorySeries, vixVal));
     conf=applyRegimeAdjustment(conf, stockRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties);
     const _regimeAdj = conf - _prev; _prev = conf;
     // Confluence — 6 independent modules vote bullish/bearish/no-opinion; stocks are
     // always a bullish thesis (no short stock picks), so actionDir is always +1.
-    // Rewards genuine multi-module agreement (doc's "Stock B") over scattered weak
-    // agreement (doc's "Stock A") instead of treating every bonus as additive.
     const confluenceModules = {
       trend: Math.sign((t.a50===true?1:t.a50===false?-1:0) + (t.a200===true?1:t.a200===false?-1:0) + (t.adx?.bullTrend?1:t.adx?.bearTrend?-1:0)),
       momentum: Math.sign((t.macdBull===true?1:t.macdBull===false?-1:0) + (t.rsi>58?1:t.rsi<42?-1:0) + (t.rsiDiv?.bullish?1:t.rsiDiv?.bearish?-1:0)),
@@ -319,22 +297,48 @@ export async function runPicksScan(ctx, callbacks) {
       marketContext: Math.sign((secSc>60?1:secSc<40?-1:0) + (pcrSc>60?1:pcrSc<40?-1:0) + (nBull?1:-1)),
     };
     const confluence = computeConfluence(confluenceModules, 1);
-    conf = applyConfluenceAdjustment(conf, confluence, cfg);
-    const _confluenceAdj = conf - _prev; _prev = conf;
-    // Layer 3: per-indicator learned adjustment from past signal outcomes
+    // Reversal — sub-signal detection only (RSI/PCR/VIX/S-R extremes classify
+    // direction+strength for display). Its confidence IMPACT is not hardcoded
+    // here; see _indSnap below.
     const reversal = detectReversal(ltp,t.rsi,patterns,sr,vixVal,pcr,nBull,chgPct,t.atr||0,high,low);
+    const isBuyLean = preRec==='BUY'||preRec==='STRONG BUY';
+    // Every previously-hardcoded bonus/penalty (MACD/BB/ADX/RSI-div/VWAP/delivery,
+    // FII bias, confluence tier, reversal sub-signals) is now expressed purely as
+    // a boolean flag. None of them touch `conf` directly — applyAdaptWeights below
+    // looks up each flag's LEARNED win-rate-lift adjustment from real closed-signal
+    // history (AppContext computeIndWeights). Flags with no learned data yet simply
+    // contribute 0 (safe cold-start) instead of a guessed constant.
     const _indSnap = {
       macdBull: t.macdBull===true, macdBullCross: t.macd?.bullCross===true,
+      macdHistRising: (t.macd?.histRising&&t.macd?.bullish)===true,
       macdBearCross: t.macd?.bearCross===true, bbSqueeze: t.bb?.squeeze===true,
-      bbNearLower: t.bb?.nearLowerBand===true, adxBull: t.adx?.bullTrend===true,
-      adxBear: t.adx?.bearTrend===true, rsiDiv: t.rsiDiv?.bullish===true,
-      rsiDivHidden: t.rsiDiv?.hidden_bullish===true, rsiBearDiv: t.rsiDiv?.bearish===true,
+      bbNearLower: t.bb?.nearLowerBand===true, bbAboveUpper: t.bb?.percentB>1.0,
+      adxBull: t.adx?.bullTrend===true, adxBear: t.adx?.bearTrend===true,
+      adxNoTrend: !!(t.adx && !t.adx.trending && !t.adx.weakTrend),
+      rsiDiv: t.rsiDiv?.bullish===true, rsiDivHidden: t.rsiDiv?.hidden_bullish===true,
+      rsiBearDiv: t.rsiDiv?.bearish===true, rsiBearDivHidden: t.rsiDiv?.hidden_bearish===true,
       a50: t.a50===true, a200: t.a200===true, nearSupp: !!nearSupp,
       aboveVWAP: aboveVWAP===true, vwapNearLower: vwapBands?.nearLowerBand===true,
+      vwapFarAbove: (vwapBands?.position==='FAR_ABOVE'||vwapBands?.position==='ABOVE_1SD'),
       engulfing: patterns?.bullishEngulfing===true, hammer: patterns?.hammer===true,
       morningStar: patterns?.morningStar===true,
-      reversalFired: (reversal?.type||'NONE')!=='NONE',
       delivHigh: (delivPct??0)>=60, delivLow: (delivPct??100)<=25,
+      reversalFired: (reversal?.type||'NONE')!=='NONE',
+      reversalBullish: reversal?.type==='BULLISH_REVERSAL',
+      reversalBearish: reversal?.type==='BEARISH_REVERSAL',
+      rsiOversold: t.rsi!=null && t.rsi<=32,
+      rsiOverbought: t.rsi!=null && t.rsi>=68,
+      vixVeryLow: vixVal>0 && vixVal<12,
+      vixHighFear: vixVal>=25,
+      pcrBearishExtreme: pcr>=1.3,
+      pcrBullishExtreme: pcr>0 && pcr<=0.65,
+      near52wLow: !!(sr?.week52L>0 && ltp>0 && Math.abs((ltp-sr.week52L)/ltp*100)<2),
+      near52wHigh: !!(sr?.week52H>0 && ltp>0 && Math.abs((ltp-sr.week52H)/ltp*100)<2),
+      confluenceStrong: confluence.total>0 && confluence.ratio>=0.65 && confluence.agree>=4,
+      confluenceWeak: confluence.total>0 && confluence.ratio<0.5,
+      confluenceConflict: confluence.conflicting>=2,
+      fiiAligned: !!(fiiInterp && ((fiiInterp.bias>0) === isBuyLean) && fiiInterp.bias!==0),
+      fiiAgainst: !!(fiiInterp && ((fiiInterp.bias>0) !== isBuyLean) && fiiInterp.bias!==0),
     };
     conf=applyAdaptWeights(conf, adaptWeights?.stock||null, _indSnap);
     const _adaptAdj = conf - _prev;
@@ -360,8 +364,8 @@ export async function runPicksScan(ctx, callbacks) {
     conf = mlRank.confidence;
     conf=Math.min(99,Math.max(1,Math.round(conf)));
     const confBreakdown = {
-      base: Math.round(_confBase), fiiAdj: Math.round(_fiiAdj), calAdj: Math.round(_calAdj),
-      regimeAdj: Math.round(_regimeAdj), confluenceAdj: Math.round(_confluenceAdj),
+      base: Math.round(_confBase), calAdj: Math.round(_calAdj),
+      regimeAdj: Math.round(_regimeAdj),
       adaptAdj: Math.round(_adaptAdj), mlAdj: Math.round(mlRank.mlAdj || 0), final: conf,
     };
     const rec  = getRec(conf,pot.base,risk,pot.rr);
@@ -531,7 +535,7 @@ export function interpVIXSc(vix) {
 // ctx: { token, stocks, cfg, scanStats, onTokenExpired, lg, marketStatus }
 // callbacks: { setBoProgress, setBoCards }
 export async function runBreakoutScan(ctx, callbacks) {
-  const { token, stocks, cfg, onTokenExpired, lg, marketStatus, scanStats, mlModels } = ctx;
+  const { token, stocks, cfg, onTokenExpired, lg, marketStatus, scanStats, mlModels, vixHistorySeries } = ctx;
   const { setBoProgress, setBoCards } = callbacks;
 
   if (!stocks?.length) {
@@ -549,7 +553,7 @@ export async function runBreakoutScan(ctx, callbacks) {
   // fetched above for relative-strength, so this costs only the one extra VIX quote.
   const niftyTrendPct = niftyCloses.length >= 6
     ? Math.abs((niftyCloses.at(-1) - niftyCloses.at(-6)) / niftyCloses.at(-6) * 100) : 0;
-  const marketRegime = classifyMarketRegime(Math.min(1, niftyTrendPct / 2.5), vixVal);
+  const marketRegime = classifyMarketRegime(Math.min(1, niftyTrendPct / 2.5), vixVal, computeVixPercentile(vixHistorySeries, vixVal));
   const scanList=stocks.filter(s=>s.scan!==false);
   // WebSocket quotes — same as picks scan
   setBoProgress('Fetching quotes via WebSocket...');

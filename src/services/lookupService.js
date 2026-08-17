@@ -9,7 +9,7 @@ import {
   getRec, autoSLTarget, calcEntryTrigger, detectReversal, calcMACD,
   isNearSupport, calcRSIDivergence, getSignalStrength,
   calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain,
-  applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX, interpretFIIDII,
+  applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX, interpretFIIDII, computeVixPercentile,
 } from './technical';
 import { applyMlRanking } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
@@ -25,7 +25,7 @@ export function getChgPct(q) {
 // ctx: { symbol, token, stocks, cfg, fiiInterp, adaptWeights, mlModels, onTokenExpired, lg }
 // callbacks: { setProgress }
 export async function lookupInstrument(ctx, callbacks) {
-  const { symbol, token, stocks, cfg, fiiInterp, adaptWeights, mlModels, confCalibration, onTokenExpired, lg } = ctx;
+  const { symbol, token, stocks, cfg, fiiInterp, adaptWeights, mlModels, confCalibration, onTokenExpired, lg, vixHistorySeries } = ctx;
   const { setProgress } = callbacks;
   const s = (symbol || '').trim().toUpperCase();
   if (!s) return null;
@@ -116,7 +116,7 @@ export async function lookupInstrument(ctx, callbacks) {
       const rec = numInds >= 4 ? 'BUY' : numInds >= 3 ? 'MODERATE' : numInds >= 2 ? 'WATCH' : 'AVOID';
       let conf = calcConfidence(null, vixSc, pcrSc, chgPct > 0, 0, q.volume || 0, volObj?.avgVol || 1, pats, preRec, numInds);
       conf=applyCalibration(conf, confCalibration||null);
-      const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(chgPct) / 1.0), vixVal);
+      const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(chgPct) / 1.0), vixVal, computeVixPercentile(vixHistorySeries, vixVal));
       conf=applyRegimeAdjustment(conf, stockRegime, cfg);
       // Confluence — same 6-module framework as stockScan.js (parity); no peer
       // group here for a real sector score, so marketContext relies on NIFTY PCR only.
@@ -258,7 +258,7 @@ export async function lookupInstrument(ctx, callbacks) {
         const step = inst.step || (ltp < 200 ? 5 : ltp < 500 ? 10 : ltp < 2000 ? 20 : ltp < 5000 ? 50 : 100);
         const atm = Math.round(ltp / step) * step;
         const ctxForChain = marketCtx || computeCtxFromCandles([], ltp, chgPct, 0, null);
-        const optRegime = classifyMarketRegime(Math.abs(ctxForChain?.compositeScore || 0) / 3.5, vixVal);
+        const optRegime = classifyMarketRegime(Math.abs(ctxForChain?.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
         const picks = scanChain(chain, atm, ltp, s, expiry, inst.lot, chgPct > 0, 0, maxPain, pcr, ctxForChain, cfg);
         const filteredPicks = picks
           .map((p) => {

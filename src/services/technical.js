@@ -410,10 +410,26 @@ export function calcNR7(candles) {
 // normTrendStrength should already be 0-1 by the time it reaches here; each
 // caller normalizes its own best-available trend signal (compositeScore where
 // computed, day-change % as a lighter proxy where it isn't).
-export function classifyMarketRegime(normTrendStrength, vix) {
+// Rank of `value` within `series` as a 0-100 percentile (what % of the
+// rolling history is <= value). Needs at least 40 samples to be
+// statistically meaningful — callers should treat a null return as "not
+// enough history yet" and fall back to fixed cutoffs.
+export function computeVixPercentile(series, value) {
+  if (!Array.isArray(series) || series.length < 40 || value == null) return null;
+  const below = series.filter(v => v <= value).length;
+  return Math.round((below / series.length) * 100);
+}
+
+export function classifyMarketRegime(normTrendStrength, vix, vixPercentile = null) {
   const ts = Math.max(0, Math.min(1, normTrendStrength || 0));
-  const highVol = (vix || 0) >= 22;
-  const lowVol  = (vix || 0) > 0 && vix <= 13;
+  // When enough rolling VIX history exists, classify off where today's VIX
+  // sits in its OWN recent distribution (top/bottom 20%) instead of fixed
+  // absolute levels — those go stale as VIX's "normal" range drifts across
+  // market cycles. Falls back to the fixed 22/13 cutoffs when history is
+  // thin (<40 sessions) or unavailable, same gating pattern used elsewhere
+  // (calibrateRegimePenalties, computeIndWeights).
+  const highVol = vixPercentile != null ? vixPercentile >= 80 : (vix || 0) >= 22;
+  const lowVol  = vixPercentile != null ? vixPercentile <= 20 : ((vix || 0) > 0 && vix <= 13);
   const choppy   = ts < 0.3;
   const trending = ts >= 0.6;
   if (choppy && highVol) return 'CHOPPY_HIGH_VOL';
