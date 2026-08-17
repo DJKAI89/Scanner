@@ -228,7 +228,7 @@ function OptionSuggestionCard({ pick, cfg, showTools = true }) {
 }
 
 export default function LookupPane() {
-  const { token, cfg, onTokenExpired, lg, stocks, fiiData, fiiInterp, adaptWeights, mlModels, confCalibration, pendingLookupSymbol, setPendingLookupSymbol } = useApp();
+  const { token, cfg, onTokenExpired, lg, stocks, fiiData, fiiInterp, adaptWeights, mlModels, confCalibration, pendingLookupSymbol, setPendingLookupSymbol, vixHistorySeries } = useApp();
   const [sym, setSym] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -300,7 +300,7 @@ export default function LookupPane() {
     setProgress('Searching for ' + s + '...');
 
     try {
-      const ctx = { symbol: s, token, stocks, cfg, fiiData, adaptWeights, mlModels, confCalibration, onTokenExpired, lg };
+      const ctx = { symbol: s, token, stocks, cfg, fiiInterp, adaptWeights, mlModels, confCalibration, onTokenExpired, lg, vixHistorySeries };
       const callbacks = { setProgress };
       const nextResult = await lookupInstrument(ctx, callbacks);
       setResult(nextResult);
