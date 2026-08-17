@@ -9,7 +9,7 @@ import {
   getRec, autoSLTarget, calcEntryTrigger, detectReversal, calcMACD,
   isNearSupport, calcRSIDivergence, getSignalStrength,
   calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain,
-  applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX,
+  applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX, interpretFIIDII,
 } from './technical';
 import { applyMlRanking } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
@@ -262,18 +262,7 @@ export async function lookupInstrument(ctx, callbacks) {
         const picks = scanChain(chain, atm, ltp, s, expiry, inst.lot, chgPct > 0, 0, maxPain, pcr, ctxForChain, cfg);
         const filteredPicks = picks
           .map((p) => {
-            const _indSnap = {
-              trendAligned: p.trendAligned||false, emaBull: p.emaTrendBull===true, emaBearish: p.emaTrendBull===false,
-              freshCross: p.emaCross==='bullish_cross'||p.emaCross==='bearish_cross', momentumFresh: p.momentumFresh||false,
-              volSpike: (p.volRatio??0)>=1.5, lowVol: (p.volRatio??1)<0.7, nearPDH: p.priceZone==='PDH_BREAK'||p.priceZone==='NEAR_PDH',
-              nearPDL: p.priceZone==='PDL_BREAK'||p.priceZone==='NEAR_PDL', oiBuildUp: p.oiBuildType==='CE_BUILD'||p.oiBuildType==='PE_BUILD',
-              compositeHigh: Math.abs(p.compositeScore??0)>=2, compositeMed: Math.abs(p.compositeScore??0)>=1, atm: p.atm||false,
-              vixVeryLow: (p.vix??0)>0 && (p.vix??0)<14, vixHighFear: (p.vix??0)>20,
-            };
-            let c = applyFIIBias(p.confidence, p.action === 'BUY', fiiData);
-            c = applyCalibration(c, confCalibration || null);
-            c = applyRegimeAdjustment(c, optRegime, cfg);
-            const optActionDir = p.type === 'CE' ? 1 : -1;
+            const actionDir = p.type === 'CE' ? 1 : -1;
             const confluenceModules = {
               trend: Math.sign((p.emaTrendBull===true?1:p.emaTrendBull===false?-1:0) + (p.emaCross==='bullish_cross'?1:p.emaCross==='bearish_cross'?-1:0)),
               momentum: p.momentumFresh ? Math.sign(p.compositeScore || 0) : 0,
@@ -282,8 +271,28 @@ export async function lookupInstrument(ctx, callbacks) {
               institutional: p.oiBuildType==='CE_BUILD' ? 1 : p.oiBuildType==='PE_BUILD' ? -1 : 0,
               marketContext: p.stockPCR != null ? (p.stockPCR > 1.2 ? 1 : p.stockPCR < 0.8 ? -1 : 0) : 0,
             };
-            const confluence = computeConfluence(confluenceModules, optActionDir);
-            c = applyConfluenceAdjustment(c, confluence, cfg);
+            const confluence = computeConfluence(confluenceModules, actionDir);
+            const isBuyLean = p.action === 'BUY';
+            const fiiInterp = interpretFIIDII(fiiData || null);
+            // FII-bias and confluence-tier are boolean flags fed into
+            // applyAdaptWeights (learned), not fixed-formula adjustments —
+            // same pattern as the stock lookup path above.
+            const _indSnap = {
+              trendAligned: p.trendAligned||false, emaBull: p.emaTrendBull===true, emaBearish: p.emaTrendBull===false,
+              freshCross: p.emaCross==='bullish_cross'||p.emaCross==='bearish_cross', momentumFresh: p.momentumFresh||false,
+              volSpike: (p.volRatio??0)>=1.5, lowVol: (p.volRatio??1)<0.7, nearPDH: p.priceZone==='PDH_BREAK'||p.priceZone==='NEAR_PDH',
+              nearPDL: p.priceZone==='PDL_BREAK'||p.priceZone==='NEAR_PDL', oiBuildUp: p.oiBuildType==='CE_BUILD'||p.oiBuildType==='PE_BUILD',
+              compositeHigh: Math.abs(p.compositeScore??0)>=2, compositeMed: Math.abs(p.compositeScore??0)>=1, atm: p.atm||false,
+              vixVeryLow: (p.vix??0)>0 && (p.vix??0)<14, vixHighFear: (p.vix??0)>20,
+              confluenceStrong: confluence.total>0 && confluence.ratio>=0.65 && confluence.agree>=4,
+              confluenceWeak: confluence.total>0 && confluence.ratio<0.5,
+              confluenceConflict: confluence.conflicting>=2,
+              fiiAligned: !!(fiiInterp && ((fiiInterp.bias>0)===isBuyLean) && fiiInterp.bias!==0),
+              fiiAgainst: !!(fiiInterp && ((fiiInterp.bias>0)!==isBuyLean) && fiiInterp.bias!==0),
+            };
+            let c = p.confidence;
+            c = applyCalibration(c, confCalibration || null);
+            c = applyRegimeAdjustment(c, optRegime, cfg);
             c = applyAdaptWeights(c, adaptWeights?.option || null, _indSnap);
             const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap });
             return { ...p, regime: optRegime, confluence, confidence: mlRank.confidence, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj };
