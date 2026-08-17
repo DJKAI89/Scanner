@@ -844,7 +844,16 @@ export function applyMlRanking(confidence, models, sigLike) {
 
   const nextConfidence = clamp(Math.round(confidence + adj), 1, 99);
   const explanation = explainMlPrediction(sigLike, { ...models, featureNames: model.featureNames });
-  const aiBlock = probability < ((familyThresholds?.probability || 0.62) - 0.1);
+  // Same stale-threshold lockout risk as minConfidence (see stockScan.js/
+  // optionScan.js): familyThresholds.probability is learned from historical
+  // signals logged under whatever scoring formula was live at the time. If
+  // the formula changes (e.g. removing fixed indicator bonuses) the model's
+  // probability output shifts too, but the block floor doesn't move until a
+  // fresh retrain happens — and since blocked signals never get logged, that
+  // retrain can't happen. Capping the floor at 0.5 (a genuine "worse than a
+  // coinflip" line, not a tuned magic number) keeps the block meaningful
+  // without letting a stale threshold lock signal flow out entirely.
+  const aiBlock = probability < Math.min((familyThresholds?.probability || 0.62) - 0.1, 0.5);
   return {
     confidence: nextConfidence,
     mlProbability: Math.round(probability * 100),
