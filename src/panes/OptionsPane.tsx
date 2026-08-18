@@ -323,6 +323,26 @@ export default function OptionsPane() {
   }
 
   const { txt: vixTxt } = interpVIX(vix);
+  // Tab scoping (index/action/trend) — shared by the strict pass below AND
+  // the fallback, so every tab gets the SAME fallback behavior instead of
+  // only 'all' having one. Previously a tab like Sensex/BankNifty/FinNifty
+  // would go completely blank if nothing for that index cleared the
+  // confidence gate, while All kept showing whatever won the global top-8 —
+  // that inconsistency (All shows something, other tabs show nothing) was
+  // the actual bug, not the tab routing itself.
+  function matchesTab(p, g) {
+    if (filter === 'nifty')     return g.name === 'NIFTY';
+    if (filter === 'banknifty') return g.name === 'BANKNIFTY';
+    if (filter === 'sensex')    return g.name === 'SENSEX';
+    if (filter === 'finnifty')  return g.name === 'FINNIFTY';
+    if (filter === 'stocks')    return g.type === 'stock';
+    if (filter === 'buy')       return p.action === 'BUY';
+    if (filter === 'sell')      return p.action === 'SELL';
+    if (filter === 'aligned')   return p.trendAligned;
+    if (filter === 'counter')   return !p.trendAligned;
+    return true; // 'all'
+  }
+
   const filtered = useMemo(() => liveGroups.map(g => ({
     ...g,
     picks: g.picks.filter(p => {
@@ -335,29 +355,20 @@ export default function OptionsPane() {
       const effCapLimit = mlModels?.thresholds?.option?.maxCapital || cfg.maxOptCapital;
       if (effCapLimit > 0 && p.amtRequired > effCapLimit) return false;
       if (p.confidence < effMinConf) return false;
-      // Tab filter
-      if (filter === 'nifty')     return g.name === 'NIFTY';
-      if (filter === 'banknifty') return g.name === 'BANKNIFTY';
-      if (filter === 'sensex')    return g.name === 'SENSEX';
-      if (filter === 'finnifty')  return g.name === 'FINNIFTY';
-      if (filter === 'stocks')    return g.type === 'stock';
-      if (filter === 'buy')       return p.action === 'BUY';
-      if (filter === 'sell')      return p.action === 'SELL';
-      if (filter === 'aligned')   return p.trendAligned;
-      if (filter === 'counter')   return !p.trendAligned;
-      return true; // 'all'
+      return matchesTab(p, g);
     }),
   })).filter(g => g.picks.length > 0), [liveGroups, filter, cfg.maxOptCapital, cfg.minOptConf, mlModels]);
 
-  // Safety net: if the confidence/capital gate empties every group (e.g. a
-  // learned threshold overshoots on a small/noisy sample), fall back to the
-  // top picks by confidence — same pattern stocks already use — instead of
-  // silently rendering nothing.
+  // Safety net: if the confidence/capital gate empties every group for the
+  // CURRENT tab (e.g. a learned threshold overshoots on a small/noisy
+  // sample), fall back to the top picks by confidence scoped to that same
+  // tab — instead of only doing this for 'all' and leaving every other tab
+  // silently blank.
   const displayGroups = useMemo(() => {
-    if (filtered.length > 0 || filter !== 'all') return filtered;
-    const allRaw = liveGroups.flatMap(g => g.picks.map(p => ({ ...p, _group: g })));
-    if (!allRaw.length) return filtered;
-    const top = allRaw.sort((a, b) => b.confidence - a.confidence).slice(0, 8);
+    if (filtered.length > 0) return filtered;
+    const scopedRaw = liveGroups.flatMap(g => g.picks.filter(p => matchesTab(p, g)).map(p => ({ ...p, _group: g })));
+    if (!scopedRaw.length) return [];
+    const top = scopedRaw.sort((a, b) => b.confidence - a.confidence).slice(0, 8);
     const byGroup = new Map();
     for (const p of top) {
       const key = p._group.name;
