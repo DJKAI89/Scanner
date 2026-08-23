@@ -198,7 +198,6 @@ function _cacheGet(date, maxAgeMs = 90000) {
   if (!c || Date.now() - c.loadedAt > maxAgeMs) return null;
   return c;
 }
-export function getLastSignalLogFailReason() { return _lastWriteFailReason; }
 
 export async function ghReadDay(gh, date) {
   const cached = _cacheGet(date);
