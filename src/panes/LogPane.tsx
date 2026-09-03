@@ -290,6 +290,10 @@ export default function LogPane() {
     if (filter!=='all'&&s.status!==filter) return false;
     if (typeFilter!=='all'&&s.type!==typeFilter) return false;
     return true;
+  }).sort((a, b) => {
+    const order = { OPEN: 0, TARGET_HIT: 1, SL_HIT: 2, EXPIRED: 3 };
+    const da = order[a.status] ?? 4, db = order[b.status] ?? 4;
+    return da - db;
   });
 
   // Derive stats from filtered signals — auto-updates when WS resolves or dropdown changes
