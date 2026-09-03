@@ -60,7 +60,14 @@ function finalizeClose(sig, ltp, istDate, istTime, reason) {
   if (remaining > 0) partials.push({ level: reason === 'TARGET' ? 'T3' : reason, price: ltp, time: istTime, pctClosed: remaining });
 
   const blended = partials.reduce((s, t) => s + signedPnlPct(sig, t.price) * (t.pctClosed / 100), 0);
-  const status = reason === 'EXPIRY' ? 'EXPIRED' : (blended >= 0 ? 'TARGET_HIT' : 'SL_HIT');
+  // If any partial target level (T1/T2/T3) genuinely fired at any point, the
+  // trade counts as TARGET_HIT even if the blended P&L across all tranches
+  // (including a later SL/trail-stop close on the remainder) works out
+  // marginally negative — e.g. a gap through the break-even stop. Blended
+  // P&L is still recorded accurately in pnlPct either way; only the
+  // win/loss STATUS label follows the "any target hit" rule.
+  const anyTargetHit = partials.some(p => p.level === 'T1' || p.level === 'T2' || p.level === 'T3');
+  const status = reason === 'EXPIRY' ? 'EXPIRED' : (anyTargetHit || blended >= 0 ? 'TARGET_HIT' : 'SL_HIT');
   return {
     status, exitPrice: +ltp.toFixed(2), exitTime: istTime, exitDate: istDate,
     pnlPct: +blended.toFixed(2), exitReason: reason, partials, remainingPct: 0,
