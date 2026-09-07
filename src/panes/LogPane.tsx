@@ -26,6 +26,17 @@ const EXIT_REASON_LABELS = {
 
 function SignalRow({ sig, livePrice }) {
   const sc = STATUS_COLORS[sig.status] || STATUS_COLORS.OPEN;
+  // `status` is purely a win/loss classification (blended P&L sign) —
+  // tradeManagement.js sets TARGET_HIT/SL_HIT off P&L, not off whether the
+  // price actually touched a target/SL level. That's fine for win-rate math
+  // (adaptWeights/calibration all key off it correctly), but rendering it
+  // verbatim as the badge is misleading for a TIME_STOP/TRAIL_STOP exit —
+  // "TARGET HIT" implies T1/T2/T3 was reached, which it wasn't. Badge COLOR
+  // still reflects win/loss (unchanged); only the TEXT is corrected for
+  // exits that weren't actually triggered by hitting a target or SL level.
+  const badgeLabel = (sig.exitReason === 'TIME_STOP' || sig.exitReason === 'TRAIL_STOP')
+    ? (sig.status === 'TARGET_HIT' ? 'CLOSED · WIN' : sig.status === 'SL_HIT' ? 'CLOSED · LOSS' : sig.status?.replace('_',' '))
+    : sig.status?.replace('_',' ');
   const isBuy  = isBullSignal(sig); // uses shared isBullSignal (handles BUY/SELL/CALL/PUT)
   const isOpt  = sig.type === 'OPTION';
   const ltp    = livePrice ?? null;
@@ -94,7 +105,7 @@ function SignalRow({ sig, livePrice }) {
             {sig.signal}
           </span>
           <span style={{ fontSize:8, fontWeight:800, padding:'2px 8px', borderRadius:20, background:sc.bg, color:sc.color, border:`1px solid ${sc.border}` }}>
-            {sig.status?.replace('_',' ')}
+            {badgeLabel}
           </span>
         </div>
       </div>
@@ -290,10 +301,6 @@ export default function LogPane() {
     if (filter!=='all'&&s.status!==filter) return false;
     if (typeFilter!=='all'&&s.type!==typeFilter) return false;
     return true;
-  }).sort((a, b) => {
-    const order = { OPEN: 0, TARGET_HIT: 1, SL_HIT: 2, EXPIRED: 3 };
-    const da = order[a.status] ?? 4, db = order[b.status] ?? 4;
-    return da - db;
   });
 
   // Derive stats from filtered signals — auto-updates when WS resolves or dropdown changes
