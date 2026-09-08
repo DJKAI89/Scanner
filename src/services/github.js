@@ -376,30 +376,16 @@ export function buildStockSignal(p, vixVal) {
     mlProbability:  p.mlProbability ?? null,
     mlAdj:          p.mlAdj ?? null,
     // ── Indicator snapshot — used by adaptWeights to learn which signals predict wins ──
-    indicators: {
-      macdBull:         p.macdBull              === true,
-      macdBullCross:    p.macd?.bullCross        === true,
-      macdBearCross:    p.macd?.bearCross        === true,
-      bbSqueeze:        p.bb?.squeeze            === true,
-      bbNearLower:      p.bb?.nearLowerBand      === true,
-      adxBull:          p.adx?.bullTrend         === true,
-      adxBear:          p.adx?.bearTrend         === true,
-      rsiDiv:           p.rsiDiv?.bullish        === true,
-      rsiDivHidden:     p.rsiDiv?.hidden_bullish === true,
-      rsiBearDiv:       p.rsiDiv?.bearish        === true,
-      a50:              p.a50                    === true,
-      a200:             p.a200                   === true,
-      nearSupp:         !!p.nearSupp,
-      aboveVWAP:        p.aboveVWAP              === true,
-      vwapNearLower:    p.vwapBands?.nearLowerBand === true,
-      engulfing:        p.patterns?.bullishEngulfing === true,
-      hammer:           p.patterns?.hammer       === true,
-      morningStar:      p.patterns?.morningStar  === true,
-      reversalFired:    (p.reversal?.type || 'NONE') !== 'NONE',
-      delivHigh:        (p.delivPct ?? 0) >= 60,
-      delivLow:         (p.delivPct ?? 100) <= 25,
-      numInds:          p.numInds || 0,
-    },
+    // p._indSnap is the SAME object already used at scan time (applyAdaptWeights)
+    // in stockScan.js/lookupService.js. Persisting it directly — instead of a
+    // separate hand-maintained field list here — is the fix for a real bug: this
+    // list had drifted out of sync with _indSnap (missing vixVeryLow, vixHighFear,
+    // confluenceStrong/Weak/Conflict, fiiAligned/Against, rsiOversold/Overbought,
+    // near52wLow/High, and others), so every one of those flags was silently
+    // discarded at log time and could never accumulate the samples adaptWeights
+    // needs to learn from them — no matter how long the app ran.
+    indicators: p._indSnap || {},
+    regime: p.regime || null,
     status:         'OPEN',
     holdDays,
     atr:            p.atr || 0,
@@ -458,21 +444,12 @@ export function buildOptionSignal(p, vixVal) {
     oiBuildType:    p.oiBuildType     || '',
     trendAligned:   p.trendAligned    || false,
     // ── Indicator snapshot for adaptWeights ──
-    indicators: {
-      trendAligned:   p.trendAligned    || false,
-      emaBull:        p.emaTrendBull    === true,
-      emaBearish:     p.emaTrendBull    === false,
-      freshCross:     p.emaCross === 'bullish_cross' || p.emaCross === 'bearish_cross',
-      momentumFresh:  p.momentumFresh   || false,
-      volSpike:       (p.volRatio ?? 0) >= 1.5,
-      lowVol:         (p.volRatio ?? 1) < 0.7,
-      nearPDH:        p.priceZone === 'abovePDH' || p.priceZone === 'nearPDH',
-      nearPDL:        p.priceZone === 'belowPDL' || p.priceZone === 'nearPDL',
-      oiBuildUp:      p.oiBuildType === 'LONG_BUILD' || p.oiBuildType === 'SHORT_COVER',
-      compositeHigh:  Math.abs(p.compositeScore ?? 0) >= 2,
-      compositeMed:   Math.abs(p.compositeScore ?? 0) >= 1,
-      atm:            p.atm             || false,
-    },
+    // Same fix as buildStockSignal above: persist the actual _indSnap object
+    // computed at scan time instead of a separate, drift-prone field list —
+    // this one was missing vixVeryLow, vixHighFear, confluenceStrong/Weak/
+    // Conflict, and fiiAligned/Against entirely.
+    indicators: p._indSnap || {},
+    regime: p.regime || null,
     status:         'OPEN',
     holdDays:       strengthLabel === 'STRONG' ? 3 : strengthLabel === 'MODERATE' ? 2 : 1,
     riskDist:       +Math.abs((p.entry || 0) - (p.sl || 0)).toFixed(2),
