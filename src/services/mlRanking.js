@@ -652,7 +652,10 @@ function trainFamily(signals, type, featureNames) {
 
   const servingModel = chooseRollback(globalModel, segmentModels);
   const thresholds = optimizeThresholds(baseDataset, servingModel, type);
-  thresholds.regimePenalties = calibrateRegimePenalties(signals.filter((s) => s.type === type));
+  // Must exclude OPEN signals — calibrateRegimePenalties treats anything
+  // that isn't status==='TARGET_HIT' as a loss, so an unresolved position
+  // would get silently counted as a loss for its regime bucket otherwise.
+  thresholds.regimePenalties = calibrateRegimePenalties(signals.filter((s) => s.type === type && s.status !== 'OPEN'));
   return {
     global: globalModel,
     segments: Object.fromEntries(segmentModels.map((m) => [m.label, m])),
