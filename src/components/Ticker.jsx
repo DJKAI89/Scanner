@@ -11,12 +11,12 @@ const INDICES = [
 ];
 
 export default function Ticker() {
-  const { token, onTokenExpired, booted } = useApp();
+  const { token, onTokenExpired, booted, scanning } = useApp();
   // Always on once logged in — not tied to any specific tab/pane's state,
   // so it keeps updating (5s poll, same as before) no matter which page
   // is open. useIndexFeed itself no-ops without a token, so this is safe
   // to mount unconditionally.
-  const feed = useIndexFeed(token, onTokenExpired, booted);
+  const feed = useIndexFeed(token, onTokenExpired, booted, scanning);
 
   if (!booted) return null;
 
