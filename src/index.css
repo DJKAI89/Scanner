@@ -32,6 +32,15 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#0f172
 /* TICKER */
 .tkr-w{overflow:hidden;background:#0f172a;padding:5px 0;border-bottom:2px solid #16a34a}
 .tkr-i{display:inline-block;white-space:nowrap;animation:ticker 30s linear infinite;color:#4ade80;font-size:10px;font-family:monospace}
+.idx-strip{display:flex;overflow-x:auto;background:#fff;border-bottom:1px solid #e2e8f0;position:sticky;top:0;z-index:190;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.idx-strip::-webkit-scrollbar{display:none}
+.idx-card{flex:1 0 auto;min-width:140px;padding:8px 14px}
+.idx-card-lbl{font-size:9px;font-weight:700;color:#64748b;letter-spacing:.4px;margin-bottom:2px;white-space:nowrap}
+.idx-card-val{display:flex;align-items:baseline;gap:6px;white-space:nowrap}
+.idx-card-ltp{font-size:15px;font-weight:800;color:#0f172a}
+.idx-card-up{font-size:11px;font-weight:700;color:#16a34a}
+.idx-card-dn{font-size:11px;font-weight:700;color:#dc2626}
+.idx-card-loading{font-size:13px;color:#94a3b8}
 
 /* HAMBURGER */
 .menu-btn{background:none;border:none;cursor:pointer;padding:6px 8px;display:flex;flex-direction:column;gap:5px;border-radius:6px;flex-shrink:0}
