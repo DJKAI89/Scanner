@@ -582,7 +582,7 @@ export default function StocksPane() {
   const scanInProgress = useRef(false);
 
   // ── Index WebSocket ──────────────────────────────────────────
-  const { lastPrices: liveIndexPrices, connected: idxConnected } = useMarketFeed(
+  const { lastPrices: liveIndexPrices } = useMarketFeed(
     token, INDEX_WS_KEYS, !!token
   );
 
@@ -600,12 +600,11 @@ export default function StocksPane() {
   const idxPrices = { ...closedIdxPrices, ...liveIndexPrices };
 
   // ── Derive live index values (idxPrices MUST be declared above this line) ──
+  // Only niftyLTP/vixLTP are actually consumed (fed into scan ctx below) —
+  // bnkLTP/bnkChgPct/bnkPts/niftyPts were only used by the display cards
+  // removed above (now shown in the global Ticker header instead).
   const niftyLTP    = idxPrices['NSE_INDEX|Nifty 50']?.ltp    || 0;
   const niftyChgPct = idxPrices['NSE_INDEX|Nifty 50']?.chgPct || 0;
-  const niftyPts    = niftyLTP > 0 ? +(niftyChgPct / 100 * niftyLTP).toFixed(2) : 0;
-  const bnkLTP      = idxPrices['NSE_INDEX|Nifty Bank']?.ltp    || 0;
-  const bnkChgPct   = idxPrices['NSE_INDEX|Nifty Bank']?.chgPct || 0;
-  const bnkPts      = bnkLTP > 0 ? +(bnkChgPct / 100 * bnkLTP).toFixed(2) : 0;
   const vixLTP      = idxPrices['NSE_INDEX|India VIX']?.ltp     || 0;
 
   // ── Stock picks WebSocket ──
@@ -708,18 +707,10 @@ export default function StocksPane() {
           {picksLoading&&<div style={{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:8,padding:'10px 14px',marginBottom:10}}><div style={{fontSize:11,fontWeight:700,color:'#1d4ed8',marginBottom:4}}>⏳ Scanning... {pickProgress}</div><div style={{height:3,background:'#e2e8f0',borderRadius:3}}><div style={{height:'100%',background:'#3b82f6',borderRadius:3,width:'60%',animation:'pulse 1.5s ease-in-out infinite'}}/></div></div>}
           {!picksLoading||picks.length>0?(
             <div>
-              {/* 6 stat cards — live via WebSocket */}
+              {/* 4 stat cards — live via WebSocket. NIFTY 50 / BANK NIFTY cards
+                  removed here: the global Ticker header already shows those
+                  (plus Sensex) on every page now, so this was a duplicate. */}
               <div className="stats-g">
-                <div className="sc">
-                  <div className="sc-lbl">NIFTY 50 {idxConnected?'⚡':''}</div>
-                  <div className={`sc-val ${niftyChgPct>=0?'up':'dn'}`}>{niftyLTP?`₹${fmt(niftyLTP,0)}`:'—'}</div>
-                  <div className={`sc-sub ${niftyChgPct>=0?'up':'dn'}`}>{niftyPts>=0?'+':''}{niftyPts.toFixed(2)} pts</div>
-                </div>
-                <div className="sc">
-                  <div className="sc-lbl">BANK NIFTY {idxConnected?'⚡':''}</div>
-                  <div className={`sc-val ${bnkChgPct>=0?'up':'dn'}`}>{bnkLTP?`₹${fmt(bnkLTP,0)}`:'—'}</div>
-                  <div className={`sc-sub ${bnkPts>=0?'up':'dn'}`}>{bnkPts>=0?'+':''}{bnkPts.toFixed(2)} pts</div>
-                </div>
                 <div className="sc">
                   <div className="sc-lbl">INDIA VIX</div>
                   <div className={`sc-val ${vixLTP>20?'dn':vixLTP>15?'am':'up'}`}>{vixLTP?vixLTP.toFixed(2):'—'}</div>
@@ -777,10 +768,9 @@ export default function StocksPane() {
           {boError&&<ErrorBanner title="⚠ Breakout Error" message={boError} onRetry={runBreakout}/>}
           {boLoading?<Spinner label="Breakout Scanner..." progress={boProgress} sub="EMA 50/200 · PDH/PDL · Supertrend · Vol · 52Wk · Gap · NR7 · BB · RS · Wick"/>:(
             <div>
-              {/* Live index cards — same WebSocket */}
+              {/* Nifty/BankNifty cards removed — global Ticker header covers
+                  those (plus Sensex) on every page now. VIX kept, not duplicated there. */}
               <div className="stats-g" style={{marginBottom:10}}>
-                <div className="sc"><div className="sc-lbl">NIFTY {idxConnected?'⚡':''}</div><div className={`sc-val ${niftyChgPct>=0?'up':'dn'}`}>{niftyLTP?`₹${fmt(niftyLTP,0)}`:'—'}</div><div className={`sc-sub ${niftyPts>=0?'up':'dn'}`}>{niftyPts>=0?'+':''}{niftyPts.toFixed(2)} pts</div></div>
-                <div className="sc"><div className="sc-lbl">BANKNIFTY {idxConnected?'⚡':''}</div><div className={`sc-val ${bnkChgPct>=0?'up':'dn'}`}>{bnkLTP?`₹${fmt(bnkLTP,0)}`:'—'}</div><div className={`sc-sub ${bnkPts>=0?'up':'dn'}`}>{bnkPts>=0?'+':''}{bnkPts.toFixed(2)} pts</div></div>
                 <div className="sc"><div className="sc-lbl">INDIA VIX</div><div className={`sc-val ${vixLTP>20?'dn':vixLTP>15?'am':'up'}`}>{vixLTP?vixLTP.toFixed(2):'—'}</div></div>
               </div>
               <div className="last-upd">
