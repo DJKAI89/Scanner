@@ -7,7 +7,6 @@ const INDICES = [
   { key: 'nifty',     label: 'NIFTY 50' },
   { key: 'banknifty', label: 'BANK NIFTY' },
   { key: 'sensex',    label: 'SENSEX' },
-  { key: 'finnifty',  label: 'FINNIFTY' },
 ];
 
 export default function Ticker() {
