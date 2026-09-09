@@ -2,12 +2,13 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { fetchQ } from '../services/api';
 
 // Index keys — Upstox REST API (NSE_INDEX not reliably supported on WS)
+// FinNifty dropped for now (not shown in the Ticker) — no other consumer of
+// this hook needs it, so no point fetching it every 5s.
 const INDEX_KEYS = [
   'NSE_INDEX|Nifty 50',
   'NSE_INDEX|Nifty Bank',
   'NSE_INDEX|India VIX',
   'BSE_INDEX|SENSEX',
-  'NSE_INDEX|Nifty Fin Service',
 ];
 
 function parseQ(q) {
@@ -71,7 +72,6 @@ export function useIndexFeed(token, onTokenExpired, enabled = true, scanning = f
   const banknifty = prices['NSE_INDEX|Nifty Bank']         || null;
   const vix       = prices['NSE_INDEX|India VIX']          || null;
   const sensex    = prices['BSE_INDEX|SENSEX']             || null;
-  const finnifty  = prices['NSE_INDEX|Nifty Fin Service']  || null;
 
-  return { prices, nifty, banknifty, vix, sensex, finnifty, loading };
+  return { prices, nifty, banknifty, vix, sensex, loading };
 }
