@@ -39,11 +39,11 @@ export function useIndexFeed(token, onTokenExpired, enabled = true) {
       setPrices(prev => {
         const next = { ...prev };
         for (const [key, q] of Object.entries(d)) {
-          const chgPct  = parseQ(q);
+          const parsed = parseQ(q);
            next[key] = {
               ltp:    q.last_price,
-              chgPct,
-              pts:    q.net_change ?? (chgPct / 100 * q.last_price),
+              chgPct: parsed?.chgPct ?? 0,
+              pts:    q.net_change ?? parsed?.pts ?? 0,
               volume: q.volume || 0,
            };
         }
