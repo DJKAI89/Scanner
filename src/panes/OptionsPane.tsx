@@ -4,7 +4,7 @@ import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyS
 import { resolveAccessToken } from '../services/api';
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST, getISTDate } from '../utils/marketTime';
-import { INDEX_OPTS, isWeeklyExpiryDay } from '../constants/config';
+import { isWeeklyExpiryDay } from '../constants/config';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote, Banner } from '../components/cardKit';
 import { ConfidenceBreakdown } from '../components/ConfidenceBreakdown';
@@ -16,32 +16,6 @@ const OPT_FILTERS = [
   { id:'buy',label:'📈 BUY' },{ id:'sell',label:'📉 SELL' },
   { id:'aligned',label:'✅ With-Trend' },{ id:'counter',label:'⚠ Counter-Trend' },
 ];
-
-function IndexLiveCard({ group, live, ctx }) {
-  const spot = live?.ltp || group.spot || 0;
-  const cp = live?.cp || (group.spotChg != null ? group.spot / (1 + group.spotChg / 100) : group.spot) || spot;
-  const pts = spot - cp;
-  const pct = cp > 0 ? (pts / cp) * 100 : group.spotChg || 0;
-  const positive = pts >= 0;
-  return (
-    <div style={{ background:'#fff', border:'1px solid #dbe3ee', borderRadius:8, padding:'11px 13px', boxShadow:'0 1px 3px rgba(15,23,42,.06)' }}>
-      <div style={{ fontSize:9, color:'#94a3b8', letterSpacing:.7, marginBottom:5 }}>{group.name} SPOT · LIVE</div>
-      <div style={{ fontSize:20, lineHeight:1, fontWeight:850, color:positive ? '#16a34a' : '#dc2626' }}>₹{fmt(spot, 0)}</div>
-      <div style={{ fontSize:10, color:positive ? '#16a34a' : '#dc2626', marginTop:5 }}>{positive ? '+' : ''}{pts.toFixed(2)} pts</div>
-      <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center', fontSize:9, marginTop:7 }}>
-        <span>PCR <b>{group.pcr?.toFixed(2) || '—'}</b></span>
-        <span style={{ color:positive ? '#16a34a' : '#dc2626' }}>{fmtC(pct)}</span>
-        {live && <span style={{ color:'#16a34a', fontWeight:700 }}>LIVE</span>}
-      </div>
-      <div style={{ fontSize:9, color:'#64748b', marginTop:4 }}>
-        🎯₹{fmt(group.maxPain || 0, 0)} · 📉₹{fmt(group.oiWalls?.callWall || 0, 0)} · 📈₹{fmt(group.oiWalls?.putWall || 0, 0)}
-      </div>
-      <div style={{ fontSize:9, color:ctx?.neutral ? '#d97706' : ctx?.bullish ? '#16a34a' : '#dc2626', marginTop:4, fontWeight:700 }}>
-        {ctx?.neutral ? 'Neutral' : ctx?.bullish ? 'With-trend' : 'Weak trend'}  · WS
-      </div>
-    </div>
-  );
-}
 
 function OptionCard({ pick, cfg: cardCfg }) {
   const { openSignalSymbols } = useApp();
@@ -257,7 +231,12 @@ export default function OptionsPane() {
   const [marketCtxMap, setMarketCtxMap] = useState({});
   const loadingRef = useRef(false);
   const prevAvgIVCache = useRef({}), prevPCRCache = useRef({});
-  const liveKeys = useMemo(() => [...INDEX_OPTS.map((idx) => idx.key), VIX_KEY], []);
+  // Index spot cards (Nifty/BankNifty/Sensex/FinNifty) were removed below —
+  // the global Ticker header now covers that. VIX still needs its own live
+  // feed here since Ticker doesn't show it, but the 4 index keys no longer
+  // have any consumer in this file, so dropping them from the subscription
+  // reduces WS/API load on this page instead of just hiding the display.
+  const liveKeys = useMemo(() => [VIX_KEY], []);
 
   const { lastPrices: liveIndexPrices } = useMarketFeed(
     accessToken, liveKeys, liveKeys.length > 0, { pollFallback: true }
@@ -412,19 +391,10 @@ export default function OptionsPane() {
             </div>
           )}
 
-          {/* Index stats */}
+          {/* Index stats — Nifty/BankNifty/Sensex/FinNifty spot cards removed;
+              the global Ticker header shows that now. VIX kept since it's
+              not duplicated there. */}
           <div className="opt-idx-grid">
-            {liveGroups.map(g => {
-              const idx = INDEX_OPTS.find((item) => item.name === g.name);
-              return (
-                <IndexLiveCard
-                  key={g.name}
-                  group={g}
-                  live={idx ? liveIndexPrices[idx.key] : null}
-                  ctx={marketCtxMap[g.name]}
-                />
-              );
-            })}
             {vix > 0 && (
               <div style={{ background:'#fff', border:'1px solid #dbe3ee', borderRadius:8, padding:'11px 13px', boxShadow:'0 1px 3px rgba(15,23,42,.06)' }}>
                 <div style={{ fontSize:9, color:'#94a3b8', letterSpacing:.7, marginBottom:5 }}>INDIA VIX · LIVE</div>
