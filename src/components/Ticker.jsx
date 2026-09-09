@@ -1,37 +1,47 @@
 import React from 'react';
 import { useApp } from '../context/AppContext';
 import { useIndexFeed } from '../hooks/useIndexFeed';
-import { fmt, fmtC, interpVIX } from '../utils/formatters';
+import { fmt } from '../utils/formatters';
 
-function fmtNum(n, dec = 2) {
-  return Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: dec });
-}
+const INDICES = [
+  { key: 'nifty',     label: 'NIFTY 50' },
+  { key: 'banknifty', label: 'BANK NIFTY' },
+  { key: 'sensex',    label: 'SENSEX' },
+  { key: 'finnifty',  label: 'FINNIFTY' },
+];
 
 export default function Ticker() {
-  const { token, onTokenExpired, tickerStats, activeTab } = useApp();
-  const feedEnabled = activeTab === 'stocks' || activeTab === 'options';
-  const { nifty, banknifty, sensex } = useIndexFeed(token, onTokenExpired, feedEnabled);
-  const { vix, pcr, sentiment, sentSc, topSec } = tickerStats || {};
+  const { token, onTokenExpired, booted } = useApp();
+  // Always on once logged in — not tied to any specific tab/pane's state,
+  // so it keeps updating (5s poll, same as before) no matter which page
+  // is open. useIndexFeed itself no-ops without a token, so this is safe
+  // to mount unconditionally.
+  const feed = useIndexFeed(token, onTokenExpired, booted);
 
-  const sign = n => n >= 0 ? '+' : '';
-    const liveParts = [
-    sensex ? `SENSEX ${fmt(sensex.ltp)} [${sensex.pts >= 0 ? '+' : ''}${fmt(sensex.pts)} pts]` : 'SENSEX --',
-    nifty ? `NIFTY ${fmt(nifty.ltp)} [${nifty.pts >= 0 ? '+' : ''}${fmt(nifty.pts)} pts]` : 'NIFTY --',
-    banknifty ? `BANKNIFTY ${fmt(banknifty.ltp)} [${banknifty.pts >= 0 ? '+' : ''}${fmt(banknifty.pts)} pts]` : 'BANKNIFTY --',
-    // vix       ? `VIX ${Number(vix).toFixed(1)}`                                                   : null,
-    // pcr != null ? `PCR ${Number(pcr).toFixed(2)}`                                                 : null,
-    // sentiment ? `${sentiment} ${sentSc ?? 5}/10`                                                  : null,
-    // topSec    ? `Top: ${topSec}`                                                                   : null,
-  ].filter(Boolean);
+  if (!booted) return null;
 
-  const text = '  ' + liveParts.join('  ●  ') + '  ';
-
-  // return (
-  //   <div className="tkr-w">
-  //     <div className="tkr-i">{text.repeat(5)}</div>
-  //   </div>
-  // );
-  return(
-    null
+  return (
+    <div className="idx-strip">
+      {INDICES.map((idx, i) => {
+        const d = feed[idx.key];
+        const up = (d?.pts ?? 0) >= 0;
+        return (
+          <div className="idx-card" key={idx.key} style={i > 0 ? { borderLeft: '1px solid #e2e8f0' } : undefined}>
+            <div className="idx-card-lbl">{idx.label}</div>
+            {d ? (
+              <div className="idx-card-val">
+                <span className="idx-card-ltp">{fmt(d.ltp)}</span>
+                <span className={up ? 'idx-card-up' : 'idx-card-dn'}>
+                  {up ? '+' : ''}{fmt(d.pts)} ({up ? '+' : ''}{d.chgPct}%)
+                </span>
+              </div>
+            ) : (
+              <div className="idx-card-val idx-card-loading">—</div>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
+
