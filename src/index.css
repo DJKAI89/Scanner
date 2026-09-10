@@ -6,16 +6,38 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#0f172
 :root{
   --pad:12px;
   --gap:8px;
-  --fs-xs:8px; --fs-sm:9px; --fs-base:11px; --fs-md:12px; --fs-lg:14px; --fs-xl:16px;
+  /* Type scale — was a cramped 8/9/11/12/14/16px cluster with nothing that
+     read as "the" number on a screen. --fs-hero is new: reserved for the
+     one most important figure in a given view (ticker LTP, a headline
+     stat) — everything else stays close to where it was. */
+  --fs-2xs:9px; --fs-xs:10px; --fs-sm:11.5px; --fs-base:13px; --fs-md:15px; --fs-lg:19px; --fs-hero:26px;
   --card-min:280px;
   --cols-stat:repeat(auto-fill,minmax(clamp(100px,22vw,160px),1fr));
+
+  /* One accent, distinct from bull/bear — used only for "this is live"
+     signal (badges, connection dots on streaming values), never for
+     direction, so it can't be mistaken for a buy/sell cue. Pulled from the
+     teal already in the logo gradient rather than inventing a new color. */
+  --accent:#0d9488;
+  --accent-ink:#0f766e;
+  --accent-tint:#f0fdfa;
+  --accent-ring:rgba(13,148,136,.18);
+
+  /* Elevation — was one flat shadow formula (same rgba(0,0,0,.0X), only
+     the opacity changed) applied to everything regardless of importance.
+     Three real tiers now: flat for secondary/quiet surfaces, raised for
+     normal content cards, live for streaming-data surfaces (adds a soft
+     accent glow instead of just a darker grey shadow). */
+  --shadow-flat:0 1px 2px rgba(15,23,42,.05);
+  --shadow-raised:0 3px 10px rgba(15,23,42,.08);
+  --shadow-live:0 3px 14px rgba(15,23,42,.10), 0 0 0 1px var(--accent-ring);
 }
 @media(min-width:480px){:root{--pad:14px;--gap:10px;--card-min:300px;--cols-stat:repeat(auto-fill,minmax(140px,1fr))}}
 @media(min-width:768px){:root{--pad:16px;--gap:12px;--card-min:320px;--cols-stat:repeat(auto-fill,minmax(160px,1fr))}}
 @media(min-width:1024px){:root{--pad:20px;--gap:14px;--card-min:340px;--cols-stat:repeat(auto-fill,minmax(170px,1fr))}}
 
 /* HEADER */
-.hdr{background:#fff;border-bottom:1px solid #e2e8f0;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 1px 4px rgba(0,0,0,.06);position:sticky;top:0;z-index:200;gap:8px}
+.hdr{background:#fff;border-bottom:1px solid #e2e8f0;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;box-shadow:var(--shadow-flat);position:sticky;top:0;z-index:200;gap:8px}
 .logo{display:flex;align-items:center;gap:9px;min-width:0}
 .logo-ic{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#16a34a,#0d9488);display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(22,163,74,.3);flex-shrink:0}
 .logo-ic span{color:#fff;font-weight:900;font-size:14px}
@@ -32,15 +54,19 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#0f172
 /* TICKER */
 .tkr-w{overflow:hidden;background:#0f172a;padding:5px 0;border-bottom:2px solid #16a34a}
 .tkr-i{display:inline-block;white-space:nowrap;animation:ticker 30s linear infinite;color:#4ade80;font-size:10px;font-family:monospace}
-.idx-strip{display:flex;overflow-x:auto;background:#fff;border-bottom:1px solid #e2e8f0;position:sticky;top:0;z-index:190;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.idx-strip{display:flex;overflow-x:auto;background:#fff;border-bottom:1px solid #e2e8f0;position:sticky;top:0;z-index:190;-webkit-overflow-scrolling:touch;scrollbar-width:none;box-shadow:var(--shadow-flat)}
 .idx-strip::-webkit-scrollbar{display:none}
-.idx-card{flex:1 0 auto;min-width:140px;padding:8px 14px}
-.idx-card-lbl{font-size:9px;font-weight:700;color:#64748b;letter-spacing:.4px;margin-bottom:2px;white-space:nowrap}
-.idx-card-val{display:flex;align-items:baseline;gap:6px;white-space:nowrap}
-.idx-card-ltp{font-size:15px;font-weight:800;color:#0f172a}
-.idx-card-up{font-size:11px;font-weight:700;color:#16a34a}
-.idx-card-dn{font-size:11px;font-weight:700;color:#dc2626}
+.idx-card{flex:1 0 auto;min-width:140px;padding:9px 14px}
+.idx-card-lbl{font-size:var(--fs-2xs);font-weight:700;color:#64748b;letter-spacing:.5px;margin-bottom:3px;white-space:nowrap}
+.idx-card-val{display:flex;align-items:baseline;gap:7px;white-space:nowrap}
+.idx-card-ltp{font-size:var(--fs-md);font-weight:800;color:#0f172a;letter-spacing:-.2px}
+.idx-card-up{font-size:var(--fs-xs);font-weight:700;color:#16a34a}
+.idx-card-dn{font-size:var(--fs-xs);font-weight:700;color:#dc2626}
 .idx-card-loading{font-size:13px;color:#94a3b8}
+/* "Live" badge — accent teal, deliberately NOT green/red so a streaming
+   badge next to a falling price never reads as a bullish signal. */
+.badge-live{display:inline-flex;align-items:center;gap:4px;font-size:var(--fs-2xs);font-weight:800;color:var(--accent-ink);letter-spacing:.3px}
+.badge-live::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--accent);animation:pulse 2s infinite}
 
 /* HAMBURGER */
 .menu-btn{background:none;border:none;cursor:pointer;padding:6px 8px;display:flex;flex-direction:column;gap:5px;border-radius:6px;flex-shrink:0}
@@ -92,16 +118,19 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#0f172
 
 /* STATS GRID */
 .stats-g{display:grid;grid-template-columns:var(--cols-stat);gap:var(--gap);margin-bottom:12px}
-.sc{background:#fff;border:1px solid #e2e8f0;border-radius:9px;padding:clamp(8px,2.5vw,12px);box-shadow:0 1px 3px rgba(0,0,0,.04);min-width:0}
-.sc-lbl{font-size:clamp(7px,1.8vw,9px);color:#94a3b8;letter-spacing:.8px;margin-bottom:3px;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.sc-val{font-size:clamp(14px,3.5vw,20px);font-weight:800;line-height:1.1}
-.sc-sub{font-size:clamp(9px,2vw,11px);font-weight:600;margin-top:2px}
-.sc-note{font-size:clamp(7px,1.6vw,9px);color:#94a3b8;margin-top:2px;line-height:1.4}
+.sc{background:#fff;border:1px solid #e2e8f0;border-radius:9px;padding:clamp(9px,2.5vw,13px);box-shadow:var(--shadow-raised);min-width:0}
+.sc-lbl{font-size:var(--fs-2xs);color:#94a3b8;letter-spacing:.7px;margin-bottom:4px;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:700}
+.sc-val{font-size:clamp(15px,3.6vw,21px);font-weight:800;line-height:1.1;letter-spacing:-.3px}
+.sc-sub{font-size:clamp(9px,2vw,11px);font-weight:600;margin-top:3px}
+.sc-note{font-size:var(--fs-2xs);color:#94a3b8;margin-top:2px;line-height:1.4}
 .up{color:#16a34a}.dn{color:#dc2626}.bl{color:#1d4ed8}.am{color:#d97706}.pu{color:#7c3aed}
+/* Reserved for the single most important number on a screen — a bigger
+   jump than anything else in the scale, used sparingly and deliberately. */
+.hero-val{font-size:var(--fs-hero);font-weight:800;line-height:1;letter-spacing:-.6px}
 
 /* CARDS GRID */
 .cards-g{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,var(--card-min)),1fr));gap:var(--gap)}
-.card{border-radius:11px;padding:clamp(11px,3vw,14px);position:relative;box-shadow:0 2px 8px rgba(0,0,0,.05);animation:fadeIn .3s ease both;min-width:0;overflow:hidden}
+.card{border-radius:11px;padding:clamp(11px,3vw,14px);position:relative;box-shadow:var(--shadow-raised);animation:fadeIn .3s ease both;min-width:0;overflow:hidden}
 .card.strong-buy{background:#f0fdf4;border:2px solid #16a34a}
 .card.buy{background:#f0fdf4;border:1.5px solid #bbf7d0}
 .card.moderate{background:#f0f9ff;border:1.5px solid #bae6fd}
@@ -143,7 +172,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#0f172
 .c-bars{margin-bottom:8px}
 .bar-row{display:flex;align-items:center;gap:5px;margin-bottom:4px}
 .bar-lbl{font-size:clamp(7px,1.7vw,9px);color:#64748b;width:clamp(50px,14vw,75px);flex-shrink:0}
-.bar-track{flex:1;height:5px;background:#e2e8f0;border-radius:3px;overflow:hidden;min-width:0}
+.bar-track{flex:1;height:6px;background:#eef2f6;border-radius:3px;overflow:hidden;min-width:0;box-shadow:inset 0 1px 2px rgba(15,23,42,.06)}
 .bar-fill{height:100%;border-radius:3px;transition:width .5s ease}
 .bar-val{font-size:clamp(8px,1.8vw,10px);font-weight:700;width:30px;text-align:right;flex-shrink:0}
 
@@ -241,7 +270,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#0f172
 .lkp-dd-sec{font-size:9px;background:#e2e8f0;color:#64748b;border-radius:4px;padding:1px 5px;margin-left:auto;flex-shrink:0}
 .lkp-q{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:3px 9px;font-size:10px;font-weight:700;cursor:pointer;color:#374151;white-space:nowrap}
 .lkp-q:hover{background:#e2e8f0}
-.empty-state{background:#fff;border:1px solid #e2e8f0;border-radius:9px;padding:clamp(20px,8vw,40px);text-align:center;color:#94a3b8;font-size:12px}
+.empty-state{background:#fff;border:1.5px dashed #cbd5e1;border-radius:12px;padding:clamp(26px,8vw,48px) clamp(16px,6vw,32px);text-align:center;color:#64748b;font-size:var(--fs-base);line-height:1.7;box-shadow:var(--shadow-flat)}
 .opt-group-hdr{font-size:11px;font-weight:800;color:#374151;margin:14px 0 8px;padding:6px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px}
 
 /* TOAST */
