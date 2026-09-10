@@ -1,5 +1,5 @@
 import React from 'react';
-import Icon from 'Icon.jsx';
+import Icon from './Icon.jsx';
 
 /**
  * cardKit — shared professional card primitives for Stocks / Breakout / Options pages.
