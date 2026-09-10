@@ -9,6 +9,7 @@ import {
 import { fmt } from '../utils/formatters';
 import { getIST, getISTDate } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed.js';
+import Icon from '../components/Icon.jsx';
 
 const STATUS_COLORS = {
   OPEN:       { bg:'#eff6ff', color:'#1d4ed8', border:'#bfdbfe' },
@@ -17,26 +18,15 @@ const STATUS_COLORS = {
   EXPIRED:    { bg:'#f8fafc', color:'#64748b', border:'#e2e8f0' },
 };
 const EXIT_REASON_LABELS = {
-  TARGET:     '🎯 Target',
-  SL:         '❌ Stop loss',
-  TRAIL_STOP: '📈 Trail stop',
-  TIME_STOP:  '⏱ Time stop',
-  EXPIRY:     '⌛ Expired',
+  TARGET:     { icon:'target',    text:'Target' },
+  SL:         { icon:'cross',     text:'Stop loss' },
+  TRAIL_STOP: { icon:'trendUp',   text:'Trail stop' },
+  TIME_STOP:  { icon:'clock',     text:'Time stop' },
+  EXPIRY:     { icon:null,        text:'⌛ Expired' },
 };
 
 function SignalRow({ sig, livePrice }) {
   const sc = STATUS_COLORS[sig.status] || STATUS_COLORS.OPEN;
-  // `status` is purely a win/loss classification (blended P&L sign) —
-  // tradeManagement.js sets TARGET_HIT/SL_HIT off P&L, not off whether the
-  // price actually touched a target/SL level. That's fine for win-rate math
-  // (adaptWeights/calibration all key off it correctly), but rendering it
-  // verbatim as the badge is misleading for a TIME_STOP/TRAIL_STOP exit —
-  // "TARGET HIT" implies T1/T2/T3 was reached, which it wasn't. Badge COLOR
-  // still reflects win/loss (unchanged); only the TEXT is corrected for
-  // exits that weren't actually triggered by hitting a target or SL level.
-  const badgeLabel = (sig.exitReason === 'TIME_STOP' || sig.exitReason === 'TRAIL_STOP')
-    ? (sig.status === 'TARGET_HIT' ? 'CLOSED · WIN' : sig.status === 'SL_HIT' ? 'CLOSED · LOSS' : sig.status?.replace('_',' '))
-    : sig.status?.replace('_',' ');
   const isBuy  = isBullSignal(sig); // uses shared isBullSignal (handles BUY/SELL/CALL/PUT)
   const isOpt  = sig.type === 'OPTION';
   const ltp    = livePrice ?? null;
@@ -80,23 +70,23 @@ function SignalRow({ sig, livePrice }) {
   }, [ltp]);
 
   const typeIcon = isOpt
-    ? (sig.optType === 'CE' ? '📈' : '📉')
-    : '📊';
+    ? (sig.optType === 'CE' ? 'trendUp' : 'trendDown')
+    : 'target';
 
   return (
-    <div className={flash} style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:'12px 14px', marginBottom:8, transition:'background .3s' }}>
+    <div className={flash} style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:'12px 14px', marginBottom:8, transition:'background .3s', boxShadow:'var(--shadow-raised)' }}>
       {/* Header */}
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:6, marginBottom:8 }}>
         <div>
-          <span style={{ fontWeight:800, fontSize:14 }}>{typeIcon} {sig.stock || sig.name}</span>
+          <span style={{ fontWeight:800, fontSize:14 }}><Icon name={typeIcon} size={13} style={{ marginRight:4 }}/>{sig.stock || sig.name}</span>
           {isOpt && (
             <span style={{ fontSize:9, background:'#e0e7ff', color:'#3730a3', borderRadius:4, padding:'1px 5px', marginLeft:6, fontWeight:700 }}>
               {sig.strike} {sig.optType} {sig.expiry}
             </span>
           )}
           {ltp && sig.status==='OPEN' && (
-            <span style={{ fontSize:9, background:'#dcfce7', color:'#16a34a', borderRadius:4, padding:'1px 5px', marginLeft:6, fontWeight:800 }}>
-              ⚡ ₹{fmt(ltp)}
+            <span className="badge-live" style={{ marginLeft:6 }}>
+              ₹{fmt(ltp)}
             </span>
           )}
         </div>
@@ -105,7 +95,7 @@ function SignalRow({ sig, livePrice }) {
             {sig.signal}
           </span>
           <span style={{ fontSize:8, fontWeight:800, padding:'2px 8px', borderRadius:20, background:sc.bg, color:sc.color, border:`1px solid ${sc.border}` }}>
-            {badgeLabel}
+            {sig.status?.replace('_',' ')}
           </span>
         </div>
       </div>
@@ -140,7 +130,7 @@ function SignalRow({ sig, livePrice }) {
                 background: hit ? '#f0fdf4' : '#f8fafc',
                 border: `1px solid ${hit ? '#86efac' : '#e2e8f0'}`,
               }}>
-                <div style={{ fontSize:7, fontWeight:800, color: hit ? '#16a34a' : '#94a3b8' }}>{hit ? '✅ ' : ''}{t.l}</div>
+                <div style={{ fontSize:7, fontWeight:800, color: hit ? '#16a34a' : '#94a3b8' }}>{hit && <Icon name="check" size={8} style={{ marginRight:2 }}/>}{t.l}</div>
                 <div style={{ fontSize:10.5, fontWeight:700, color: hit ? '#16a34a' : '#334155' }}>{t.v ? `₹${fmt(t.v)}` : '—'}</div>
               </div>
             );
@@ -152,11 +142,11 @@ function SignalRow({ sig, livePrice }) {
       {(partials.length > 0 || sig.beActive) && (
         <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginBottom:8 }}>
           {sig.beActive && (
-            <span style={{ fontSize:8, fontWeight:800, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:6, padding:'2px 7px' }}>🔒 Break-even active</span>
+            <span style={{ fontSize:8, fontWeight:800, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:6, padding:'2px 7px' }}><Icon name="lock" size={9} style={{ marginRight:3 }}/>Break-even active</span>
           )}
           {partials.map((p, i) => (
             <span key={i} style={{ fontSize:8, fontWeight:800, background:'#f0fdf4', color:'#16a34a', border:'1px solid #bbf7d0', borderRadius:6, padding:'2px 7px' }}>
-              ✅ {p.level} @ ₹{fmt(p.price)} ({p.pctClosed}%)
+              <Icon name="check" size={9} style={{ marginRight:3 }}/>{p.level} @ ₹{fmt(p.price)} ({p.pctClosed}%)
             </span>
           ))}
           {sig.remainingPct != null && sig.remainingPct < 100 && sig.status === 'OPEN' && (
@@ -169,24 +159,24 @@ function SignalRow({ sig, livePrice }) {
 
       {/* Live P&L + progress bar (OPEN signals with live price) */}
       {sig.status==='OPEN' && ltp != null && (
-        <div style={{ background:pnlPct!=null&&pnlPct>=0?'#f0fdf4':'#fef2f2', borderRadius:8, padding:'8px 10px', marginBottom:8 }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:5 }}>
+        <div style={{ background:pnlPct!=null&&pnlPct>=0?'#f0fdf4':'#fef2f2', border:`1px solid ${pnlPct!=null&&pnlPct>=0?'#bbf7d0':'#fecaca'}`, borderRadius:8, padding:'9px 11px', marginBottom:8 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
             <div>
-              <div style={{ fontSize:7, color:'#94a3b8' }}>LIVE P&L</div>
-              <div style={{ fontSize:15, fontWeight:800, color:pnlPct!=null&&pnlPct>=0?'#16a34a':'#dc2626' }}>
+              <div style={{ fontSize:9, fontWeight:700, letterSpacing:.4, color:'#94a3b8' }}>LIVE P&L</div>
+              <div style={{ fontSize:16, fontWeight:800, letterSpacing:-.3, color:pnlPct!=null&&pnlPct>=0?'#16a34a':'#dc2626' }}>
                 {pnlPct!=null ? (pnlPct>=0?'+':'')+pnlPct.toFixed(2)+'%' : '—'}
               </div>
             </div>
             {slDist!=null && (
               <div style={{ textAlign:'center' }}>
-                <div style={{ fontSize:11, color:'#94a3b8' }}>SL DIST</div>
-                <div style={{ fontSize:11, fontWeight:700, color:pnlPct<0?'#dc2626':'#64748b' }}>
+                <div style={{ fontSize:9, fontWeight:700, letterSpacing:.4, color:'#94a3b8' }}>SL DIST</div>
+                <div style={{ fontSize:12, fontWeight:700, color:pnlPct<0?'#dc2626':'#64748b' }}>
                   {pnlPct>=0?'+':'-'}{slDist}%
                 </div>
               </div>
             )}
             <div style={{ textAlign:'right' }}>
-              <div style={{ fontSize:7, color:'#94a3b8' }}>LIVE PRICE</div>
+              <div style={{ fontSize:9, fontWeight:700, letterSpacing:.4, color:'#94a3b8' }}>LIVE PRICE</div>
               <div style={{ fontSize:13, fontWeight:700 }}>₹{fmt(ltp)}</div>
             </div>
           </div>
@@ -194,15 +184,15 @@ function SignalRow({ sig, livePrice }) {
           {/* Progress bar: entry → target */}
           {toPct!=null && (
             <div>
-              <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'#94a3b8', marginBottom:3, fontWeight:700}}>
+              <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'#94a3b8', marginBottom:4, fontWeight:700}}>
                 <span>Entry ₹{fmt(entry)}</span>
                 <span>To Target {toPct}%</span>
                 <span>₹{fmt(tgtVal)}</span>
               </div>
-              <div style={{ height:6, background:'#e2e8f0', borderRadius:3, overflow:'hidden' }}>
+              <div style={{ height:7, background:'#eef2f6', borderRadius:4, overflow:'hidden', boxShadow:'inset 0 1px 2px rgba(15,23,42,.07)' }}>
                 <div style={{
-                  height:'100%', borderRadius:3, transition:'width .4s ease',
-                  background: toPct>=100?'#16a34a':toPct>=50?'#22c55e':toPct>=0?'#3b82f6':'#dc2626',
+                  height:'100%', borderRadius:4, transition:'width .4s ease',
+                  background: toPct>=100?'linear-gradient(90deg,#16a34a,#22c55e)':toPct>=50?'linear-gradient(90deg,#22c55e,#4ade80)':toPct>=0?'linear-gradient(90deg,#3b82f6,#60a5fa)':'linear-gradient(90deg,#dc2626,#ef4444)',
                   width: Math.min(100, Math.max(0, toPct))+'%',
                 }} />
               </div>
@@ -214,11 +204,17 @@ function SignalRow({ sig, livePrice }) {
       {/* Footer */}
       <div style={{ fontSize:9, color:'#94a3b8', display:'flex', gap:10, flexWrap:'wrap' }}>
         <span>📅 {sig.date} {(sig.time||'').slice(0,5)}</span>
-        {sig.rr     && <span>⚖ R:R {sig.rr}</span>}
-        {isOpt && sig.lot && <span>📦 {sig.lot} qty</span>}
+        {sig.rr     && <span><Icon name="scale" size={10} style={{ marginRight:2 }}/>R:R {sig.rr}</span>}
+        {isOpt && sig.lot && <span><Icon name="box" size={10} style={{ marginRight:2 }}/>{sig.lot} qty</span>}
         {sig.strength && <span>💪 {sig.strength}</span>}
-        {sig.exitPrice && <span>🏁 Exit ₹{fmt(sig.exitPrice)}</span>}
-        {sig.exitReason && <span>{EXIT_REASON_LABELS[sig.exitReason] || sig.exitReason}</span>}
+        {sig.exitPrice && <span><Icon name="flag" size={10} style={{ marginRight:2 }}/>Exit ₹{fmt(sig.exitPrice)}</span>}
+        {sig.exitReason && (
+          <span>
+            {EXIT_REASON_LABELS[sig.exitReason]
+              ? <>{EXIT_REASON_LABELS[sig.exitReason].icon && <Icon name={EXIT_REASON_LABELS[sig.exitReason].icon} size={11} style={{ marginRight:3 }}/>}{EXIT_REASON_LABELS[sig.exitReason].text}</>
+              : sig.exitReason}
+          </span>
+        )}
       </div>
     </div>
   );
