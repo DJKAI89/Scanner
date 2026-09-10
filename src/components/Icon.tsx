@@ -37,3 +37,4 @@ export default function Icon({ name, size = 13, strokeWidth = 2, style, classNam
     </svg>
   );
 }
+
