@@ -1,4 +1,5 @@
 import React from 'react';
+import Icon from './Icon.jsx';
 
 /**
  * cardKit — shared professional card primitives for Stocks / Breakout / Options pages.
@@ -39,7 +40,7 @@ export function AccentCard({ dir = 'neutral', children, style = {} }) {
   return (
     <div style={{
       background: '#fff', border: '1px solid #e2e8f0', borderRadius: 13,
-      borderTop: `3px solid ${accent}`, boxShadow: '0 1px 3px rgba(0,0,0,.05)',
+      borderTop: `3px solid ${accent}`, boxShadow: 'var(--shadow-raised)',
       padding: 'clamp(11px,3vw,14px)', position: 'relative', overflow: 'hidden',
       minWidth: 0, ...style,
     }}>{children}</div>
@@ -82,8 +83,8 @@ export function CardHeader({ rank, symbol, sector, name, ltp, chgPct, onPopup, r
             <span style={{ fontSize: 16, fontWeight: 800, color: '#0f172a', lineHeight: 1.15 }}>{symbol}</span>
             {sector && <span style={{ fontSize: 9, color: '#94a3b8', fontWeight: 500 }}>{sector}</span>}
             {onPopup && (
-              <span style={{ fontSize: 8.5, color: '#1d4ed8', fontWeight: 700, background: '#eff6ff', padding: '1px 6px', borderRadius: 7, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-                📊 Chart
+              <span style={{ fontSize: 8.5, color: '#1d4ed8', fontWeight: 700, background: '#eff6ff', padding: '1px 6px', borderRadius: 7, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                <Icon name="trendUp" size={9}/>Chart
               </span>
             )}
           </div>
@@ -95,7 +96,7 @@ export function CardHeader({ rank, symbol, sector, name, ltp, chgPct, onPopup, r
         {rec && <div style={{ marginBottom: 4 }}><RecPill label={rec} dir={dir} /></div>}
         {ltp != null && (
           <>
-            <div style={{ fontSize: 17, fontWeight: 800, color: '#0f172a', lineHeight: 1.1 }}>₹{ltp}</div>
+            <div className="hero-val" style={{ color: '#0f172a' }}>₹{ltp}</div>
             {chgPct != null && (
               <div style={{ fontSize: 11, fontWeight: 700, color: chgPct >= 0 ? '#16a34a' : '#dc2626' }}>
                 {chgPct >= 0 ? '▲' : '▼'}{Math.abs(chgPct).toFixed(2)}%
@@ -159,8 +160,8 @@ export function LevelsStrip({ entry, sl, target, slSub, tgtSub, entrySub, status
 // ── StatusTag — small WAITING / TRIGGERED style tag ──
 export function StatusTag({ triggered }) {
   return triggered
-    ? <Tag tone="green">✅ TRIGGERED</Tag>
-    : <Tag tone="slate">⏳ WAITING</Tag>;
+    ? <Tag tone="green"><Icon name="check" size={9}/>TRIGGERED</Tag>
+    : <Tag tone="slate"><Icon name="clock" size={9}/>WAITING</Tag>;
 }
 
 // ── MetricMini — compact stat tile (label / value / sub) ──
@@ -188,7 +189,7 @@ export function ProgressStat({ label, pct, color, valueLabel }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 5 }}>
       <span style={{ fontSize: 9.5, color: '#64748b', width: 72, flexShrink: 0 }}>{label}</span>
-      <div style={{ flex: 1, height: 5, background: '#e2e8f0', borderRadius: 3, overflow: 'hidden', minWidth: 0 }}>
+      <div style={{ flex: 1, height: 6, background: '#eef2f6', borderRadius: 3, overflow: 'hidden', minWidth: 0, boxShadow: 'inset 0 1px 2px rgba(15,23,42,.06)' }}>
         <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, pct))}%`, background: color, borderRadius: 3, transition: 'width .5s' }} />
       </div>
       <span style={{ fontSize: 10, fontWeight: 700, color, width: 38, textAlign: 'right', flexShrink: 0 }}>{valueLabel}</span>
