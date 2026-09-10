@@ -7,6 +7,7 @@ import { getIST, getISTDate } from '../utils/marketTime';
 import { isWeeklyExpiryDay } from '../constants/config';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote, Banner } from '../components/cardKit';
+import Icon from '../components/Icon.jsx';
 import { ConfidenceBreakdown } from '../components/ConfidenceBreakdown';
 import { runOptionsScan, getOptionKey, withLiveOI, calcStructure, VIX_KEY } from '../services/optionScan';
 
@@ -370,7 +371,7 @@ export default function OptionsPane() {
 
           {/* FII/DII bias */}
           {fiiInterp && (
-            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:9, padding:'10px 14px', marginBottom:12 }}>
+            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:9, padding:'10px 14px', marginBottom:12, boxShadow:'var(--shadow-flat)' }}>
               <div style={{ fontSize:9, color:'#94a3b8', marginBottom:3 }}>FII/DII BIAS</div>
               <div style={{ fontSize:13, fontWeight:800, color:fiiInterp.color }}>{fiiInterp.label}</div>
               <div style={{ fontSize:10, color:'#64748b', marginTop:2 }}>{fiiInterp.detail}</div>
@@ -379,12 +380,12 @@ export default function OptionsPane() {
 
           {/* Composite momentum per index */}
           {Object.keys(marketCtxMap).length > 0 && (
-            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:9, padding:'10px 14px', marginBottom:12 }}>
+            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:9, padding:'10px 14px', marginBottom:12, boxShadow:'var(--shadow-flat)' }}>
               <div style={{ fontSize:9, color:'#94a3b8', marginBottom:6 }}>INTRADAY COMPOSITE MOMENTUM</div>
               <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
                 {Object.entries(marketCtxMap).map(([name, ctx]) => (
-                  <div key={name} style={{ fontSize:10, fontWeight:700, color: ctx.neutral ? '#d97706' : ctx.bullish ? '#16a34a' : '#dc2626', background: ctx.neutral ? '#fffbeb' : ctx.bullish ? '#f0fdf4' : '#fef2f2', border:`1px solid ${ctx.neutral?'#fde68a':ctx.bullish?'#bbf7d0':'#fecaca'}`, borderRadius:6, padding:'3px 8px' }}>
-                    {name}: {ctx.neutral ? '↔ NEUTRAL' : ctx.bullish ? '📈 BULL' : '📉 BEAR'} ({ctx.compositeScore > 0 ? '+' : ''}{ctx.compositeScore})
+                  <div key={name} style={{ fontSize:10, fontWeight:700, color: ctx.neutral ? '#d97706' : ctx.bullish ? '#16a34a' : '#dc2626', background: ctx.neutral ? '#fffbeb' : ctx.bullish ? '#f0fdf4' : '#fef2f2', border:`1px solid ${ctx.neutral?'#fde68a':ctx.bullish?'#bbf7d0':'#fecaca'}`, borderRadius:6, padding:'3px 8px', display:'inline-flex', alignItems:'center', gap:4 }}>
+                    {name}: {ctx.neutral ? '↔ NEUTRAL' : <><Icon name={ctx.bullish ? 'trendUp' : 'trendDown'} size={10}/>{ctx.bullish ? 'BULL' : 'BEAR'}</>} ({ctx.compositeScore > 0 ? '+' : ''}{ctx.compositeScore})
                   </div>
                 ))}
               </div>
@@ -396,11 +397,11 @@ export default function OptionsPane() {
               not duplicated there. */}
           <div className="opt-idx-grid">
             {vix > 0 && (
-              <div style={{ background:'#fff', border:'1px solid #dbe3ee', borderRadius:8, padding:'11px 13px', boxShadow:'0 1px 3px rgba(15,23,42,.06)' }}>
+              <div style={{ background:'#fff', border:'1px solid #dbe3ee', borderRadius:8, padding:'11px 13px', boxShadow:'var(--shadow-raised)' }}>
                 <div style={{ fontSize:9, color:'#94a3b8', letterSpacing:.7, marginBottom:5 }}>INDIA VIX · LIVE</div>
-                <div style={{ fontSize:20, lineHeight:1, fontWeight:850, color:vix < 16 ? '#16a34a' : vix > 22 ? '#dc2626' : '#d97706' }}>{vix.toFixed(2)}</div>
+                <div className="hero-val" style={{ color:vix < 16 ? '#16a34a' : vix > 22 ? '#dc2626' : '#d97706' }}>{vix.toFixed(2)}</div>
                 <div style={{ fontSize:10, color:'#64748b', marginTop:6 }}>{vixTxt}</div>
-                {liveIndexPrices[VIX_KEY] && <div style={{ fontSize:9, color:'#16a34a', fontWeight:700, marginTop:7 }}>LIVE</div>}
+                {liveIndexPrices[VIX_KEY] && <span className="badge-live" style={{ marginTop:7, display:'inline-flex' }}>LIVE</span>}
               </div>
             )}
           </div>
