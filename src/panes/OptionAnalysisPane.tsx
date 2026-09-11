@@ -143,7 +143,7 @@ function ChainSection({ chain, shownRows, totalStrikes, spot, accentColor, onLoa
         <div style={{ flex: 1, textAlign: 'right' }}>PUTS →</div>
       </div>
 
-      <div style={{ border: `1px solid ${accentColor}30`, borderTop: 'none', borderRadius: '0 0 10px 10px', overflow: 'hidden', boxShadow: '0 2px 8px rgba(15,23,42,.04)' }}>
+      <div style={{ border: `1px solid ${accentColor}30`, borderTop: 'none', borderRadius: '0 0 10px 10px', overflow: 'hidden', boxShadow: 'var(--shadow-raised)' }}>
         {shownRows.length === 0
           ? <div style={{ padding: 20, textAlign: 'center', fontSize: 11, color: '#94a3b8' }}>No strikes in range</div>
           : shownRows.map((row, i) => {
