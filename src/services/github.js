@@ -433,6 +433,7 @@ export function buildOptionSignal(p, vixVal) {
     delta:          p.delta || 0,
     theta:          p.theta || 0,
     capitalReq:     p.amtRequired || 0,
+    capitalIsMargin: p.amtIsMargin || false,
     vix:            vixVal || null,
     slTgtMethod:    p.slTgtMethod  || null,
     compositeScore: p.compositeScore  ?? null,
