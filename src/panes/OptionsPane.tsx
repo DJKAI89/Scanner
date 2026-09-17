@@ -331,9 +331,15 @@ export default function OptionsPane() {
       // optionScan.js), i.e. the ML model threshold takes precedence over cfg when set — otherwise
       // a pick that passed the scan filter (and got logged to GitHub / shown on Log page) gets
       // silently dropped here and never renders on this page.
-      const effMinConf = mlModels?.thresholds?.option?.minConfidence || cfg.minOptConf || 65;
-      const effCapLimit = mlModels?.thresholds?.option?.maxCapital || cfg.maxOptCapital;
-      if (effCapLimit > 0 && p.amtRequired > effCapLimit) return false;
+      // Same fixes as scoreAndFilterPicks in optionScan.js: minConfidence
+      // uses Math.min against Settings (learned threshold can only loosen,
+      // preventing the lockout bug), maxCapital uses Math.min the OTHER
+      // way — capital is a hard budget ceiling, so a learned threshold may
+      // only tighten it, never loosen it past what Settings says.
+      const effMinConf = Math.min(mlModels?.thresholds?.option?.minConfidence ?? 999, cfg.minOptConf || 65);
+      const learnedCap = mlModels?.thresholds?.option?.maxCapital;
+      const effCapLimit = Math.min(learnedCap > 0 ? learnedCap : Infinity, cfg.maxOptCapital > 0 ? cfg.maxOptCapital : Infinity);
+      if (Number.isFinite(effCapLimit) && p.amtRequired > effCapLimit) return false;
       if (p.confidence < effMinConf) return false;
       return matchesTab(p, g);
     }),
