@@ -167,8 +167,16 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
     // the learned threshold whenever it's already the more permissive one.
     const effMinConf = Math.min(mlModels?.thresholds?.option?.minConfidence ?? 999, cfg.minOptConf);
     if (p.confidence < effMinConf) return false;
-    const capLimit = mlModels?.thresholds?.option?.maxCapital || cfg.maxOptCapital;
-    if (!capLimit || capLimit <= 0) return true; // no capital cap configured
+    // Capital is a hard user-set budget ceiling, not a "let more signals
+    // through" knob like confidence/risk/RR were — so unlike those, the
+    // learned threshold should only ever be allowed to tighten this, never
+    // loosen it past what Settings says. Previously `||` let a learned
+    // maxCapital silently override (in either direction) the user's actual
+    // Max Capital setting — e.g. Settings=20000 but a learned threshold of
+    // 68513+ meant picks above the user's real limit still got shown.
+    const learnedCap = mlModels?.thresholds?.option?.maxCapital;
+    const capLimit = Math.min(learnedCap > 0 ? learnedCap : Infinity, cfg.maxOptCapital > 0 ? cfg.maxOptCapital : Infinity);
+    if (!Number.isFinite(capLimit)) return true; // no capital cap configured anywhere
     return p.amtRequired <= capLimit;
   });
 }
