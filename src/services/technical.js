@@ -1625,13 +1625,27 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       const maxLoss   = +(action === 'SELL' ? (sl - entry) * lot : (entry - sl) * lot).toFixed(0);
       const maxProfit = +(action === 'SELL' ? (entry - tgt) * lot : (tgt - entry) * lot).toFixed(0);
 
+      // Capital required — BUY and SELL are different cash flows, not the
+      // same formula. BUY (long option): you pay the premium upfront, so
+      // ltp*lot genuinely IS the capital required. SELL (writing/shorting):
+      // you RECEIVE the premium as a credit — the real capital tied up is
+      // margin (SPAN+exposure), typically several times the premium, not
+      // the premium itself. A real margin figure needs Upstox's margin
+      // calculator API; this is a rough, clearly-approximate estimate
+      // instead (~10% of notional for index options, ~18% for stock
+      // options — commonly-cited rough SPAN+exposure figures, not exact).
+      const isIndexUnderlying = ['NIFTY', 'BANKNIFTY', 'SENSEX', 'FINNIFTY'].includes(name);
+      const amtRequired = action === 'SELL'
+        ? +(spot * lot * (isIndexUnderlying ? 0.10 : 0.18)).toFixed(0)
+        : +(ltp * lot).toFixed(0);
+
       picks.push({
         instrKey,
         strike: sp, type: optType, entry, sl, tgt, rr, t1, t2, t3,
         iv, delta, theta, oi, oiChg, action, signals,
         score: signals.reduce((a, s) => a + s.s, 0),
         confidence, atm: sp === atm, spot, expiry, und: name,
-        lot, amtRequired: +(ltp * lot).toFixed(0), maxLoss, maxProfit,
+        lot, amtRequired, amtIsMargin: action === 'SELL', maxLoss, maxProfit,
         trendAligned, trendDir: momentumDir, compositeScore, slTgtMethod,
         stockPCR: stockPCR || null, vix: vix || 15, priceZone,
         pdh: pdh || null, pdl: pdl || null,
