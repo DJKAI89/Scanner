@@ -101,12 +101,18 @@ function SignalRow({ sig, livePrice }) {
       </div>
 
       {/* Metrics */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:4, marginBottom:8 }}>
+      <div style={{ display:'grid', gridTemplateColumns: isOpt && sig.capitalReq ? 'repeat(5,1fr)' : 'repeat(4,1fr)', gap:4, marginBottom:8 }}>
         {[
           { l:'ENTRY',  v: entry ? `₹${fmt(entry)}` : '—' },
           { l: sig.trailSL != null ? '🔒 TRAIL SL' : 'SL', v: effSL ? `₹${fmt(effSL)}` : '—' },
           { l: `NEXT (${nextTarget.l})`, v: tgtVal ? `₹${fmt(tgtVal)}` : '—' },
           { l:'CONF',   v: `${sig.confidence||0}%`          },
+          // Estimated amount, based on entry price — BUY shows actual premium
+          // paid (ltp x lot); SELL shows an approximate margin estimate, NOT
+          // the premium received, since writing an option needs margin
+          // collateral, not a premium outlay. Labeled distinctly so the two
+          // aren't read as the same kind of number.
+          ...(isOpt && sig.capitalReq ? [{ l: sig.capitalIsMargin ? 'EST. MARGIN' : 'EST. AMOUNT', v: `₹${fmt(sig.capitalReq)}` }] : []),
         ].map(m => (
           <div key={m.l} style={{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:6, padding:'5px 7px' }}>
             <div style={{ fontSize:7, color:'#94a3b8', marginBottom:2 }}>{m.l}</div>
