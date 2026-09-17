@@ -298,7 +298,15 @@ export async function lookupInstrument(ctx, callbacks) {
             const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap });
             return { ...p, regime: optRegime, confluence, confidence: mlRank.confidence, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj };
           })
-          .filter((p) => p.confidence >= cfg.minOptConf);
+          .filter((p) => {
+            if (p.confidence < cfg.minOptConf) return false;
+            // Same cap optionScan.js already applies — this path (option
+            // chain lookup for a single symbol) was missing it entirely,
+            // so picks above Settings' Max Capital were never filtered out.
+            const capLimit = mlModels?.thresholds?.option?.maxCapital || cfg.maxOptCapital;
+            if (!capLimit || capLimit <= 0) return true;
+            return p.amtRequired <= capLimit;
+          });
 
         let multiExpiry = null;
         if (nextExp) {
