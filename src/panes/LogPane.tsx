@@ -4,10 +4,10 @@ import { Spinner, ErrorBanner, EmptyState, StatCard } from '../components/common
 import { isBullSignal } from '../services/github';
 import {
   getSignalFeedKey, loadSignalLog,
-  resolveSignalsAgainstLivePrices, persistResolvedSignals, checkAllOutcomes as checkAllOutcomesService,
+  checkAllOutcomes as checkAllOutcomesService,
 } from '../services/logService';
 import { fmt } from '../utils/formatters';
-import { getIST, getISTDate } from '../utils/marketTime';
+import { getIST } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed.js';
 import Icon from '../components/Icon.jsx';
 
@@ -239,8 +239,6 @@ export default function LogPane() {
   const [filter, setFilter]           = useState('all');
   const [typeFilter, setTypeFilter]   = useState('all');
   const [days, setDays]               = useState(1);
-  const [wsResolved, setWsResolved]   = useState(0);
-  const resolvedRef = useRef(new Set());
 
   // Collect ALL open signal instrument keys (stocks + options)
   const openSignals = useMemo(() => signals.filter(s => s.status==='OPEN'), [signals]);
@@ -249,32 +247,19 @@ export default function LogPane() {
     return [...new Set(keys)];
   }, [openSignals]);
 
-  // WebSocket feed for ALL open signals (stocks + options)
+  // Live price feed for display only (LIVE PRICE / P&L bar on each open
+  // signal, and the connection badge below) — NOT for resolving signals.
+  // Resolution is handled entirely by runSignalMonitor (AppContext.jsx),
+  // which correctly checks ALL open signals across every date, not just
+  // whatever this page's date filter currently has loaded. A second,
+  // filter-scoped resolution pass used to live here too — removed: it
+  // meant switching the date filter to a wider range (e.g. 60 days) could
+  // suddenly evaluate a batch of older signals against live prices for
+  // the first time and write its own resolutions, racing with
+  // runSignalMonitor's writes to the same GitHub files.
   const { connected: wsConnected, lastPrices } = useMarketFeed(
     token, openKeys, marketStatus.open && openKeys.length > 0
   );
-
-  // Real-time SL/Target resolution — works for BOTH stocks and options
-  useEffect(() => {
-    if (!wsConnected || !openSignals.length) return;
-    const istDate = getISTDate();
-    const istTime = new Date().toLocaleTimeString('en-IN', { timeZone:'Asia/Kolkata', hour12:false });
-
-    const { updated, changed, newlyResolved, touchedIds } = resolveSignalsAgainstLivePrices(
-      signals, lastPrices, resolvedRef.current, istDate, istTime, cfg
-    );
-    if (newlyResolved.length) {
-      newlyResolved.forEach(id => resolvedRef.current.add(id));
-      setWsResolved(n => n + newlyResolved.length);
-    }
-    setSignals(updated);
-
-    if (changed) {
-      persistResolvedSignals(gh, updated, new Set(touchedIds), lg, (date, newSha) => {
-        setSigShaMap(m => ({ ...m, [date]: newSha }));
-      });
-    }
-  }, [lastPrices, wsConnected, cfg]); // eslint-disable-line
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -282,7 +267,6 @@ export default function LogPane() {
       const { signals: all, shaMap } = await loadSignalLog({ gh, days, lg, updateBadge });
       setSignals(all);
       setSigShaMap(prev => ({ ...prev, ...shaMap })); // preserve existing SHAs + add new ones
-      resolvedRef.current.clear();
     } catch(e) { setError(e.message); lg('Log error: '+e.message,'e'); }
     finally { setLoading(false); }
   }, [gh, days, updateBadge, lg]);
@@ -333,20 +317,16 @@ export default function LogPane() {
       )}
       {error && <ErrorBanner title="⚠ Log Error" message={error} onRetry={load} />}
 
-      {/* WebSocket status — shows stocks AND options monitoring */}
+      {/* WebSocket status — live price display only; actual resolution
+          happens via runSignalMonitor (AppContext), not from this feed */}
       {openKeys.length > 0 && (
         <div style={{ background:wsConnected?'#f0fdf4':'#f8fafc', border:`1px solid ${wsConnected?'#86efac':'#e2e8f0'}`, borderRadius:8, padding:'7px 12px', marginBottom:10, display:'flex', alignItems:'center', gap:8, fontSize:10, flexWrap:'wrap' }}>
           <div style={{ width:7, height:7, borderRadius:'50%', background:wsConnected?'#16a34a':'#94a3b8', flexShrink:0 }} />
           <span style={{ fontWeight:600, color:wsConnected?'#15803d':'#64748b' }}>
             {wsConnected
-              ? `⚡ Live monitoring ${stocksOpen} stock${stocksOpen!==1?'s':''} + ${optionsOpen} option${optionsOpen!==1?'s':''} — SL & Target resolve instantly`
+              ? `⚡ Live prices for ${stocksOpen} stock${stocksOpen!==1?'s':''} + ${optionsOpen} option${optionsOpen!==1?'s':''} — SL/Target checked every 60s in the background`
               : `WebSocket connecting for ${openKeys.length} open signal${openKeys.length!==1?'s':''}...`}
           </span>
-          {wsResolved > 0 && (
-            <span style={{ marginLeft:'auto', background:'#dcfce7', color:'#15803d', fontSize:9, fontWeight:800, padding:'2px 7px', borderRadius:10 }}>
-              ⚡ {wsResolved} resolved this session
-            </span>
-          )}
         </div>
       )}
 
