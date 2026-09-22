@@ -47,10 +47,31 @@ async function ghPut(path, contentObj, sha, _retried = false) {
   if (r.status === 401) throw new Error(`GH write ${path}: 401 Unauthorized — AI_GH_TOKEN is invalid/expired`);
   if (r.status === 403) throw new Error(`GH write ${path}: 403 Forbidden — AI_GH_TOKEN needs "Contents: write" permission`);
   if (r.status === 409 && !_retried) {
-    // Stale SHA — another overlapping run (e.g. cron + manual trigger) wrote
-    // in between our read and write. Refetch the current SHA and retry once.
-    console.warn(`GH write ${path}: 409 conflict — refetching SHA and retrying once`);
+    // Stale SHA — another overlapping writer (the client's own
+    // runSignalMonitor, or another run of this same script) wrote in
+    // between our read and write. Previously this just re-PUT the SAME
+    // (now-stale) contentObj with a fresh SHA — which can silently
+    // OVERWRITE and destroy whatever the other writer just correctly
+    // wrote (e.g. this retry blindly re-asserting "still OPEN" on top of
+    // a resolution the client just persisted a moment earlier). Now it
+    // re-fetches the fresh signals and merges: a signal we've resolved
+    // (non-OPEN) always wins over a still-OPEN version, whichever side
+    // it came from — same rule github.js's ghWriteDay already uses.
+    console.warn(`GH write ${path}: 409 conflict — refetching and merging before retry`);
     const fresh = await ghGet(path);
+    if (fresh?.sha && Array.isArray(contentObj?.signals)) {
+      let freshSignals = [];
+      try { freshSignals = JSON.parse(Buffer.from(fresh.content, 'base64').toString('utf8')).signals || []; }
+      catch (e) { freshSignals = []; }
+      const existingIds = new Set(freshSignals.map((s) => s.id));
+      const merged = freshSignals.map((sig) => {
+        const ours = contentObj.signals.find((item) => item.id === sig.id);
+        return (ours && ours.status !== 'OPEN' && sig.status === 'OPEN') ? ours : sig;
+      });
+      merged.push(...contentObj.signals.filter((sig) => !existingIds.has(sig.id)));
+      const mergedPayload = { ...contentObj, signals: merged, stats: computeLogStats(merged) };
+      return ghPut(path, mergedPayload, fresh.sha, true);
+    }
     if (fresh?.sha) return ghPut(path, contentObj, fresh.sha, true);
   }
   if (!r.ok) throw new Error(`GH write ${path}: ${r.status} ${await r.text()}`);
