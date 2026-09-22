@@ -46,7 +46,15 @@ export async function loadSignalLog(ctx) {
       }
     });
   }
-  all.sort((a,b) => (b.date+b.time).localeCompare(a.date+a.time));
+  // Primary: newest logged first. Secondary (only breaks ties within the
+  // same date+time — e.g. a whole scan batch logged in the same minute):
+  // OPEN signals before closed ones, since those are the actionable ones.
+  all.sort((a, b) => {
+    const byTime = (b.date + b.time).localeCompare(a.date + a.time);
+    if (byTime !== 0) return byTime;
+    const rank = (s) => (s.status === 'OPEN' ? 0 : 1);
+    return rank(a) - rank(b);
+  });
   updateBadge('log', String(all.length));
   if (days === 1 && calDates[0] && calDates[0] !== getISTDate()) {
     lg(`Signal log: no entry for today yet — showing ${calDates[0]} (${all.length} signals)`, 'w');

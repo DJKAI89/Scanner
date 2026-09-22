@@ -4,9 +4,10 @@ import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyS
 import { resolveAccessToken } from '../services/api';
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST, getISTDate } from '../utils/marketTime';
-import { INDEX_OPTS, isWeeklyExpiryDay } from '../constants/config';
+import { isWeeklyExpiryDay } from '../constants/config';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote, Banner } from '../components/cardKit';
+import Icon from '../components/Icon.jsx';
 import { ConfidenceBreakdown } from '../components/ConfidenceBreakdown';
 import { runOptionsScan, getOptionKey, withLiveOI, calcStructure, VIX_KEY } from '../services/optionScan';
 
@@ -16,32 +17,6 @@ const OPT_FILTERS = [
   { id:'buy',label:'📈 BUY' },{ id:'sell',label:'📉 SELL' },
   { id:'aligned',label:'✅ With-Trend' },{ id:'counter',label:'⚠ Counter-Trend' },
 ];
-
-function IndexLiveCard({ group, live, ctx }) {
-  const spot = live?.ltp || group.spot || 0;
-  const cp = live?.cp || (group.spotChg != null ? group.spot / (1 + group.spotChg / 100) : group.spot) || spot;
-  const pts = spot - cp;
-  const pct = cp > 0 ? (pts / cp) * 100 : group.spotChg || 0;
-  const positive = pts >= 0;
-  return (
-    <div style={{ background:'#fff', border:'1px solid #dbe3ee', borderRadius:8, padding:'11px 13px', boxShadow:'0 1px 3px rgba(15,23,42,.06)' }}>
-      <div style={{ fontSize:9, color:'#94a3b8', letterSpacing:.7, marginBottom:5 }}>{group.name} SPOT · LIVE</div>
-      <div style={{ fontSize:20, lineHeight:1, fontWeight:850, color:positive ? '#16a34a' : '#dc2626' }}>₹{fmt(spot, 0)}</div>
-      <div style={{ fontSize:10, color:positive ? '#16a34a' : '#dc2626', marginTop:5 }}>{positive ? '+' : ''}{pts.toFixed(2)} pts</div>
-      <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center', fontSize:9, marginTop:7 }}>
-        <span>PCR <b>{group.pcr?.toFixed(2) || '—'}</b></span>
-        <span style={{ color:positive ? '#16a34a' : '#dc2626' }}>{fmtC(pct)}</span>
-        {live && <span style={{ color:'#16a34a', fontWeight:700 }}>LIVE</span>}
-      </div>
-      <div style={{ fontSize:9, color:'#64748b', marginTop:4 }}>
-        🎯₹{fmt(group.maxPain || 0, 0)} · 📉₹{fmt(group.oiWalls?.callWall || 0, 0)} · 📈₹{fmt(group.oiWalls?.putWall || 0, 0)}
-      </div>
-      <div style={{ fontSize:9, color:ctx?.neutral ? '#d97706' : ctx?.bullish ? '#16a34a' : '#dc2626', marginTop:4, fontWeight:700 }}>
-        {ctx?.neutral ? 'Neutral' : ctx?.bullish ? 'With-trend' : 'Weak trend'}  · WS
-      </div>
-    </div>
-  );
-}
 
 function OptionCard({ pick, cfg: cardCfg }) {
   const { openSignalSymbols } = useApp();
@@ -243,7 +218,7 @@ function OptionCard({ pick, cfg: cardCfg }) {
 export default function OptionsPane() {
   const {
     token, cfg, marketStatus, lg, onTokenExpired, updateBadge, fiiInterp, fiiData, gh, adaptWeights, mlModels, confCalibration,
-    activeTab, setScanning, setStatusDot, setStatusTxt, stocks,
+    activeTab, setScanning, setStatusDot, setStatusTxt, stocks, vixHistorySeries,
   } = useApp();
   const accessToken = resolveAccessToken(token);
   const [loading, setLoading]   = useState(false);
@@ -257,7 +232,13 @@ export default function OptionsPane() {
   const [marketCtxMap, setMarketCtxMap] = useState({});
   const loadingRef = useRef(false);
   const prevAvgIVCache = useRef({}), prevPCRCache = useRef({});
-  const liveKeys = useMemo(() => [...INDEX_OPTS.map((idx) => idx.key), VIX_KEY], []);
+  // Index spot cards (Nifty/BankNifty/Sensex/FinNifty) were removed below —
+  // the global Ticker header now covers that. VIX still needs its own live
+  // feed here since Ticker doesn't show it, but the 4 index keys no longer
+  // have any consumer in this file, so dropping them from the subscription
+  // reduces WS/API load on this page instead of just hiding the display.
+  const liveKeys = useMemo(() => [VIX_KEY], []);
+
   const { lastPrices: liveIndexPrices } = useMarketFeed(
     accessToken, liveKeys, liveKeys.length > 0, { pollFallback: true }
   );
@@ -307,7 +288,7 @@ export default function OptionsPane() {
     setGroups([]);
     setUpdTime('');
     try {
-      const ctx = { accessToken, cfg, stocks, fiiData, adaptWeights, mlModels, confCalibration, gh, onTokenExpired, lg };
+      const ctx = { accessToken, cfg, stocks, fiiData, adaptWeights, mlModels, confCalibration, gh, onTokenExpired, lg, vixHistorySeries };
       const caches = { prevAvgIVCache, prevPCRCache };
       const callbacks = { setProgress, setMarketCtxMap, setVix };
       const { groups: nextGroups, scanId, withTrend } = await runOptionsScan(ctx, caches, callbacks);
@@ -322,6 +303,26 @@ export default function OptionsPane() {
   }
 
   const { txt: vixTxt } = interpVIX(vix);
+  // Tab scoping (index/action/trend) — shared by the strict pass below AND
+  // the fallback, so every tab gets the SAME fallback behavior instead of
+  // only 'all' having one. Previously a tab like Sensex/BankNifty/FinNifty
+  // would go completely blank if nothing for that index cleared the
+  // confidence gate, while All kept showing whatever won the global top-8 —
+  // that inconsistency (All shows something, other tabs show nothing) was
+  // the actual bug, not the tab routing itself.
+  function matchesTab(p, g) {
+    if (filter === 'nifty')     return g.name === 'NIFTY';
+    if (filter === 'banknifty') return g.name === 'BANKNIFTY';
+    if (filter === 'sensex')    return g.name === 'SENSEX';
+    if (filter === 'finnifty')  return g.name === 'FINNIFTY';
+    if (filter === 'stocks')    return g.type === 'stock';
+    if (filter === 'buy')       return p.action === 'BUY';
+    if (filter === 'sell')      return p.action === 'SELL';
+    if (filter === 'aligned')   return p.trendAligned;
+    if (filter === 'counter')   return !p.trendAligned;
+    return true; // 'all'
+  }
+
   const filtered = useMemo(() => liveGroups.map(g => ({
     ...g,
     picks: g.picks.filter(p => {
@@ -330,33 +331,30 @@ export default function OptionsPane() {
       // optionScan.js), i.e. the ML model threshold takes precedence over cfg when set — otherwise
       // a pick that passed the scan filter (and got logged to GitHub / shown on Log page) gets
       // silently dropped here and never renders on this page.
-      const effMinConf = mlModels?.thresholds?.option?.minConfidence || cfg.minOptConf || 65;
-      const effCapLimit = mlModels?.thresholds?.option?.maxCapital || cfg.maxOptCapital;
-      if (effCapLimit > 0 && p.amtRequired > effCapLimit) return false;
+      // Same fixes as scoreAndFilterPicks in optionScan.js: minConfidence
+      // uses Math.min against Settings (learned threshold can only loosen,
+      // preventing the lockout bug), maxCapital uses Math.min the OTHER
+      // way — capital is a hard budget ceiling, so a learned threshold may
+      // only tighten it, never loosen it past what Settings says.
+      const effMinConf = Math.min(mlModels?.thresholds?.option?.minConfidence ?? 999, cfg.minOptConf || 65);
+      const learnedCap = mlModels?.thresholds?.option?.maxCapital;
+      const effCapLimit = Math.min(learnedCap > 0 ? learnedCap : Infinity, cfg.maxOptCapital > 0 ? cfg.maxOptCapital : Infinity);
+      if (Number.isFinite(effCapLimit) && p.amtRequired > effCapLimit) return false;
       if (p.confidence < effMinConf) return false;
-      // Tab filter
-      if (filter === 'nifty')     return g.name === 'NIFTY';
-      if (filter === 'banknifty') return g.name === 'BANKNIFTY';
-      if (filter === 'sensex')    return g.name === 'SENSEX';
-      if (filter === 'finnifty')  return g.name === 'FINNIFTY';
-      if (filter === 'stocks')    return g.type === 'stock';
-      if (filter === 'buy')       return p.action === 'BUY';
-      if (filter === 'sell')      return p.action === 'SELL';
-      if (filter === 'aligned')   return p.trendAligned;
-      if (filter === 'counter')   return !p.trendAligned;
-      return true; // 'all'
+      return matchesTab(p, g);
     }),
   })).filter(g => g.picks.length > 0), [liveGroups, filter, cfg.maxOptCapital, cfg.minOptConf, mlModels]);
 
-  // Safety net: if the confidence/capital gate empties every group (e.g. a
-  // learned threshold overshoots on a small/noisy sample), fall back to the
-  // top picks by confidence — same pattern stocks already use — instead of
-  // silently rendering nothing.
+  // Safety net: if the confidence/capital gate empties every group for the
+  // CURRENT tab (e.g. a learned threshold overshoots on a small/noisy
+  // sample), fall back to the top picks by confidence scoped to that same
+  // tab — instead of only doing this for 'all' and leaving every other tab
+  // silently blank.
   const displayGroups = useMemo(() => {
-    if (filtered.length > 0 || filter !== 'all') return filtered;
-    const allRaw = liveGroups.flatMap(g => g.picks.map(p => ({ ...p, _group: g })));
-    if (!allRaw.length) return filtered;
-    const top = allRaw.sort((a, b) => b.confidence - a.confidence).slice(0, 8);
+    if (filtered.length > 0) return filtered;
+    const scopedRaw = liveGroups.flatMap(g => g.picks.filter(p => matchesTab(p, g)).map(p => ({ ...p, _group: g })));
+    if (!scopedRaw.length) return [];
+    const top = scopedRaw.sort((a, b) => b.confidence - a.confidence).slice(0, 8);
     const byGroup = new Map();
     for (const p of top) {
       const key = p._group.name;
@@ -379,7 +377,7 @@ export default function OptionsPane() {
 
           {/* FII/DII bias */}
           {fiiInterp && (
-            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:9, padding:'10px 14px', marginBottom:12 }}>
+            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:9, padding:'10px 14px', marginBottom:12, boxShadow:'var(--shadow-flat)' }}>
               <div style={{ fontSize:9, color:'#94a3b8', marginBottom:3 }}>FII/DII BIAS</div>
               <div style={{ fontSize:13, fontWeight:800, color:fiiInterp.color }}>{fiiInterp.label}</div>
               <div style={{ fontSize:10, color:'#64748b', marginTop:2 }}>{fiiInterp.detail}</div>
@@ -388,37 +386,28 @@ export default function OptionsPane() {
 
           {/* Composite momentum per index */}
           {Object.keys(marketCtxMap).length > 0 && (
-            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:9, padding:'10px 14px', marginBottom:12 }}>
+            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:9, padding:'10px 14px', marginBottom:12, boxShadow:'var(--shadow-flat)' }}>
               <div style={{ fontSize:9, color:'#94a3b8', marginBottom:6 }}>INTRADAY COMPOSITE MOMENTUM</div>
               <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
                 {Object.entries(marketCtxMap).map(([name, ctx]) => (
-                  <div key={name} style={{ fontSize:10, fontWeight:700, color: ctx.neutral ? '#d97706' : ctx.bullish ? '#16a34a' : '#dc2626', background: ctx.neutral ? '#fffbeb' : ctx.bullish ? '#f0fdf4' : '#fef2f2', border:`1px solid ${ctx.neutral?'#fde68a':ctx.bullish?'#bbf7d0':'#fecaca'}`, borderRadius:6, padding:'3px 8px' }}>
-                    {name}: {ctx.neutral ? '↔ NEUTRAL' : ctx.bullish ? '📈 BULL' : '📉 BEAR'} ({ctx.compositeScore > 0 ? '+' : ''}{ctx.compositeScore})
+                  <div key={name} style={{ fontSize:10, fontWeight:700, color: ctx.neutral ? '#d97706' : ctx.bullish ? '#16a34a' : '#dc2626', background: ctx.neutral ? '#fffbeb' : ctx.bullish ? '#f0fdf4' : '#fef2f2', border:`1px solid ${ctx.neutral?'#fde68a':ctx.bullish?'#bbf7d0':'#fecaca'}`, borderRadius:6, padding:'3px 8px', display:'inline-flex', alignItems:'center', gap:4 }}>
+                    {name}: {ctx.neutral ? '↔ NEUTRAL' : <><Icon name={ctx.bullish ? 'trendUp' : 'trendDown'} size={10}/>{ctx.bullish ? 'BULL' : 'BEAR'}</>} ({ctx.compositeScore > 0 ? '+' : ''}{ctx.compositeScore})
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {/* Index stats */}
+          {/* Index stats — Nifty/BankNifty/Sensex/FinNifty spot cards removed;
+              the global Ticker header shows that now. VIX kept since it's
+              not duplicated there. */}
           <div className="opt-idx-grid">
-            {liveGroups.map(g => {
-              const idx = INDEX_OPTS.find((item) => item.name === g.name);
-              return (
-                <IndexLiveCard
-                  key={g.name}
-                  group={g}
-                  live={idx ? liveIndexPrices[idx.key] : null}
-                  ctx={marketCtxMap[g.name]}
-                />
-              );
-            })}
             {vix > 0 && (
-              <div style={{ background:'#fff', border:'1px solid #dbe3ee', borderRadius:8, padding:'11px 13px', boxShadow:'0 1px 3px rgba(15,23,42,.06)' }}>
+              <div style={{ background:'#fff', border:'1px solid #dbe3ee', borderRadius:8, padding:'11px 13px', boxShadow:'var(--shadow-raised)' }}>
                 <div style={{ fontSize:9, color:'#94a3b8', letterSpacing:.7, marginBottom:5 }}>INDIA VIX · LIVE</div>
-                <div style={{ fontSize:20, lineHeight:1, fontWeight:850, color:vix < 16 ? '#16a34a' : vix > 22 ? '#dc2626' : '#d97706' }}>{vix.toFixed(2)}</div>
+                <div className="hero-val" style={{ color:vix < 16 ? '#16a34a' : vix > 22 ? '#dc2626' : '#d97706' }}>{vix.toFixed(2)}</div>
                 <div style={{ fontSize:10, color:'#64748b', marginTop:6 }}>{vixTxt}</div>
-                {liveIndexPrices[VIX_KEY] && <div style={{ fontSize:9, color:'#16a34a', fontWeight:700, marginTop:7 }}>LIVE</div>}
+                {liveIndexPrices[VIX_KEY] && <span className="badge-live" style={{ marginTop:7, display:'inline-flex' }}>LIVE</span>}
               </div>
             )}
           </div>

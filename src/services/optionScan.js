@@ -5,7 +5,7 @@
 import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api.js';
 import { getIST, sleep } from '../utils/marketTime.js';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config.js';
-import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyFIIBias, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment } from './technical.js';
+import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, interpretFIIDII, computeVixPercentile } from './technical.js';
 import { logSignals, buildOptionSignal } from './github.js';
 import { applyMlRanking } from './mlRanking.js';
 
@@ -82,7 +82,7 @@ export function calcStructure(chain) {
 
 // Builds the per-pick indicator snapshot used by adaptive-weights + ML ranking.
 // Shared by both index-chain and stock-chain scoring passes below.
-function buildIndicatorSnapshot(p) {
+function buildIndicatorSnapshot(p, confluence, fiiInterp, isBuyLean) {
   return {
     trendAligned: p.trendAligned || false,
     emaBull: p.emaTrendBull === true,
@@ -97,17 +97,28 @@ function buildIndicatorSnapshot(p) {
     compositeHigh: Math.abs(p.compositeScore ?? 0) >= 2,
     compositeMed: Math.abs(p.compositeScore ?? 0) >= 1,
     atm: p.atm || false,
+    vixVeryLow: (p.vix ?? 0) > 0 && (p.vix ?? 0) < 14,
+    vixHighFear: (p.vix ?? 0) > 20,
+    confluenceStrong: !!confluence && confluence.total > 0 && confluence.ratio >= 0.65 && confluence.agree >= 4,
+    confluenceWeak: !!confluence && confluence.total > 0 && confluence.ratio < 0.5,
+    confluenceConflict: !!confluence && confluence.conflicting >= 2,
+    fiiAligned: !!(fiiInterp && ((fiiInterp.bias > 0) === isBuyLean) && fiiInterp.bias !== 0),
+    fiiAgainst: !!(fiiInterp && ((fiiInterp.bias > 0) !== isBuyLean) && fiiInterp.bias !== 0),
   };
 }
 
-// Applies FII bias + adaptive weights + ML ranking to a raw scanChain pick,
-// then filters by confidence/capital thresholds. Shared by index + stock passes.
+// Applies calibration + regime + adaptive weights (learned) + ML ranking to a
+// raw scanChain pick, then filters by confidence/capital thresholds. FII-bias
+// and confluence-tier are no longer separate fixed-formula adjustments here —
+// they're boolean flags (fiiAligned/fiiAgainst, confluenceStrong/Weak/Conflict)
+// fed into applyAdaptWeights below, same as the stock scan path, so their
+// actual confidence impact is learned from closed-signal win rates instead of
+// a hardcoded magnitude.
 function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalibration, regime, cfg, maxPain = 0, spot = 0 }) {
+  const fiiInterp = interpretFIIDII(fiiData || null);
   return picks.map(p => {
-    const indSnap = buildIndicatorSnapshot(p);
     const base = p.confidence;
-    let c = applyFIIBias(base, p.action === 'BUY', fiiData);
-    const fiiAdj = c - base;
+    let c = base;
     let prev = c;
     c = applyCalibration(c, confCalibration || null);
     const calAdj = c - prev; prev = c;
@@ -127,8 +138,8 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
       marketContext: p.stockPCR != null ? (p.stockPCR > 1.2 ? 1 : p.stockPCR < 0.8 ? -1 : 0) : 0,
     };
     const confluence = computeConfluence(confluenceModules, actionDir);
-    c = applyConfluenceAdjustment(c, confluence, cfg);
-    const confluenceAdj = c - prev; prev = c;
+    const isBuyLean = p.action === 'BUY';
+    const indSnap = buildIndicatorSnapshot(p, confluence, fiiInterp, isBuyLean);
     c = applyAdaptWeights(c, adaptWeights?.option || null, indSnap);
     const adaptAdj = c - prev;
     const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap: indSnap });
@@ -138,7 +149,7 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
       confidence: finalConf,
       regime,
       confluence,
-      confBreakdown: { base, fiiAdj, calAdj, regimeAdj, confluenceAdj, adaptAdj, mlAdj: mlRank.mlAdj, final: finalConf },
+      confBreakdown: { base, calAdj, regimeAdj, adaptAdj, mlAdj: mlRank.mlAdj, final: finalConf },
       _indSnap: indSnap,
       _dte: p._dte ?? null,
       nearMaxPain: maxPain > 0 && spot > 0 && Math.abs(p.strike - maxPain) / spot < 0.01,
@@ -150,9 +161,22 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
     };
   }).filter(p => {
     if (p.aiBlock) return false;
-    if (p.confidence < (mlModels?.thresholds?.option?.minConfidence || cfg.minOptConf)) return false;
-    const capLimit = mlModels?.thresholds?.option?.maxCapital || cfg.maxOptCapital;
-    if (!capLimit || capLimit <= 0) return true; // no capital cap configured
+    // Same lockout risk as the stock path (see stockScan.js): only passing
+    // signals get logged, so a stale learned threshold can never self-correct.
+    // Min against the manual Settings value gives a way out without losing
+    // the learned threshold whenever it's already the more permissive one.
+    const effMinConf = Math.min(mlModels?.thresholds?.option?.minConfidence ?? 999, cfg.minOptConf);
+    if (p.confidence < effMinConf) return false;
+    // Capital is a hard user-set budget ceiling, not a "let more signals
+    // through" knob like confidence/risk/RR were — so unlike those, the
+    // learned threshold should only ever be allowed to tighten this, never
+    // loosen it past what Settings says. Previously `||` let a learned
+    // maxCapital silently override (in either direction) the user's actual
+    // Max Capital setting — e.g. Settings=20000 but a learned threshold of
+    // 68513+ meant picks above the user's real limit still got shown.
+    const learnedCap = mlModels?.thresholds?.option?.maxCapital;
+    const capLimit = Math.min(learnedCap > 0 ? learnedCap : Infinity, cfg.maxOptCapital > 0 ? cfg.maxOptCapital : Infinity);
+    if (!Number.isFinite(capLimit)) return true; // no capital cap configured anywhere
     return p.amtRequired <= capLimit;
   });
 }
@@ -162,7 +186,7 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
 // caches: { prevAvgIVCache, prevPCRCache } — refs persisted across scans for trend deltas
 // callbacks: { setProgress, setMarketCtxMap, setVix }
 export async function runOptionsScan(ctx, caches, callbacks) {
-  const { accessToken, cfg: cfgIn, stocks, fiiData, adaptWeights, mlModels, confCalibration, gh, onTokenExpired, lg } = ctx;
+  const { accessToken, cfg: cfgIn, stocks, fiiData, adaptWeights, mlModels, confCalibration, gh, onTokenExpired, lg, vixHistorySeries } = ctx;
   // Learned delta/IV gates (mlRanking.optimizeThresholds) override the static
   // 0.40/15 defaults once enough logged option signals exist to sweep them.
   const optGates = mlModels?.thresholds?.option;
@@ -291,7 +315,7 @@ export async function runOptionsScan(ctx, caches, callbacks) {
     }
 
     // Apply FII bias + adaptive weights + ML ranking, then filter
-    const idxRegime = classifyMarketRegime(Math.abs(richCtx.compositeScore || 0) / 3.5, vixVal);
+    const idxRegime = classifyMarketRegime(Math.abs(richCtx.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
     const picksWithFII = scoreAndFilterPicks(allIdxPicks, { fiiData, adaptWeights, mlModels, confCalibration, regime: idxRegime, cfg, maxPain, spot });
 
     lg(`${idx.name}: ${expiriesToScan.length} expiry(s) → ${allIdxPicks.length} raw → ${picksWithFII.length} ≥${cfg.minOptConf}% | composite=${richCtx.compositeScore} pcr=${pcr}`, 'o');
@@ -382,7 +406,7 @@ export async function runOptionsScan(ctx, caches, callbacks) {
           if (exp !== expiry) await sleep(300);
         }
 
-        const stkRegime = classifyMarketRegime(Math.abs(stkCtx.compositeScore || 0) / 3.5, vixVal);
+        const stkRegime = classifyMarketRegime(Math.abs(stkCtx.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
         const fPicks2 = scoreAndFilterPicks(allStkPicks, { fiiData, adaptWeights, mlModels, confCalibration, regime: stkRegime, cfg, maxPain: stkMaxPain, spot });
         if (fPicks2.length) { built.push({ name:inst.s, spot, spotChg, picks:fPicks2, expiry, expiries:expiriesToScan2, chain, maxPain:stkMaxPain, oiWalls:calcOIWalls(chain), pcr:pcr2, pcrTrend:stkCtx.pcrTrend, ivTrend:ivTrend2, type:'stock', fullName:inst.n }); lg(`${inst.s}: ${expiriesToScan2.length} expiry(s) → ${allStkPicks.length} raw → ${fPicks2.length} signals`, 'o'); }
       } catch(e) { lg(inst.s + ' opts: ' + e.message, 'w'); }

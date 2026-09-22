@@ -410,10 +410,26 @@ export function calcNR7(candles) {
 // normTrendStrength should already be 0-1 by the time it reaches here; each
 // caller normalizes its own best-available trend signal (compositeScore where
 // computed, day-change % as a lighter proxy where it isn't).
-export function classifyMarketRegime(normTrendStrength, vix) {
+// Rank of `value` within `series` as a 0-100 percentile (what % of the
+// rolling history is <= value). Needs at least 40 samples to be
+// statistically meaningful — callers should treat a null return as "not
+// enough history yet" and fall back to fixed cutoffs.
+export function computeVixPercentile(series, value) {
+  if (!Array.isArray(series) || series.length < 40 || value == null) return null;
+  const below = series.filter(v => v <= value).length;
+  return Math.round((below / series.length) * 100);
+}
+
+export function classifyMarketRegime(normTrendStrength, vix, vixPercentile = null) {
   const ts = Math.max(0, Math.min(1, normTrendStrength || 0));
-  const highVol = (vix || 0) >= 22;
-  const lowVol  = (vix || 0) > 0 && vix <= 13;
+  // When enough rolling VIX history exists, classify off where today's VIX
+  // sits in its OWN recent distribution (top/bottom 20%) instead of fixed
+  // absolute levels — those go stale as VIX's "normal" range drifts across
+  // market cycles. Falls back to the fixed 22/13 cutoffs when history is
+  // thin (<40 sessions) or unavailable, same gating pattern used elsewhere
+  // (calibrateRegimePenalties, computeIndWeights).
+  const highVol = vixPercentile != null ? vixPercentile >= 80 : (vix || 0) >= 22;
+  const lowVol  = vixPercentile != null ? vixPercentile <= 20 : ((vix || 0) > 0 && vix <= 13);
   const choppy   = ts < 0.3;
   const trending = ts >= 0.6;
   if (choppy && highVol) return 'CHOPPY_HIGH_VOL';
@@ -1368,45 +1384,12 @@ export function calcOptConfidenceFull(delta, iv, oiChg, theta, signals, spot, st
       : (absCs >= 3 ? 0.20 : absCs >= 2 ? 0.30 : 0.40);
   }
 
-  // Momentum bonus
-  let momentumBonus = 0;
-  if (marketCtx?.momentumScore != null) {
-    const ms = marketCtx.momentumScore;
-    const mAligned = (isCE && ms > 0) || (!isCE && ms < 0);
-    if      (mAligned  && Math.abs(ms) >= 2) momentumBonus =  8;
-    else if (mAligned  && Math.abs(ms) >= 1) momentumBonus =  4;
-    else if (!mAligned && Math.abs(ms) >= 2) momentumBonus = -6;
-  }
-
-  // EMA crossover bonus
-  let emaBonus = 0;
-  if (marketCtx?.emaTrendBull != null) {
-    const emaAligned = (isCE && marketCtx.emaTrendBull) || (!isCE && !marketCtx.emaTrendBull);
-    const cross    = marketCtx.emaCross;
-    const crossAge = marketCtx.emaCrossCandles ?? 999;
-    if (emaAligned) {
-      emaBonus = cross === (isCE ? 'bullish_cross' : 'bearish_cross')
-        ? (crossAge <= 1 ? 15 : crossAge <= 2 ? 10 : 6)
-        : 5;
-    } else {
-      emaBonus = cross === (isCE ? 'bearish_cross' : 'bullish_cross') ? -15 : -8;
-    }
-  }
-
-  // Freshness bonus
-  let freshnessBonus = 0;
-  if (marketCtx?.momentumFresh === true) {
-    const freshAligned = (isCE && (marketCtx.compositeScore ?? 0) > 0) || (!isCE && (marketCtx.compositeScore ?? 0) < 0);
-    freshnessBonus = freshAligned ? 8 : 0;
-  }
-
-  // Volume bonus
-  let volumeBonus = 0;
-  if (marketCtx?.volRatio != null) {
-    if      (marketCtx.volRatio >= 2.0) volumeBonus =  10;
-    else if (marketCtx.volRatio >= 1.5) volumeBonus =   6;
-    else if (marketCtx.volRatio <  0.7) volumeBonus =  -8;
-  }
+  // Momentum/EMA-cross/freshness/volume are no longer scored here as fixed
+  // point bonuses — they duplicate momentumFresh/emaBull/emaBearish/freshCross/
+  // volSpike/lowVol in buildIndicatorSnapshot() (optionScan.js), which already
+  // feed applyAdaptWeights with a LEARNED win-rate-lift adjustment. Scoring
+  // them twice (once as a guessed constant here, once as a learned adjustment
+  // downstream) was the same double-count bug fixed on the stock side.
 
   // Delta score (30%)
   const deltaScore = absD >= 0.7 ? 90 : absD >= 0.5 ? 78 : absD >= 0.3 ? 60 : absD >= 0.15 ? 42 : 25;
@@ -1469,13 +1452,12 @@ export function calcOptConfidenceFull(delta, iv, oiChg, theta, signals, spot, st
 
   const _timeAdj = getTimeOfDayPenalty();
   let raw = deltaScore * 0.30 + ivScore * 0.20 + oiScore * 0.25 + atmScore * 0.15 + thetaScore * 0.10
-    + sigBonus + momentumBonus + emaBonus + freshnessBonus + volumeBonus + ivTrendBonus + expiryBonus + ivAdjFinal;
+    + sigBonus + ivTrendBonus + expiryBonus + ivAdjFinal;
 
-  // VIX impact
-  if      (vix > 30) raw -= 15;
-  else if (vix > 25) raw -= 8;
-  else if (vix > 20) raw -= 4;
-  else if (vix < 14) raw += 5;
+  // VIX impact: previously a fixed raw+=/-= band here, duplicating the
+  // vixVeryLow/vixHighFear flags in buildIndicatorSnapshot() that already
+  // feed applyAdaptWeights with a learned adjustment. Removed for the same
+  // reason as momentum/ema/freshness/volume above — see note there.
 
   // Max Pain gravity (expiry day only)
   if (maxPain && maxPain > 0 && spot > 0 && isWeeklyExpiryDay()) {
@@ -1643,13 +1625,27 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       const maxLoss   = +(action === 'SELL' ? (sl - entry) * lot : (entry - sl) * lot).toFixed(0);
       const maxProfit = +(action === 'SELL' ? (entry - tgt) * lot : (tgt - entry) * lot).toFixed(0);
 
+      // Capital required — BUY and SELL are different cash flows, not the
+      // same formula. BUY (long option): you pay the premium upfront, so
+      // ltp*lot genuinely IS the capital required. SELL (writing/shorting):
+      // you RECEIVE the premium as a credit — the real capital tied up is
+      // margin (SPAN+exposure), typically several times the premium, not
+      // the premium itself. A real margin figure needs Upstox's margin
+      // calculator API; this is a rough, clearly-approximate estimate
+      // instead (~10% of notional for index options, ~18% for stock
+      // options — commonly-cited rough SPAN+exposure figures, not exact).
+      const isIndexUnderlying = ['NIFTY', 'BANKNIFTY', 'SENSEX', 'FINNIFTY'].includes(name);
+      const amtRequired = action === 'SELL'
+        ? +(spot * lot * (isIndexUnderlying ? 0.10 : 0.18)).toFixed(0)
+        : +(ltp * lot).toFixed(0);
+
       picks.push({
         instrKey,
         strike: sp, type: optType, entry, sl, tgt, rr, t1, t2, t3,
         iv, delta, theta, oi, oiChg, action, signals,
         score: signals.reduce((a, s) => a + s.s, 0),
         confidence, atm: sp === atm, spot, expiry, und: name,
-        lot, amtRequired: +(ltp * lot).toFixed(0), maxLoss, maxProfit,
+        lot, amtRequired, amtIsMargin: action === 'SELL', maxLoss, maxProfit,
         trendAligned, trendDir: momentumDir, compositeScore, slTgtMethod,
         stockPCR: stockPCR || null, vix: vix || 15, priceZone,
         pdh: pdh || null, pdl: pdl || null,

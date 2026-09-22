@@ -9,7 +9,7 @@ import {
   getRec, autoSLTarget, calcEntryTrigger, detectReversal, calcMACD,
   isNearSupport, calcRSIDivergence, getSignalStrength,
   calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain,
-  applyFIIBias, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment, calcVolumeSurge, calcEMA, calcADX,
+  applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX, computeVixPercentile,
 } from './technical';
 import { applyMlRanking } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
@@ -22,10 +22,10 @@ export function getChgPct(q) {
   return prev > 0 ? (ltp - prev) / prev * 100 : 0;
 }
 
-// ctx: { symbol, token, stocks, cfg, fiiData, adaptWeights, mlModels, onTokenExpired, lg }
+// ctx: { symbol, token, stocks, cfg, fiiInterp, adaptWeights, mlModels, onTokenExpired, lg }
 // callbacks: { setProgress }
 export async function lookupInstrument(ctx, callbacks) {
-  const { symbol, token, stocks, cfg, fiiData, adaptWeights, mlModels, confCalibration, onTokenExpired, lg } = ctx;
+  const { symbol, token, stocks, cfg, fiiInterp, adaptWeights, mlModels, confCalibration, onTokenExpired, lg, vixHistorySeries } = ctx;
   const { setProgress } = callbacks;
   const s = (symbol || '').trim().toUpperCase();
   if (!s) return null;
@@ -115,27 +115,8 @@ export async function lookupInstrument(ctx, callbacks) {
       const numInds = countIndicatorsEx(rsi, macd.bull, a50, a200, volOk, nearS, pats, preRec, macd, bb, adx, rsiDiv);
       const rec = numInds >= 4 ? 'BUY' : numInds >= 3 ? 'MODERATE' : numInds >= 2 ? 'WATCH' : 'AVOID';
       let conf = calcConfidence(null, vixSc, pcrSc, chgPct > 0, 0, q.volume || 0, volObj?.avgVol || 1, pats, preRec, numInds);
-      // Enhancements (parity with stockScan.js — same indicators, same weights)
-      if(macd?.bullCross)                      conf=Math.min(99,conf+6);
-      if(macd?.histRising&&macd?.bullish)       conf=Math.min(99,conf+3);
-      if(macd?.bearCross)                       conf=Math.max(1, conf-8);
-      if(bb?.squeeze)                           conf=Math.min(99,conf+5);
-      if(bb?.nearLowerBand)                     conf=Math.min(99,conf+4);
-      if(bb?.percentB>1.0)                      conf=Math.max(1, conf-5);
-      if(adx?.bullTrend)                        conf=Math.min(99,conf+5);
-      if(adx?.bearTrend)                        conf=Math.max(1, conf-6);
-      if(adx&&!adx.trending&&!adx.weakTrend)    conf=Math.max(1,conf-3);
-      if(rsiDiv?.bullish)         conf=Math.min(99,conf+7+Math.min(5,rsiDiv.strength||0));
-      if(rsiDiv?.hidden_bullish)  conf=Math.min(99,conf+4);
-      if(rsiDiv?.bearish)         conf=Math.max(1, conf-8);
-      if(rsiDiv?.hidden_bearish)  conf=Math.max(1, conf-4);
-      if(vwapBands?.nearLowerBand)              conf=Math.min(99,conf+3);
-      if(vwapBands?.position==='FAR_ABOVE'||vwapBands?.position==='ABOVE_1SD') conf=Math.max(1,conf-4);
-      const delivBoost = delivPct!=null?(delivPct>=60?1:delivPct<=25?-1:0):0;
-      conf=Math.min(100,Math.max(0,conf+delivBoost*5));
-      conf=applyFIIBias(conf, preRec==='BUY'||preRec==='STRONG BUY', null);
       conf=applyCalibration(conf, confCalibration||null);
-      const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(chgPct) / 1.0), vixVal);
+      const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(chgPct) / 1.0), vixVal, computeVixPercentile(vixHistorySeries, vixVal));
       conf=applyRegimeAdjustment(conf, stockRegime, cfg);
       // Confluence — same 6-module framework as stockScan.js (parity); no peer
       // group here for a real sector score, so marketContext relies on NIFTY PCR only.
@@ -150,23 +131,48 @@ export async function lookupInstrument(ctx, callbacks) {
         marketContext: pcrSc>60?1:pcrSc<40?-1:0,
       };
       const confluence = computeConfluence(confluenceModules, 1);
-      conf = applyConfluenceAdjustment(conf, confluence, cfg);
       const risk = calcRisk(ltp, sl, target, atr, 0);
       const pot = calcPotential(ltp, target, sl, numInds, rec);
       const reversal = detectReversal(ltp, rsi, pats, sr, 0, 1.0, chgPct > 0, chgPct, atr, q.ohlc?.high || ltp, q.ohlc?.low || ltp);
       const vwap = calcVWAP(candles);
       const aboveVWAP = vwap > 0 ? ltp >= vwap : null;
+      const isBuyLean = preRec==='BUY'||preRec==='STRONG BUY';
+      // Every previously-hardcoded bonus/penalty (MACD/BB/ADX/RSI-div/VWAP/delivery,
+      // FII bias, confluence tier, reversal sub-signals) is now expressed purely as
+      // a boolean flag — applyAdaptWeights looks up each flag's LEARNED win-rate-lift
+      // adjustment from real closed-signal history, same as stockScan.js.
       const _indSnap = {
-        macdBull: macd.bull===true, macdBullCross: macd?.bullCross===true, macdBearCross: macd?.bearCross===true,
-        bbSqueeze: bb?.squeeze===true, bbNearLower: bb?.nearLowerBand===true, adxBull: adx?.bullTrend===true,
-        adxBear: adx?.bearTrend===true, rsiDiv: rsiDiv?.bullish===true, rsiDivHidden: rsiDiv?.hidden_bullish===true,
-        rsiBearDiv: rsiDiv?.bearish===true, a50: a50===true, a200: a200===true, nearSupp: !!nearS,
-        aboveVWAP: aboveVWAP===true, vwapNearLower: vwapBands?.nearLowerBand===true, engulfing: pats?.bullishEngulfing===true, hammer: pats?.hammer===true,
-        morningStar: pats?.morningStar===true, reversalFired: (reversal?.type || 'NONE') !== 'NONE',
+        macdBull: macd.bull===true, macdBullCross: macd?.bullCross===true,
+        macdHistRising: (macd?.histRising&&macd?.bullish)===true,
+        macdBearCross: macd?.bearCross===true,
+        bbSqueeze: bb?.squeeze===true, bbNearLower: bb?.nearLowerBand===true, bbAboveUpper: bb?.percentB>1.0,
+        adxBull: adx?.bullTrend===true, adxBear: adx?.bearTrend===true,
+        adxNoTrend: !!(adx && !adx.trending && !adx.weakTrend),
+        rsiDiv: rsiDiv?.bullish===true, rsiDivHidden: rsiDiv?.hidden_bullish===true,
+        rsiBearDiv: rsiDiv?.bearish===true, rsiBearDivHidden: rsiDiv?.hidden_bearish===true,
+        a50: a50===true, a200: a200===true, nearSupp: !!nearS,
+        aboveVWAP: aboveVWAP===true, vwapNearLower: vwapBands?.nearLowerBand===true,
+        vwapFarAbove: (vwapBands?.position==='FAR_ABOVE'||vwapBands?.position==='ABOVE_1SD'),
+        engulfing: pats?.bullishEngulfing===true, hammer: pats?.hammer===true,
+        morningStar: pats?.morningStar===true,
         delivHigh: (delivPct??0)>=60, delivLow: (delivPct??100)<=25,
+        reversalFired: (reversal?.type || 'NONE') !== 'NONE',
+        reversalBullish: reversal?.type==='BULLISH_REVERSAL',
+        reversalBearish: reversal?.type==='BEARISH_REVERSAL',
+        rsiOversold: rsi!=null && rsi<=32,
+        rsiOverbought: rsi!=null && rsi>=68,
+        vixVeryLow: vixVal>0 && vixVal<12,
+        vixHighFear: vixVal>=25,
+        near52wLow: !!(sr?.week52L>0 && ltp>0 && Math.abs((ltp-sr.week52L)/ltp*100)<2),
+        near52wHigh: !!(sr?.week52H>0 && ltp>0 && Math.abs((ltp-sr.week52H)/ltp*100)<2),
+        confluenceStrong: confluence.total>0 && confluence.ratio>=0.65 && confluence.agree>=4,
+        confluenceWeak: confluence.total>0 && confluence.ratio<0.5,
+        confluenceConflict: confluence.conflicting>=2,
+        fiiAligned: !!(fiiInterp && ((fiiInterp.bias>0) === isBuyLean) && fiiInterp.bias!==0),
+        fiiAgainst: !!(fiiInterp && ((fiiInterp.bias>0) !== isBuyLean) && fiiInterp.bias!==0),
       };
       conf = applyAdaptWeights(conf, adaptWeights?.stock || null, _indSnap);
-      const mlRank = applyMlRanking(conf, mlModels || null, { type:'STOCK', confidence: conf, numInds, risk, pot, rec: preRec, reversal, _indSnap });
+      const mlRank = applyMlRanking(conf, mlModels || null, { type:'STOCK', confidence: conf, numInds, risk, pot, rec: preRec, reversal, vix: vixVal, _indSnap });
       conf = mlRank.confidence;
       const finalRec = getRec(conf, pot.base, risk, pot.rr);
       const strength = getSignalStrength(numInds, conf, reversal);
@@ -252,21 +258,11 @@ export async function lookupInstrument(ctx, callbacks) {
         const step = inst.step || (ltp < 200 ? 5 : ltp < 500 ? 10 : ltp < 2000 ? 20 : ltp < 5000 ? 50 : 100);
         const atm = Math.round(ltp / step) * step;
         const ctxForChain = marketCtx || computeCtxFromCandles([], ltp, chgPct, 0, null);
-        const optRegime = classifyMarketRegime(Math.abs(ctxForChain?.compositeScore || 0) / 3.5, vixVal);
+        const optRegime = classifyMarketRegime(Math.abs(ctxForChain?.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
         const picks = scanChain(chain, atm, ltp, s, expiry, inst.lot, chgPct > 0, 0, maxPain, pcr, ctxForChain, cfg);
         const filteredPicks = picks
           .map((p) => {
-            const _indSnap = {
-              trendAligned: p.trendAligned||false, emaBull: p.emaTrendBull===true, emaBearish: p.emaTrendBull===false,
-              freshCross: p.emaCross==='bullish_cross'||p.emaCross==='bearish_cross', momentumFresh: p.momentumFresh||false,
-              volSpike: (p.volRatio??0)>=1.5, lowVol: (p.volRatio??1)<0.7, nearPDH: p.priceZone==='PDH_BREAK'||p.priceZone==='NEAR_PDH',
-              nearPDL: p.priceZone==='PDL_BREAK'||p.priceZone==='NEAR_PDL', oiBuildUp: p.oiBuildType==='CE_BUILD'||p.oiBuildType==='PE_BUILD',
-              compositeHigh: Math.abs(p.compositeScore??0)>=2, compositeMed: Math.abs(p.compositeScore??0)>=1, atm: p.atm||false,
-            };
-            let c = applyFIIBias(p.confidence, p.action === 'BUY', fiiData);
-            c = applyCalibration(c, confCalibration || null);
-            c = applyRegimeAdjustment(c, optRegime, cfg);
-            const optActionDir = p.type === 'CE' ? 1 : -1;
+            const actionDir = p.type === 'CE' ? 1 : -1;
             const confluenceModules = {
               trend: Math.sign((p.emaTrendBull===true?1:p.emaTrendBull===false?-1:0) + (p.emaCross==='bullish_cross'?1:p.emaCross==='bearish_cross'?-1:0)),
               momentum: p.momentumFresh ? Math.sign(p.compositeScore || 0) : 0,
@@ -275,13 +271,42 @@ export async function lookupInstrument(ctx, callbacks) {
               institutional: p.oiBuildType==='CE_BUILD' ? 1 : p.oiBuildType==='PE_BUILD' ? -1 : 0,
               marketContext: p.stockPCR != null ? (p.stockPCR > 1.2 ? 1 : p.stockPCR < 0.8 ? -1 : 0) : 0,
             };
-            const confluence = computeConfluence(confluenceModules, optActionDir);
-            c = applyConfluenceAdjustment(c, confluence, cfg);
+            const confluence = computeConfluence(confluenceModules, actionDir);
+            const isBuyLean = p.action === 'BUY';
+            // fiiInterp comes from ctx (already interpreted upstream in LookupPane) —
+            // do NOT re-derive it here, this file never receives raw fiiData.
+            // FII-bias and confluence-tier are boolean flags fed into
+            // applyAdaptWeights (learned), not fixed-formula adjustments —
+            // same pattern as the stock lookup path above.
+            const _indSnap = {
+              trendAligned: p.trendAligned||false, emaBull: p.emaTrendBull===true, emaBearish: p.emaTrendBull===false,
+              freshCross: p.emaCross==='bullish_cross'||p.emaCross==='bearish_cross', momentumFresh: p.momentumFresh||false,
+              volSpike: (p.volRatio??0)>=1.5, lowVol: (p.volRatio??1)<0.7, nearPDH: p.priceZone==='PDH_BREAK'||p.priceZone==='NEAR_PDH',
+              nearPDL: p.priceZone==='PDL_BREAK'||p.priceZone==='NEAR_PDL', oiBuildUp: p.oiBuildType==='CE_BUILD'||p.oiBuildType==='PE_BUILD',
+              compositeHigh: Math.abs(p.compositeScore??0)>=2, compositeMed: Math.abs(p.compositeScore??0)>=1, atm: p.atm||false,
+              vixVeryLow: (p.vix??0)>0 && (p.vix??0)<14, vixHighFear: (p.vix??0)>20,
+              confluenceStrong: confluence.total>0 && confluence.ratio>=0.65 && confluence.agree>=4,
+              confluenceWeak: confluence.total>0 && confluence.ratio<0.5,
+              confluenceConflict: confluence.conflicting>=2,
+              fiiAligned: !!(fiiInterp && ((fiiInterp.bias>0)===isBuyLean) && fiiInterp.bias!==0),
+              fiiAgainst: !!(fiiInterp && ((fiiInterp.bias>0)!==isBuyLean) && fiiInterp.bias!==0),
+            };
+            let c = p.confidence;
+            c = applyCalibration(c, confCalibration || null);
+            c = applyRegimeAdjustment(c, optRegime, cfg);
             c = applyAdaptWeights(c, adaptWeights?.option || null, _indSnap);
             const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap });
             return { ...p, regime: optRegime, confluence, confidence: mlRank.confidence, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj };
           })
-          .filter((p) => p.confidence >= cfg.minOptConf);
+          .filter((p) => {
+            if (p.confidence < cfg.minOptConf) return false;
+            // Same cap optionScan.js already applies — this path (option
+            // chain lookup for a single symbol) was missing it entirely,
+            // so picks above Settings' Max Capital were never filtered out.
+            const capLimit = mlModels?.thresholds?.option?.maxCapital || cfg.maxOptCapital;
+            if (!capLimit || capLimit <= 0) return true;
+            return p.amtRequired <= capLimit;
+          });
 
         let multiExpiry = null;
         if (nextExp) {

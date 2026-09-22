@@ -19,6 +19,7 @@ function getAiFolder()       { return `ai-models/${_uid()}`; }
 function getAiLatestPath()   { return `${getAiFolder()}/latest.json`; }
 function getAiHistoryIndexPath()        { return `${getAiFolder()}/history/index.json`; }
 function getAiHistoryDayPath(date)      { return `${getAiFolder()}/history/${date}.json`; }
+function getVixHistoryPath()            { return `${getAiFolder()}/vix-history.json`; }
 
 // ── Base GitHub fetch ──
 const _ghInflight = new Map();
@@ -130,6 +131,24 @@ export async function pushAiModelToGH(gh, modelPayload) {
   } catch (_) { return false; }
 }
 
+export async function pullVixHistoryFromGH(gh) {
+  try {
+    const d = await _ghFetch(gh, getVixHistoryPath());
+    if (!d) return null;
+    return _decode(d.content);
+  } catch (_) { return null; }
+}
+
+export async function pushVixHistoryToGH(gh, payload) {
+  if (!gh.token || !gh.user || !gh.repo || !payload) return false;
+  try {
+    const existing = await _ghFetch(gh, getVixHistoryPath());
+    const sha = existing?.sha || null;
+    const r = await _ghPut(gh, getVixHistoryPath(), payload, sha, `SCANNER VIX history · ${_uid()}`);
+    return r?.ok ?? false;
+  } catch (_) { return false; }
+}
+
 export async function appendAiHistoryToGH(gh, snapshot) {
   if (!gh.token || !gh.user || !gh.repo || !snapshot) return false;
   try {
@@ -179,7 +198,6 @@ function _cacheGet(date, maxAgeMs = 90000) {
   if (!c || Date.now() - c.loadedAt > maxAgeMs) return null;
   return c;
 }
-export function getLastSignalLogFailReason() { return _lastWriteFailReason; }
 
 export async function ghReadDay(gh, date) {
   const cached = _cacheGet(date);
@@ -228,6 +246,15 @@ export async function ghWriteDay(gh, signals, sha, date, retryCount = 0) {
     const rd = await r.json();
     const newSha = rd?.content?.sha || sha;
     _cachePut(date, signals, newSha);
+    // Keep the index's open-count in sync with what just got written — this
+    // was previously only set once at signal-creation time and never
+    // refreshed after a resolution write, so datesWithOpen (used by
+    // runSignalMonitor/monitorSignals.mjs to decide which dates to even
+    // check) could silently drift stale over time. Fire-and-forget: a
+    // missed index refresh here is a minor inefficiency (a resolved date
+    // gets checked once more than necessary), not a correctness issue —
+    // datesWithOpen only needs the count to still be nonzero, not exact.
+    ghUpdateIndex(gh, date, payload.stats).catch(() => {});
     return newSha;
   }
 
@@ -264,6 +291,16 @@ export async function ghWriteDay(gh, signals, sha, date, retryCount = 0) {
     return ghWriteDay(gh, merged, fresh.sha || null, date, retryCount + 1);
   }
 
+  // Retries exhausted (2 conflicts in a row) — the computed update (e.g. a
+  // signal resolving to SL_HIT/TARGET_HIT) is being silently dropped here.
+  // This used to return null with no trace at all, which is exactly the
+  // kind of bug that lets a signal sit wrongly marked OPEN indefinitely if
+  // two writers (client runSignalMonitor + server monitorSignals.mjs) keep
+  // colliding on the same day file. Surfacing it so it's at least visible.
+  if (r && (r.status === 409 || r.status === 422)) {
+    console.warn(`[SCANNER] ghWriteDay: gave up after ${retryCount} retries for ${getLogDayPath(date)} — update was NOT persisted`);
+    _lastWriteFailReason = `write conflict, retries exhausted for ${date}`;
+  }
   return null;
 }
 
@@ -358,30 +395,16 @@ export function buildStockSignal(p, vixVal) {
     mlProbability:  p.mlProbability ?? null,
     mlAdj:          p.mlAdj ?? null,
     // ── Indicator snapshot — used by adaptWeights to learn which signals predict wins ──
-    indicators: {
-      macdBull:         p.macdBull              === true,
-      macdBullCross:    p.macd?.bullCross        === true,
-      macdBearCross:    p.macd?.bearCross        === true,
-      bbSqueeze:        p.bb?.squeeze            === true,
-      bbNearLower:      p.bb?.nearLowerBand      === true,
-      adxBull:          p.adx?.bullTrend         === true,
-      adxBear:          p.adx?.bearTrend         === true,
-      rsiDiv:           p.rsiDiv?.bullish        === true,
-      rsiDivHidden:     p.rsiDiv?.hidden_bullish === true,
-      rsiBearDiv:       p.rsiDiv?.bearish        === true,
-      a50:              p.a50                    === true,
-      a200:             p.a200                   === true,
-      nearSupp:         !!p.nearSupp,
-      aboveVWAP:        p.aboveVWAP              === true,
-      vwapNearLower:    p.vwapBands?.nearLowerBand === true,
-      engulfing:        p.patterns?.bullishEngulfing === true,
-      hammer:           p.patterns?.hammer       === true,
-      morningStar:      p.patterns?.morningStar  === true,
-      reversalFired:    (p.reversal?.type || 'NONE') !== 'NONE',
-      delivHigh:        (p.delivPct ?? 0) >= 60,
-      delivLow:         (p.delivPct ?? 100) <= 25,
-      numInds:          p.numInds || 0,
-    },
+    // p._indSnap is the SAME object already used at scan time (applyAdaptWeights)
+    // in stockScan.js/lookupService.js. Persisting it directly — instead of a
+    // separate hand-maintained field list here — is the fix for a real bug: this
+    // list had drifted out of sync with _indSnap (missing vixVeryLow, vixHighFear,
+    // confluenceStrong/Weak/Conflict, fiiAligned/Against, rsiOversold/Overbought,
+    // near52wLow/High, and others), so every one of those flags was silently
+    // discarded at log time and could never accumulate the samples adaptWeights
+    // needs to learn from them — no matter how long the app ran.
+    indicators: p._indSnap || {},
+    regime: p.regime || null,
     status:         'OPEN',
     holdDays,
     atr:            p.atr || 0,
@@ -429,6 +452,7 @@ export function buildOptionSignal(p, vixVal) {
     delta:          p.delta || 0,
     theta:          p.theta || 0,
     capitalReq:     p.amtRequired || 0,
+    capitalIsMargin: p.amtIsMargin || false,
     vix:            vixVal || null,
     slTgtMethod:    p.slTgtMethod  || null,
     compositeScore: p.compositeScore  ?? null,
@@ -440,21 +464,12 @@ export function buildOptionSignal(p, vixVal) {
     oiBuildType:    p.oiBuildType     || '',
     trendAligned:   p.trendAligned    || false,
     // ── Indicator snapshot for adaptWeights ──
-    indicators: {
-      trendAligned:   p.trendAligned    || false,
-      emaBull:        p.emaTrendBull    === true,
-      emaBearish:     p.emaTrendBull    === false,
-      freshCross:     p.emaCross === 'bullish_cross' || p.emaCross === 'bearish_cross',
-      momentumFresh:  p.momentumFresh   || false,
-      volSpike:       (p.volRatio ?? 0) >= 1.5,
-      lowVol:         (p.volRatio ?? 1) < 0.7,
-      nearPDH:        p.priceZone === 'abovePDH' || p.priceZone === 'nearPDH',
-      nearPDL:        p.priceZone === 'belowPDL' || p.priceZone === 'nearPDL',
-      oiBuildUp:      p.oiBuildType === 'LONG_BUILD' || p.oiBuildType === 'SHORT_COVER',
-      compositeHigh:  Math.abs(p.compositeScore ?? 0) >= 2,
-      compositeMed:   Math.abs(p.compositeScore ?? 0) >= 1,
-      atm:            p.atm             || false,
-    },
+    // Same fix as buildStockSignal above: persist the actual _indSnap object
+    // computed at scan time instead of a separate, drift-prone field list —
+    // this one was missing vixVeryLow, vixHighFear, confluenceStrong/Weak/
+    // Conflict, and fiiAligned/Against entirely.
+    indicators: p._indSnap || {},
+    regime: p.regime || null,
     status:         'OPEN',
     holdDays:       strengthLabel === 'STRONG' ? 3 : strengthLabel === 'MODERATE' ? 2 : 1,
     riskDist:       +Math.abs((p.entry || 0) - (p.sl || 0)).toFixed(2),

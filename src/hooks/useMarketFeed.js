@@ -1,6 +1,5 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useSyncExternalStore } from 'react';
 import { fetchQ, resolveAccessToken } from '../services/api.js';
-import { sleep } from '../utils/marketTime.js';
 
 // ── Minimal Protobuf binary reader for Upstox v3 ltpc feed ───
 // Upstox v3 sends binary protobuf FeedResponse:
@@ -268,220 +267,263 @@ export async function fetchScanQuotesViaWS(token, instrumentKeys, timeoutMs = 80
   });
 }
 
+// ── Shared singleton connection ───────────────────────────────────
+// Upstox's market-data feed only tolerates ONE live WS session per access
+// token. Before this, every useMarketFeed() call site opened its OWN
+// independent connection — 12 separate call sites across this app
+// (StocksPane alone calls it twice), plus the always-on Ticker header —
+// so having more than one page's worth of feed active at once (which is
+// now permanent, since Ticker never unmounts) meant each new connection
+// silently killed whichever connected first. This module-level store is
+// shared by every useMarketFeed() instance: one real WebSocket, one merged
+// instrument-key subscription, all consumers reading the same live prices
+// via useSyncExternalStore (React's built-in tool for exactly this —
+// subscribing components to state that lives outside React).
+const _store = {
+  ws: null,
+  token: null,
+  connectSeq: 0,
+  retryCount: 0,
+  retryTimer: null,
+  pollTimer: null,
+  blockedUntil: 0,
+  subscribers: new Map(),   // subscriberId -> { keys: Set<string>, mode: string }
+  state: { connected: false, lastPrices: {}, wsMode: 'connecting' },
+  listeners: new Set(),     // React re-render callbacks
+};
+
+function _notify() { for (const l of _store.listeners) l(); }
+function _setStatus(patch) { _store.state = { ..._store.state, ...patch }; _notify(); }
+
+function _allActiveKeys() {
+  const set = new Set();
+  for (const sub of _store.subscribers.values()) for (const k of sub.keys) set.add(k);
+  return [...set];
+}
+// If any active subscriber needs 'full' mode, use 'full' for the whole
+// shared connection — a superset of 'ltpc', so it satisfies every consumer
+// on the one physical socket instead of needing per-key mode tracking.
+function _effectiveMode() {
+  for (const sub of _store.subscribers.values()) if (sub.mode === 'full') return 'full';
+  return 'ltpc';
+}
+
+function _applyPrices(map) {
+  const next = { ..._store.state.lastPrices };
+  let changed = false;
+  for (const [k, v] of Object.entries(map)) {
+    if (v && v.ltp > 0) {
+      const cp = v.cp || v.ltp;
+      const day = v.ohlcMap?.['1d'] || {};
+      next[k] = {
+        ltp:       v.ltp,
+        cp,
+        oi:        v.oi,
+        atp:       v.atp  || 0,
+        vtt:       v.vtt  || 0,
+        high:      day.high  || 0,
+        low:       day.low   || 0,
+        open:      day.open  || 0,
+        ohlcMap:   v.ohlcMap || {},
+        chgPct:    cp > 0 ? +((v.ltp - cp) / cp * 100).toFixed(2) : 0,
+        changeAmt: (v.ltp - cp).toFixed(2),
+      };
+      changed = true;
+    }
+  }
+  if (changed) { _store.state = { ..._store.state, lastPrices: next }; _notify(); }
+}
+
+function _stopPolling() { clearInterval(_store.pollTimer); _store.pollTimer = null; }
+
+function _startPolling(token, pollFallback) {
+  if (!pollFallback) return;
+  _stopPolling();
+  _setStatus({ wsMode: 'poll', connected: true });
+  const runPoll = async () => {
+    const keys = _allActiveKeys();
+    if (!keys.length || !token) return;
+    try {
+      const batches = [];
+      for (let i = 0; i < keys.length; i += 50) batches.push(keys.slice(i, i + 50));
+      for (const batch of batches) {
+        const map = await fetchQ(batch.join(','), token, () => {});
+        const priceMap = {};
+        for (const [k, q] of Object.entries(map)) {
+          const ltp = q.last_price || 0;
+          const cp  = q.ohlc?.close || ltp;
+          priceMap[k] = { ltp, cp };
+        }
+        _applyPrices(priceMap);
+      }
+    } catch (e) { /* silent */ }
+  };
+  runPoll();
+  _store.pollTimer = setInterval(runPoll, 15000);
+}
+
+function _disconnectSocket() {
+  _store.connectSeq++;
+  clearTimeout(_store.retryTimer);
+  _stopPolling();
+  if (_store.ws) {
+    _store.ws.onclose = null;
+    try { _store.ws.close(1000); } catch (e) {}
+    _store.ws = null;
+  }
+  _setStatus({ connected: false, wsMode: 'connecting' });
+}
+
+function _resubscribeIfOpen() {
+  if (_store.ws?.readyState === WebSocket.OPEN) {
+    sendFeedRequest(_store.ws, {
+      guid:   crypto.randomUUID(),
+      method: 'sub',
+      data:   { mode: _effectiveMode(), instrumentKeys: _allActiveKeys() },
+    });
+  }
+}
+
+async function _connectSocket(token, pollFallback, retryOnFailure) {
+  if (!token || !_allActiveKeys().length) return;
+  if (Date.now() < _store.blockedUntil) { _startPolling(token, pollFallback); return; }
+  if (_store.ws?.readyState === WebSocket.OPEN || _store.ws?.readyState === WebSocket.CONNECTING) return;
+
+  const seq = ++_store.connectSeq;
+  try {
+    let authData = null, authError = '';
+    for (const url of AUTHORIZE_URLS) {
+      const authRes = await fetch(url, { headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' } });
+      if (authRes.ok) { authData = await authRes.json(); break; }
+      let detail = '';
+      try { detail = await authRes.text(); } catch (e) { /* ignore */ }
+      authError = 'Auth failed: ' + authRes.status + (detail ? ' ' + detail.slice(0, 120) : '');
+      if (!detail.includes('UDAPI100012')) break;
+    }
+    if (!authData) throw new Error(authError || 'Auth failed');
+
+    const wsUrl = authData?.data?.authorized_redirect_uri
+      || authData?.authorized_redirect_uri
+      || authData?.data?.uri
+      || authData?.uri;
+    if (!wsUrl || seq !== _store.connectSeq) return;
+
+    const socket = new WebSocket(wsUrl);
+    let opened = false;
+    let handshakeFailed = false;
+    socket.binaryType = 'arraybuffer';
+    _store.ws = socket;
+
+    socket.onopen = () => {
+      if (seq !== _store.connectSeq || _store.ws !== socket) {
+        try { socket.close(1000); } catch (_) {}
+        return;
+      }
+      opened = true;
+      _store.retryCount = 0;
+      _setStatus({ connected: true, wsMode: 'ws' });
+      _stopPolling();
+      sendFeedRequest(socket, {
+        guid: crypto.randomUUID(),
+        method: 'sub',
+        data: { mode: _effectiveMode(), instrumentKeys: _allActiveKeys() },
+      });
+    };
+
+    socket.onmessage = (evt) => {
+      if (seq !== _store.connectSeq || _store.ws !== socket) return;
+      try {
+        if (evt.data instanceof ArrayBuffer) {
+          const feeds = decodeFeedResponse(evt.data);
+          if (Object.keys(feeds).length > 0) _applyPrices(feeds);
+        } else if (typeof evt.data === 'string') {
+          const d = JSON.parse(evt.data);
+          if (d?.feeds) _applyPrices(d.feeds);
+        }
+      } catch (e) { /* ignore malformed frames */ }
+    };
+
+    socket.onerror = () => {
+      if (seq !== _store.connectSeq || _store.ws !== socket) return;
+      handshakeFailed = !opened;
+      if (handshakeFailed) _store.blockedUntil = Date.now() + 300000;
+      _setStatus({ connected: false, wsMode: 'poll' });
+      _startPolling(token, pollFallback);
+    };
+
+    socket.onclose = (e) => {
+      if (seq !== _store.connectSeq || _store.ws !== socket) return;
+      _setStatus({ connected: false });
+      _store.ws = null;
+      if (e.code === 1000) return;
+      _startPolling(token, pollFallback);
+      if (handshakeFailed || !retryOnFailure) return;
+      const delay = Math.min(30000, 2000 * Math.pow(2, _store.retryCount));
+      _store.retryCount++;
+      _store.retryTimer = setTimeout(() => _connectSocket(token, pollFallback, retryOnFailure), delay);
+    };
+  } catch (e) {
+    if (seq !== _store.connectSeq) return;
+    console.warn('WS init failed:', e.message, '- falling back to REST polling');
+    _startPolling(token, pollFallback);
+  }
+}
+
 export function useMarketFeed(token, instrumentKeys = [], enabled = true, options = {}) {
   const mode = options.mode || 'ltpc';
   const pollFallback = options.pollFallback !== false;
   const retryOnFailure = options.retryOnFailure !== false;
-  const ws          = useRef(null);
-  const connectSeq  = useRef(0);
-  const retryRef    = useRef(0);
-  const retryTimer  = useRef(null);
-  const pollTimer   = useRef(null);
-  const blockedUntilRef = useRef(0);
-  const keysRef     = useRef([]);
-  const tokenRef    = useRef(token);
-
-  const [connected,   setConnected]   = useState(false);
-  const [lastPrices,  setLastPrices]  = useState({});
-  const [wsMode,      setWsMode]      = useState('connecting'); // 'ws'|'poll'|'connecting'
+  const idRef = useRef(null);
+  if (!idRef.current) idRef.current = Symbol('market-feed-subscriber');
+  const id = idRef.current;
 
   const resolvedToken = resolveAccessToken(token);
-  if (tokenRef.current !== resolvedToken) blockedUntilRef.current = 0;
-  tokenRef.current = resolvedToken;
+  const keysKey = instrumentKeys.join(',');
 
-  // ── Price update helper ──
-  const applyPrices = useCallback((map) => {
-    setLastPrices(prev => {
-      const next = { ...prev };
-      for (const [k, v] of Object.entries(map)) {
-        if (v && v.ltp > 0) {
-          const cp = v.cp || v.ltp;
-          const day = v.ohlcMap?.['1d'] || {};
-          next[k] = {
-            ltp:       v.ltp,
-            cp,
-            oi:        v.oi,
-            atp:       v.atp  || 0,
-            vtt:       v.vtt  || 0,
-            high:      day.high  || 0,
-            low:       day.low   || 0,
-            open:      day.open  || 0,
-            ohlcMap:   v.ohlcMap || {},
-            chgPct:    cp > 0 ? +((v.ltp - cp) / cp * 100).toFixed(2) : 0,
-            changeAmt: (v.ltp - cp).toFixed(2),
-          };
-        }
-      }
-      return next;
-    });
-  }, []);
-
-  // ── REST polling fallback ──────────────────────────────────
-  const startPolling = useCallback(() => {
-    if (!pollFallback) return;
-    clearInterval(pollTimer.current);
-    setWsMode('poll');
-    setConnected(true);
-    const runPoll = async () => {
-      const keys = keysRef.current;
-      if (!keys.length || !tokenRef.current) return;
-      try {
-        const batches = [];
-        for (let i = 0; i < keys.length; i += 50) batches.push(keys.slice(i, i + 50));
-        for (const batch of batches) {
-          const map = await fetchQ(batch.join(','), tokenRef.current, () => {});
-          const priceMap = {};
-          for (const [k, q] of Object.entries(map)) {
-            const ltp = q.last_price || 0;
-            const cp  = q.ohlc?.close || ltp;
-            priceMap[k] = { ltp, cp };
-          }
-          applyPrices(priceMap);
-        }
-      } catch (e) { /* silent */ }
-    };
-    runPoll();
-    pollTimer.current = setInterval(runPoll, 15000);
-  }, [applyPrices, pollFallback]);
-
-  const stopPolling = useCallback(() => {
-    clearInterval(pollTimer.current);
-  }, []);
-
-  // ── WebSocket connect ────────────────────────────────────────
-  const connect = useCallback(async () => {
-    const accessToken = resolveAccessToken(token);
-    if (!accessToken || !keysRef.current.length || !enabled) return;
-    if (Date.now() < blockedUntilRef.current) {
-      startPolling();
+  useEffect(() => {
+    if (!enabled || !resolvedToken || !instrumentKeys.length) {
+      _store.subscribers.delete(id);
+      if (_store.subscribers.size === 0) _disconnectSocket();
+      else _resubscribeIfOpen();
       return;
     }
-    if (ws.current?.readyState === WebSocket.OPEN || ws.current?.readyState === WebSocket.CONNECTING) return;
-
-    const seq = ++connectSeq.current;
-
-    try {
-      let authData = null;
-      let authError = '';
-      for (const url of AUTHORIZE_URLS) {
-        const authRes = await fetch(url, {
-          headers: { Authorization: 'Bearer ' + accessToken, Accept: 'application/json' },
-        });
-        if (authRes.ok) {
-          authData = await authRes.json();
-          break;
-        }
-        let detail = '';
-        try { detail = await authRes.text(); } catch (e) { /* ignore */ }
-        authError = 'Auth failed: ' + authRes.status + (detail ? ' ' + detail.slice(0, 120) : '');
-        if (!detail.includes('UDAPI100012')) break;
-      }
-      if (!authData) throw new Error(authError || 'Auth failed');
-
-      const wsUrl = authData?.data?.authorized_redirect_uri
-        || authData?.authorized_redirect_uri
-        || authData?.data?.uri
-        || authData?.uri;
-      if (!wsUrl || seq !== connectSeq.current) return;
-
-      const socket = new WebSocket(wsUrl);
-      let opened = false;
-      let handshakeFailed = false;
-      socket.binaryType = 'arraybuffer';
-      ws.current = socket;
-
-      socket.onopen = () => {
-        if (seq !== connectSeq.current || ws.current !== socket) {
-          try { socket.close(1000); } catch (_) {}
-          return;
-        }
-        opened = true;
-        retryRef.current = 0;
-        setConnected(true);
-        setWsMode('ws');
-        stopPolling();
-        sendFeedRequest(socket, {
-          guid: crypto.randomUUID(),
-          method: 'sub',
-          data: { mode, instrumentKeys: keysRef.current },
-        });
-      };
-
-      socket.onmessage = (evt) => {
-        if (seq !== connectSeq.current || ws.current !== socket) return;
-        try {
-          if (evt.data instanceof ArrayBuffer) {
-            const feeds = decodeFeedResponse(evt.data);
-            if (Object.keys(feeds).length > 0) applyPrices(feeds);
-          } else if (typeof evt.data === 'string') {
-            const d = JSON.parse(evt.data);
-            if (d?.feeds) applyPrices(d.feeds);
-          }
-        } catch (e) { /* ignore malformed frames */ }
-      };
-
-      socket.onerror = () => {
-        if (seq !== connectSeq.current || ws.current !== socket) return;
-        handshakeFailed = !opened;
-        if (handshakeFailed) blockedUntilRef.current = Date.now() + 300000;
-        setConnected(false);
-        setWsMode('poll');
-        startPolling();
-      };
-
-      socket.onclose = (e) => {
-        if (seq !== connectSeq.current || ws.current !== socket) return;
-        setConnected(false);
-        ws.current = null;
-        if (e.code === 1000) return;
-        startPolling();
-        if (handshakeFailed || !retryOnFailure) return;
-        const delay = Math.min(30000, 2000 * Math.pow(2, retryRef.current));
-        retryRef.current++;
-        retryTimer.current = setTimeout(connect, delay);
-      };
-    } catch (e) {
-      if (seq !== connectSeq.current) return;
-      console.warn('WS init failed:', e.message, '- falling back to REST polling');
-      startPolling();
+    // Token changed (re-login) — reset the whole shared connection so the
+    // new token gets used, not the stale one.
+    if (_store.token !== resolvedToken) {
+      _store.token = resolvedToken;
+      _store.blockedUntil = 0;
+      _disconnectSocket();
     }
-  }, [token, enabled, mode, applyPrices, startPolling, stopPolling, retryOnFailure]);
-  const disconnect = useCallback(() => {
-    connectSeq.current++;
-    clearTimeout(retryTimer.current);
-    stopPolling();
-    if (ws.current) {
-      ws.current.onclose = null;
-      try { ws.current.close(1000); } catch (e) {}
-      ws.current = null;
+    _store.subscribers.set(id, { keys: new Set(instrumentKeys), mode });
+    if (_store.ws?.readyState === WebSocket.OPEN) {
+      _resubscribeIfOpen();
+    } else {
+      _connectSocket(resolvedToken, pollFallback, retryOnFailure);
     }
-    setConnected(false);
-    setWsMode('connecting');
-  }, [stopPolling]);
+    return () => {
+      _store.subscribers.delete(id);
+      if (_store.subscribers.size === 0) _disconnectSocket();
+      else _resubscribeIfOpen();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolvedToken, enabled, keysKey, mode]);
+
+  const state = useSyncExternalStore(
+    (cb) => { _store.listeners.add(cb); return () => _store.listeners.delete(cb); },
+    () => _store.state
+  );
 
   const subscribe = useCallback((keys) => {
     if (!keys?.length) return;
-    if (ws.current?.readyState === WebSocket.OPEN) {
-      sendFeedRequest(ws.current, {
-        guid:   crypto.randomUUID(),
-        method: 'sub',
-        data:   { mode, instrumentKeys: keys },
-      });
-    }
-  }, [mode]);
+    const sub = _store.subscribers.get(id);
+    if (sub) keys.forEach((k) => sub.keys.add(k));
+    _resubscribeIfOpen();
+  }, [id]);
 
-  useEffect(() => {
-    const accessToken = resolveAccessToken(token);
-    keysRef.current = instrumentKeys;
-    if (!accessToken) blockedUntilRef.current = 0;
-    if (!enabled || !accessToken || !instrumentKeys.length) { disconnect(); return; }
-    if (ws.current?.readyState === WebSocket.OPEN) {
-      subscribe(instrumentKeys);
-    } else {
-      connect();
-    }
-    return disconnect;
-  }, [token, enabled, instrumentKeys.join(',')]); // eslint-disable-line
+  const disconnect = useCallback(() => {
+    _store.subscribers.delete(id);
+    if (_store.subscribers.size === 0) _disconnectSocket();
+  }, [id]);
 
-  return { connected, lastPrices, wsMode, subscribe, disconnect };
+  return { connected: state.connected, lastPrices: state.lastPrices, wsMode: state.wsMode, subscribe, disconnect };
 }

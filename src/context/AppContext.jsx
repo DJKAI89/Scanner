@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { DEF, CFG_VERSION } from '../constants/config';
 import { localIsOpen, getMarketStatusLocal, getIST, getISTDate } from '../utils/marketTime';
-import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken, fetchFIIDIIData } from '../services/api';
+import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken, fetchFIIDIIData, fetchCandles } from '../services/api';
 
 // One-time migration: rename legacy 'friday_*' localStorage keys to 'scanner_*'
 // so existing users' token/settings/ML models survive the FRIDAY→Scanner rename.
@@ -15,8 +15,8 @@ import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken, fetchFIIDIID
   });
   localStorage.setItem('scanner_migrated_v1', '1');
 })();
-import { interpretFIIDII } from '../services/technical';
-import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded, ghReadIndex, ghReadDay, ghWriteDay, pullAiModelFromGH, pushAiModelToGH, appendAiHistoryToGH, pullAiHistoryFromGH } from '../services/github';
+import { interpretFIIDII, computeVixPercentile } from '../services/technical';
+import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNeeded, ghReadIndex, ghReadDay, ghWriteDay, pullAiModelFromGH, pushAiModelToGH, appendAiHistoryToGH, pullAiHistoryFromGH, pullVixHistoryFromGH, pushVixHistoryToGH } from '../services/github';
 import { evaluateSignalExit } from '../services/tradeManagement';
 import { fetchQ, resolveAccessToken } from '../services/api';
 import { syncUpstoxTokenToGithub } from '../services/githubSecretSync';
@@ -60,6 +60,7 @@ export function AppProvider({ children }) {
 
   // ── Stocks ──
   const [stocks, setStocks]           = useState([]);
+  const [vixHistorySeries, setVixHistorySeries] = useState([]); // rolling daily VIX closes, feeds computeVixPercentile()
   const [stocksStatus, setStocksStatus] = useState('');
 
   // ── FII/DII ──
@@ -104,12 +105,12 @@ export function AppProvider({ children }) {
     setTimeout(() => setToast(null), duration);
   }, []);
 
-  const scheduleMlRefresh = useCallback((ghCfg, delayMs = 12000) => {
+  const scheduleMlRefresh = useCallback((ghCfg, delayMs = 12000, force = false) => {
     const g = ghCfg || gh;
     if (!g?.token || !g?.user || !g?.repo) return;
     if (mlRefreshTimerRef.current) clearTimeout(mlRefreshTimerRef.current);
     mlRefreshTimerRef.current = setTimeout(() => {
-      const run = () => loadConfCalibration(g);
+      const run = () => loadConfCalibration(g, force);
       if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
         window.requestIdleCallback(run, { timeout: 8000 });
       } else {
@@ -117,6 +118,19 @@ export function AppProvider({ children }) {
       }
     }, delayMs);
   }, [gh]); // eslint-disable-line
+
+  // Once-per-calendar-day forced ML refresh. Access tokens expire daily and
+  // TokenGate has the person paste a fresh one each morning, so "entering
+  // the token" is the natural daily trigger: the first boot of a new day
+  // forces loadConfCalibration(g, true), bypassing the computedAt-unchanged
+  // skip so the ranker picks up whatever the AI_Retrain.yml cron produced
+  // overnight instead of silently keeping yesterday's cached model/history.
+  const shouldForceMlToday = useCallback(() => {
+    const todayStr = new Date().toDateString();
+    if (localStorage.getItem('scanner_ml_forced_date') === todayStr) return false;
+    localStorage.setItem('scanner_ml_forced_date', todayStr);
+    return true;
+  }, []);
 
   const onTokenExpired = useCallback(() => {
     localStorage.removeItem('scanner_token');
@@ -278,6 +292,41 @@ export function AppProvider({ children }) {
     } catch (e) { lg('loadFIIDII: ' + e.message, 'w'); }
   }, [gh, token, fiiData, lg, showToast, onTokenExpired]); // eslint-disable-line
 
+  // ── loadVixHistory — rolling daily VIX close window, once per day ──
+  // Pulls the stored history from GitHub, appends any new daily closes from
+  // Upstox since the last stored date, caps at ~252 trading sessions (1yr),
+  // and pushes the merged window back to GitHub. classifyMarketRegime() uses
+  // computeVixPercentile(vixHistorySeries, liveVix) to classify off VIX's own
+  // recent distribution instead of fixed 13/22 cutoffs, once 40+ sessions
+  // are available — see technical.js for the fallback behavior below that.
+  const loadVixHistory = useCallback(async (ghCfg, upstoxToken) => {
+    const g = ghCfg || gh;
+    if (!g?.token || !g?.user || !g?.repo || !upstoxToken) return;
+    const todayStr = new Date().toDateString();
+    if (localStorage.getItem('scanner_vix_hist_date') === todayStr) return;
+    try {
+      const stored = await pullVixHistoryFromGH(g);
+      const closes = Array.isArray(stored?.closes) ? stored.closes : [];
+      const lastDate = closes.length ? closes[closes.length - 1].date : null;
+      const from = lastDate || new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10);
+      const to = new Date().toISOString().slice(0, 10);
+      const candles = await fetchCandles('NSE_INDEX|India VIX', from, to, 'day', upstoxToken, onTokenExpired);
+      const newCloses = (candles || [])
+        .map((c) => ({ date: String(c[0]).slice(0, 10), close: c[4] }))
+        .filter((c) => c.close > 0 && (!lastDate || c.date > lastDate));
+      const merged = [...closes, ...newCloses]
+        .filter((c, i, arr) => arr.findIndex((x) => x.date === c.date) === i)
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .slice(-252);
+      if (merged.length > closes.length) {
+        await pushVixHistoryToGH(g, { closes: merged, updatedAt: new Date().toISOString() });
+        lg(`VIX history: ${merged.length} sessions (added ${merged.length - closes.length})`, 'o');
+      }
+      localStorage.setItem('scanner_vix_hist_date', todayStr);
+      setVixHistorySeries(merged.map((c) => c.close));
+    } catch (e) { lg('loadVixHistory: ' + e.message, 'w'); }
+  }, [gh, onTokenExpired, lg]); // eslint-disable-line
+
   // ── loadConfCalibration + adaptWeights — self-calibrating from GitHub signal history ──
   // Two-layer calibration system:
   //   Layer 1 (confCalibration): bucket-level win-rate correction (existing)
@@ -400,15 +449,19 @@ export function AppProvider({ children }) {
 
       // ── Stock indicator analysis ──
       const STOCK_INDICATORS = [
-        'macdBull','macdBullCross','macdBearCross','bbSqueeze','bbNearLower',
-        'adxBull','adxBear','rsiDiv','rsiDivHidden','rsiBearDiv',
-        'a50','a200','nearSupp','aboveVWAP','vwapNearLower',
-        'engulfing','hammer','morningStar','reversalFired','delivHigh','delivLow',
+        'macdBull','macdBullCross','macdHistRising','macdBearCross','bbSqueeze','bbNearLower','bbAboveUpper',
+        'adxBull','adxBear','adxNoTrend','rsiDiv','rsiDivHidden','rsiBearDiv','rsiBearDivHidden',
+        'a50','a200','nearSupp','aboveVWAP','vwapNearLower','vwapFarAbove',
+        'engulfing','hammer','morningStar','reversalFired','reversalBullish','reversalBearish',
+        'delivHigh','delivLow','rsiOversold','rsiOverbought','vixVeryLow','vixHighFear',
+        'pcrBearishExtreme','pcrBullishExtreme','near52wLow','near52wHigh',
+        'confluenceStrong','confluenceWeak','confluenceConflict','fiiAligned','fiiAgainst',
       ];
       const OPT_INDICATORS = [
         'trendAligned','emaBull','emaBearish','freshCross','momentumFresh',
         'volSpike','lowVol','nearPDH','nearPDL','oiBuildUp',
-        'compositeHigh','compositeMed','atm',
+        'compositeHigh','compositeMed','atm','vixVeryLow','vixHighFear',
+        'confluenceStrong','confluenceWeak','confluenceConflict','fiiAligned','fiiAgainst',
       ];
 
       const MIN_SAMPLES = 8; // minimum signals per indicator before trusting it
@@ -694,8 +747,9 @@ export function AppProvider({ children }) {
         if (currentGH.token) {
           loadStocks(currentGH);
           loadFIIDII(currentGH);
+          loadVixHistory(currentGH, token);
           ghMigrateIfNeeded(currentGH, lg);
-          scheduleMlRefresh(currentGH, mlModels ? 20000 : 12000);
+          scheduleMlRefresh(currentGH, mlModels ? 20000 : 12000, shouldForceMlToday());
         }
       }, 2000);
     }).catch((e) => {
@@ -707,8 +761,8 @@ export function AppProvider({ children }) {
       setTimeout(() => {
         const g = { token: localStorage.getItem('scanner_gh_token') || '', user: localStorage.getItem('scanner_gh_user') || '', repo: localStorage.getItem('scanner_gh_repo') || '' };
         if (g.token) {
-          loadStocks(g); loadFIIDII(g); ghMigrateIfNeeded(g, lg);
-          scheduleMlRefresh(g, mlModels ? 20000 : 12000);
+          loadStocks(g); loadFIIDII(g); loadVixHistory(g, token); ghMigrateIfNeeded(g, lg);
+          scheduleMlRefresh(g, mlModels ? 20000 : 12000, shouldForceMlToday());
           // Start global signal monitor after 10s (give market feed time to settle)
           setTimeout(() => runSignalMonitor(g), 10000);
         }
@@ -763,6 +817,7 @@ export function AppProvider({ children }) {
     pullGHSettings,
     // market
     marketStatus,
+    vixHistorySeries, loadVixHistory,
     // ui
     activeTab, setActiveTab,
     scanning,  setScanning,

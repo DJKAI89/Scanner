@@ -116,7 +116,7 @@ export default function PortfolioPane() {
       <div style={{
         background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10,
         padding: '11px 13px', marginBottom: 8,
-        boxShadow: '0 1px 3px rgba(0,0,0,.04)',
+        boxShadow: 'var(--shadow-raised)',
       }}>
         {/* Top row: Symbol + LTP */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
@@ -124,13 +124,13 @@ export default function PortfolioPane() {
             <div style={{ fontSize: 13, fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 5 }}>
               {sym}
               {item.isLive && marketStatus.open && (
-                <span style={{ fontSize: 7, background: '#dcfce7', color: '#16a34a', borderRadius: 3, padding: '1px 4px', fontWeight: 800 }}>⚡</span>
+                <span className="badge-live"/>
               )}
             </div>
             <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 1 }}>{item.exchange || 'NSE'} EQ · Qty: {item.qty?.toLocaleString('en-IN')}</div>
           </div>
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 14, fontWeight: 800, color: item.ltp >= item.avg ? '#16a34a' : '#dc2626' }}>₹{fmt(item.ltp)}</div>
+            <div style={{ fontSize: 17, fontWeight: 800, letterSpacing:-.3, color: item.ltp >= item.avg ? '#16a34a' : '#dc2626' }}>₹{fmt(item.ltp)}</div>
             <div style={{ fontSize: 9, color: '#94a3b8' }}>Avg ₹{fmt(item.avg)}</div>
           </div>
         </div>
@@ -144,7 +144,7 @@ export default function PortfolioPane() {
             { label: 'OVERALL P&L', value: fmtPnl(item.pnl),             color: gc(item.pnl) },
           ].map(({ label, value, color }) => (
             <div key={label} style={{ background: '#f8fafc', borderRadius: 6, padding: '5px 7px' }}>
-              <div style={{ fontSize: 7, color: '#94a3b8', fontWeight: 700, letterSpacing: 0.5, marginBottom: 2 }}>{label}</div>
+              <div style={{ fontSize: 9, color: '#94a3b8', fontWeight: 700, letterSpacing: 0.5, marginBottom: 2 }}>{label}</div>
               <div style={{ fontSize: 11, fontWeight: 800, color }}>{value}</div>
             </div>
           ))}
@@ -152,9 +152,9 @@ export default function PortfolioPane() {
 
         {/* Overall % bar */}
         <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ flex: 1, height: 4, background: '#f1f5f9', borderRadius: 2, overflow: 'hidden' }}>
+          <div style={{ flex: 1, height: 5, background: '#eef2f6', borderRadius: 3, overflow: 'hidden', boxShadow: 'inset 0 1px 2px rgba(15,23,42,.06)' }}>
             <div style={{
-              height: '100%', borderRadius: 2,
+              height: '100%', borderRadius: 3,
               width: Math.min(100, Math.abs(item.pnlPct)) + '%',
               background: item.pnlPct >= 0 ? '#16a34a' : '#dc2626',
               transition: 'width .4s',

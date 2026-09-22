@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext';
 import { DEF } from '../constants/config';
 import { sanitiseGH, testGitHubConnection, pushLocalSettingsToGH } from '../services/settingsService';
 import { getIST } from '../utils/marketTime';
+import Icon from '../components/Icon.jsx';
 
 function SetRow({ label, sub, children }) {
   return (
@@ -180,7 +181,7 @@ function AdaptWeightsSection({ adaptWeights }) {
 
       {/* Stock weights */}
       {tab === 'stock' && (
-        <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden', boxShadow: 'var(--shadow-flat)' }}>
           <div style={{ background: '#f8fafc', padding: '8px 12px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 10, fontWeight: 700, color: '#374151' }}>Indicator</span>
             <span style={{ fontSize: 9, color: '#94a3b8' }}>Base WR: {Math.round(stockBaseWR * 100)}%</span>
@@ -191,8 +192,8 @@ function AdaptWeightsSection({ adaptWeights }) {
           }
           {pendingStockInds.length > 0 && (
             <div style={{ padding: '10px 12px', background: '#fffbeb', borderTop: '1px solid #fde68a' }}>
-              <div style={{ fontSize: 9, color: '#b45309', fontWeight: 600, marginBottom: 5 }}>
-                ⏳ Accumulating ({pendingStockInds.length} indicators need 8+ samples):
+              <div style={{ fontSize: 9, color: '#b45309', fontWeight: 600, marginBottom: 5, display:'flex', alignItems:'center', gap:4 }}>
+                <Icon name="clock" size={10}/>Accumulating ({pendingStockInds.length} indicators need 8+ samples):
               </div>
               <div style={{ fontSize: 9, color: '#d97706', lineHeight: 1.8 }}>
                 {pendingStockInds.map(k => STOCK_IND_LABELS[k]?.label).filter(Boolean).join(' · ')}
@@ -204,7 +205,7 @@ function AdaptWeightsSection({ adaptWeights }) {
 
       {/* Option weights */}
       {tab === 'option' && (
-        <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden', boxShadow: 'var(--shadow-flat)' }}>
           <div style={{ background: '#f8fafc', padding: '8px 12px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 10, fontWeight: 700, color: '#374151' }}>Indicator</span>
             <span style={{ fontSize: 9, color: '#94a3b8' }}>Base WR: {Math.round(optBaseWR * 100)}%</span>
@@ -215,8 +216,8 @@ function AdaptWeightsSection({ adaptWeights }) {
           }
           {pendingOptInds.length > 0 && (
             <div style={{ padding: '10px 12px', background: '#fffbeb', borderTop: '1px solid #fde68a' }}>
-              <div style={{ fontSize: 9, color: '#b45309', fontWeight: 600, marginBottom: 5 }}>
-                ⏳ Accumulating ({pendingOptInds.length} indicators need 8+ samples):
+              <div style={{ fontSize: 9, color: '#b45309', fontWeight: 600, marginBottom: 5, display:'flex', alignItems:'center', gap:4 }}>
+                <Icon name="clock" size={10}/>Accumulating ({pendingOptInds.length} indicators need 8+ samples):
               </div>
               <div style={{ fontSize: 9, color: '#d97706', lineHeight: 1.8 }}>
                 {pendingOptInds.map(k => OPT_IND_LABELS[k]?.label).filter(Boolean).join(' · ')}
