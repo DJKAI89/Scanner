@@ -246,6 +246,15 @@ export async function ghWriteDay(gh, signals, sha, date, retryCount = 0) {
     const rd = await r.json();
     const newSha = rd?.content?.sha || sha;
     _cachePut(date, signals, newSha);
+    // Keep the index's open-count in sync with what just got written — this
+    // was previously only set once at signal-creation time and never
+    // refreshed after a resolution write, so datesWithOpen (used by
+    // runSignalMonitor/monitorSignals.mjs to decide which dates to even
+    // check) could silently drift stale over time. Fire-and-forget: a
+    // missed index refresh here is a minor inefficiency (a resolved date
+    // gets checked once more than necessary), not a correctness issue —
+    // datesWithOpen only needs the count to still be nonzero, not exact.
+    ghUpdateIndex(gh, date, payload.stats).catch(() => {});
     return newSha;
   }
 
@@ -282,6 +291,16 @@ export async function ghWriteDay(gh, signals, sha, date, retryCount = 0) {
     return ghWriteDay(gh, merged, fresh.sha || null, date, retryCount + 1);
   }
 
+  // Retries exhausted (2 conflicts in a row) — the computed update (e.g. a
+  // signal resolving to SL_HIT/TARGET_HIT) is being silently dropped here.
+  // This used to return null with no trace at all, which is exactly the
+  // kind of bug that lets a signal sit wrongly marked OPEN indefinitely if
+  // two writers (client runSignalMonitor + server monitorSignals.mjs) keep
+  // colliding on the same day file. Surfacing it so it's at least visible.
+  if (r && (r.status === 409 || r.status === 422)) {
+    console.warn(`[SCANNER] ghWriteDay: gave up after ${retryCount} retries for ${getLogDayPath(date)} — update was NOT persisted`);
+    _lastWriteFailReason = `write conflict, retries exhausted for ${date}`;
+  }
   return null;
 }
 
