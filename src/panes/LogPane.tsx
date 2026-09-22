@@ -4,10 +4,10 @@ import { Spinner, ErrorBanner, EmptyState, StatCard } from '../components/common
 import { isBullSignal } from '../services/github';
 import {
   getSignalFeedKey, loadSignalLog,
-  resolveSignalsAgainstLivePrices, persistResolvedSignals, checkAllOutcomes as checkAllOutcomesService,
+  checkAllOutcomes as checkAllOutcomesService,
 } from '../services/logService';
 import { fmt } from '../utils/formatters';
-import { getIST, getISTDate } from '../utils/marketTime';
+import { getIST } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed.js';
 import Icon from '../components/Icon.jsx';
 
@@ -74,7 +74,7 @@ function SignalRow({ sig, livePrice }) {
     : 'target';
 
   return (
-    <div className={flash} style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:'12px 14px', marginBottom:8, transition:'background .3s', boxShadow:'var(--shadow-raised, 0 2px 8px rgba(15,23,42,.08))' }}>
+    <div className={flash} style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:'12px 14px', marginBottom:8, transition:'background .3s', boxShadow:'var(--shadow-raised)' }}>
       {/* Header */}
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:6, marginBottom:8 }}>
         <div>
@@ -148,7 +148,7 @@ function SignalRow({ sig, livePrice }) {
       {(partials.length > 0 || sig.beActive) && (
         <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginBottom:8 }}>
           {sig.beActive && (
-            <span style={{ fontSize:8, fontWeight:800, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:6, padding:'2px 7px' }}><Icon name="lock" size={9} style={{ marginRight:3 }}/><span>BE</span></span>
+            <span style={{ fontSize:8, fontWeight:800, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:6, padding:'2px 7px' }}><Icon name="lock" size={9} style={{ marginRight:3 }}/>Break-even active</span>
           )}
           {partials.map((p, i) => (
             <span key={i} style={{ fontSize:8, fontWeight:800, background:'#f0fdf4', color:'#16a34a', border:'1px solid #bbf7d0', borderRadius:6, padding:'2px 7px' }}>
@@ -198,7 +198,7 @@ function SignalRow({ sig, livePrice }) {
               <div style={{ height:7, background:'#eef2f6', borderRadius:4, overflow:'hidden', boxShadow:'inset 0 1px 2px rgba(15,23,42,.07)' }}>
                 <div style={{
                   height:'100%', borderRadius:4, transition:'width .4s ease',
-                  background: toPct>=100?'linear-gradient(90deg,#16a34a,#22c55e)':toPct>=50?'linear-gradient(90deg,#22c55e,#4ade80)':toPct>=0?'linear-gradient(90deg,#3b82f6,#60a5fa)':'linear-gradient(90deg,#f59e0b,#fbbf24)',
+                  background: toPct>=100?'linear-gradient(90deg,#16a34a,#22c55e)':toPct>=50?'linear-gradient(90deg,#22c55e,#4ade80)':toPct>=0?'linear-gradient(90deg,#3b82f6,#60a5fa)':'linear-gradient(90deg,#dc2626,#ef4444)',
                   width: Math.min(100, Math.max(0, toPct))+'%',
                 }} />
               </div>
@@ -217,7 +217,7 @@ function SignalRow({ sig, livePrice }) {
         {sig.exitReason && (
           <span>
             {EXIT_REASON_LABELS[sig.exitReason]
-              ? <>{EXIT_REASON_LABELS[sig.exitReason].icon && <Icon name={EXIT_REASON_LABELS[sig.exitReason].icon} size={11} style={{ marginRight:3 }}/>} {EXIT_REASON_LABELS[sig.exitReason].text}</>
+              ? <>{EXIT_REASON_LABELS[sig.exitReason].icon && <Icon name={EXIT_REASON_LABELS[sig.exitReason].icon} size={11} style={{ marginRight:3 }}/>}{EXIT_REASON_LABELS[sig.exitReason].text}</>
               : sig.exitReason}
           </span>
         )}
@@ -239,8 +239,6 @@ export default function LogPane() {
   const [filter, setFilter]           = useState('all');
   const [typeFilter, setTypeFilter]   = useState('all');
   const [days, setDays]               = useState(1);
-  const [wsResolved, setWsResolved]   = useState(0);
-  const resolvedRef = useRef(new Set());
 
   // Collect ALL open signal instrument keys (stocks + options)
   const openSignals = useMemo(() => signals.filter(s => s.status==='OPEN'), [signals]);
@@ -249,32 +247,19 @@ export default function LogPane() {
     return [...new Set(keys)];
   }, [openSignals]);
 
-  // WebSocket feed for ALL open signals (stocks + options)
+  // Live price feed for display only (LIVE PRICE / P&L bar on each open
+  // signal, and the connection badge below) — NOT for resolving signals.
+  // Resolution is handled entirely by runSignalMonitor (AppContext.jsx),
+  // which correctly checks ALL open signals across every date, not just
+  // whatever this page's date filter currently has loaded. A second,
+  // filter-scoped resolution pass used to live here too — removed: it
+  // meant switching the date filter to a wider range (e.g. 60 days) could
+  // suddenly evaluate a batch of older signals against live prices for
+  // the first time and write its own resolutions, racing with
+  // runSignalMonitor's writes to the same GitHub files.
   const { connected: wsConnected, lastPrices } = useMarketFeed(
     token, openKeys, marketStatus.open && openKeys.length > 0
   );
-
-  // Real-time SL/Target resolution — works for BOTH stocks and options
-  useEffect(() => {
-    if (!wsConnected || !openSignals.length) return;
-    const istDate = getISTDate();
-    const istTime = new Date().toLocaleTimeString('en-IN', { timeZone:'Asia/Kolkata', hour12:false });
-
-    const { updated, changed, newlyResolved, touchedIds } = resolveSignalsAgainstLivePrices(
-      signals, lastPrices, resolvedRef.current, istDate, istTime, cfg
-    );
-    if (newlyResolved.length) {
-      newlyResolved.forEach(id => resolvedRef.current.add(id));
-      setWsResolved(n => n + newlyResolved.length);
-    }
-    setSignals(updated);
-
-    if (changed) {
-      persistResolvedSignals(gh, updated, new Set(touchedIds), lg, (date, newSha) => {
-        setSigShaMap(m => ({ ...m, [date]: newSha }));
-      });
-    }
-  }, [lastPrices, wsConnected, cfg]); // eslint-disable-line
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -282,7 +267,6 @@ export default function LogPane() {
       const { signals: all, shaMap } = await loadSignalLog({ gh, days, lg, updateBadge });
       setSignals(all);
       setSigShaMap(prev => ({ ...prev, ...shaMap })); // preserve existing SHAs + add new ones
-      resolvedRef.current.clear();
     } catch(e) { setError(e.message); lg('Log error: '+e.message,'e'); }
     finally { setLoading(false); }
   }, [gh, days, updateBadge, lg]);
@@ -333,20 +317,16 @@ export default function LogPane() {
       )}
       {error && <ErrorBanner title="⚠ Log Error" message={error} onRetry={load} />}
 
-      {/* WebSocket status — shows stocks AND options monitoring */}
+      {/* WebSocket status — live price display only; actual resolution
+          happens via runSignalMonitor (AppContext), not from this feed */}
       {openKeys.length > 0 && (
         <div style={{ background:wsConnected?'#f0fdf4':'#f8fafc', border:`1px solid ${wsConnected?'#86efac':'#e2e8f0'}`, borderRadius:8, padding:'7px 12px', marginBottom:10, display:'flex', alignItems:'center', gap:8, fontSize:10, flexWrap:'wrap' }}>
           <div style={{ width:7, height:7, borderRadius:'50%', background:wsConnected?'#16a34a':'#94a3b8', flexShrink:0 }} />
           <span style={{ fontWeight:600, color:wsConnected?'#15803d':'#64748b' }}>
             {wsConnected
-              ? `⚡ Live monitoring ${stocksOpen} stock${stocksOpen!==1?'s':''} + ${optionsOpen} option${optionsOpen!==1?'s':''} — SL & Target resolve instantly`
+              ? `⚡ Live prices for ${stocksOpen} stock${stocksOpen!==1?'s':''} + ${optionsOpen} option${optionsOpen!==1?'s':''} — SL/Target checked every 60s in the background`
               : `WebSocket connecting for ${openKeys.length} open signal${openKeys.length!==1?'s':''}...`}
           </span>
-          {wsResolved > 0 && (
-            <span style={{ marginLeft:'auto', background:'#dcfce7', color:'#15803d', fontSize:9, fontWeight:800, padding:'2px 7px', borderRadius:10 }}>
-              ⚡ {wsResolved} resolved this session
-            </span>
-          )}
         </div>
       )}
 
@@ -371,7 +351,7 @@ export default function LogPane() {
         <button className="btn btn-g" onClick={load} disabled={loading} style={{ padding:'7px 14px', fontSize:11 }}>
           {loading?'⏳':'🔄 Refresh'}
         </button>
-        <button className="btn btn-g" onClick={() => runSignalMonitor()} disabled={checking} title="Check all OPEN signals against live prices now" style={{ padding:'7px 14px', fontSize:11, background:'#f0fdf4', border:'1px solid #86efac', color:'#166534' }}>
+        <button className="btn btn-g" onClick={() => runSignalMonitor()} disabled={checking} title="Check all OPEN signals against live prices now" style={{ padding:'7px 14px', fontSize:11, background:'#eff6ff', color:'#1d4ed8' }}>
           {checking ? '⏳ Checking…' : `✅ Check Now${openSignalCount > 0 ? ' (' + openSignalCount + ')' : ''}`}
         </button>
       </div>
