@@ -327,12 +327,25 @@ async function main() {
 
       const snapshot = brain.buildModelSnapshot(models);
       const today = new Date().toISOString().slice(0, 10);
-      const latestPath = `ai-models/${userId}/latest.json`;
+      // Split into per-family files (see mlRanking.js splitModelForStorage) —
+      // the combined latest.json this used to write grows past GitHub
+      // Contents API's 1MB limit as more segments mature; two smaller files
+      // buy real headroom back. latest.json itself is no longer written.
+      const stockPath  = `ai-models/${userId}/stock.json`;
+      const optionPath = `ai-models/${userId}/option.json`;
       const historyIndexPath = `ai-models/${userId}/history/index.json`;
       const historyDayPath = `ai-models/${userId}/history/${today}.json`;
+      const savedAt = new Date().toISOString();
 
-      const latestExisting = await ghFetch(latestPath);
-      await ghPut(latestPath, { ...models, trainedOffline: true, userId }, latestExisting?.sha || null, `SCANNER AI offline retrain · ${userId}`);
+      const { stock, option } = brain.splitModelForStorage(models);
+      if (stock) {
+        const existing = await ghFetch(stockPath);
+        await ghPut(stockPath, { ...stock, trainedOffline: true, userId, savedAt }, existing?.sha || null, `SCANNER AI offline retrain (stock) · ${userId}`);
+      }
+      if (option) {
+        const existing = await ghFetch(optionPath);
+        await ghPut(optionPath, { ...option, trainedOffline: true, userId, savedAt }, existing?.sha || null, `SCANNER AI offline retrain (option) · ${userId}`);
+      }
 
       const historyDayExisting = await ghFetch(historyDayPath);
       await ghPut(historyDayPath, { date: today, snapshot, trainedOffline: true, userId }, historyDayExisting?.sha || null, `SCANNER AI history · ${userId} · ${today}`);
