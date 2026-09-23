@@ -19,9 +19,12 @@ function getLogFolder()      { return `signal-logs/${_uid()}`; }
 function getLogDayPath(date) { return `${getLogFolder()}/${date}.json`; }
 function getLogIndexPath()   { return `${getLogFolder()}/index.json`; }
 function getAiFolder()       { return `ai-models/${_uid()}`; }
-function getAiLatestPath()   { return `${getAiFolder()}/latest.json`; } // legacy combined file — read-only fallback now
-function getAiStockPath()    { return `${getAiFolder()}/stock.json`; }
+function getAiLatestPath()   { return `${getAiFolder()}/latest.json`; }               // oldest legacy — combined file, read-only fallback
+function getAiStockPath()    { return `${getAiFolder()}/stock.json`; }                // previous scheme — flat split, read-only fallback
 function getAiOptionPath()   { return `${getAiFolder()}/option.json`; }
+function getAiModelIndexPath()        { return `${getAiFolder()}/index.json`; }       // tracks which month is current
+function getAiMonthlyStockPath(month)  { return `${getAiFolder()}/${month}/stock.json`; }
+function getAiMonthlyOptionPath(month) { return `${getAiFolder()}/${month}/option.json`; }
 function getAiHistoryIndexPath()        { return `${getAiFolder()}/history/index.json`; }
 function getAiHistoryDayPath(date)      { return `${getAiFolder()}/history/${date}.json`; }
 function getVixHistoryPath()            { return `${getAiFolder()}/vix-history.json`; }
@@ -115,41 +118,68 @@ export async function pullSettingsFromGH(gh) {
 
 export async function pullAiModelFromGH(gh) {
   try {
-    const [stockRes, optionRes] = await Promise.all([
+    // 1) Current scheme: month-partitioned. index.json says which month is current.
+    const indexFile = await _ghFetch(gh, getAiModelIndexPath());
+    if (indexFile) {
+      const index = _decode(indexFile.content);
+      const month = index?.latestMonth;
+      if (month) {
+        const [stockRes, optionRes] = await Promise.all([
+          _ghFetch(gh, getAiMonthlyStockPath(month)),
+          _ghFetch(gh, getAiMonthlyOptionPath(month)),
+        ]);
+        const stockFile  = stockRes  ? _decode(stockRes.content)  : null;
+        const optionFile = optionRes ? _decode(optionRes.content) : null;
+        if (stockFile || optionFile) return mergeModelFromStorage(stockFile, optionFile);
+      }
+    }
+
+    // 2) Previous scheme: flat split (stock.json/option.json, no month folder) —
+    // covers accounts that retrained under that scheme but haven't since this
+    // month-partitioned one shipped.
+    const [flatStockRes, flatOptionRes] = await Promise.all([
       _ghFetch(gh, getAiStockPath()),
       _ghFetch(gh, getAiOptionPath()),
     ]);
-    const stockFile  = stockRes  ? _decode(stockRes.content)  : null;
-    const optionFile = optionRes ? _decode(optionRes.content) : null;
-    if (stockFile || optionFile) return mergeModelFromStorage(stockFile, optionFile);
+    const flatStock  = flatStockRes  ? _decode(flatStockRes.content)  : null;
+    const flatOption = flatOptionRes ? _decode(flatOptionRes.content) : null;
+    if (flatStock || flatOption) return mergeModelFromStorage(flatStock, flatOption);
 
-    // Neither split file exists yet — either a brand-new account, or one
-    // that hasn't retrained since this split shipped. Fall back to the old
-    // combined file so nothing regresses until the next training run writes
-    // the new split files.
+    // 3) Oldest scheme: single combined latest.json.
     const legacy = await _ghFetch(gh, getAiLatestPath());
-    if (!legacy) return null;
-    return _decode(legacy.content);
+    return legacy ? _decode(legacy.content) : null;
   } catch (_) { return null; }
 }
 
 export async function pushAiModelToGH(gh, modelPayload) {
   if (!gh.token || !gh.user || !gh.repo || !modelPayload) return false;
   try {
+    // Partition by the month the model was actually computed in, not wall-clock
+    // "now" — keeps a retrain that runs just after midnight UTC filed under the
+    // month its training data belongs to.
+    const month = (modelPayload.computedAt || new Date().toISOString()).slice(0, 7);
     const { stock, option } = splitModelForStorage(modelPayload);
     const savedAt = new Date().toISOString();
     const upstoxId = _uid();
     let ok = true;
     if (stock) {
-      const existing = await _ghFetch(gh, getAiStockPath());
-      const r = await _ghPut(gh, getAiStockPath(), { ...stock, savedAt, upstoxId }, existing?.sha || null, `SCANNER AI stock model · ${upstoxId}`);
+      const path = getAiMonthlyStockPath(month);
+      const existing = await _ghFetch(gh, path);
+      const r = await _ghPut(gh, path, { ...stock, savedAt, upstoxId, month }, existing?.sha || null, `SCANNER AI stock model · ${upstoxId} · ${month}`);
       ok = ok && (r?.ok ?? false);
     }
     if (option) {
-      const existing = await _ghFetch(gh, getAiOptionPath());
-      const r = await _ghPut(gh, getAiOptionPath(), { ...option, savedAt, upstoxId }, existing?.sha || null, `SCANNER AI option model · ${upstoxId}`);
+      const path = getAiMonthlyOptionPath(month);
+      const existing = await _ghFetch(gh, path);
+      const r = await _ghPut(gh, path, { ...option, savedAt, upstoxId, month }, existing?.sha || null, `SCANNER AI option model · ${upstoxId} · ${month}`);
       ok = ok && (r?.ok ?? false);
     }
+    // Update the month index so pullAiModelFromGH knows which folder is current.
+    const indexExisting = await _ghFetch(gh, getAiModelIndexPath());
+    const index = indexExisting ? (_decode(indexExisting.content) || { months: [] }) : { months: [] };
+    const months = Array.from(new Set([...(index.months || []), month])).sort();
+    const r = await _ghPut(gh, getAiModelIndexPath(), { months, latestMonth: month, updatedAt: savedAt }, indexExisting?.sha || null, `SCANNER AI model index · ${upstoxId} · ${month}`);
+    ok = ok && (r?.ok ?? false);
     return ok;
   } catch (_) { return false; }
 }
