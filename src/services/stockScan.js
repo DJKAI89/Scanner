@@ -345,7 +345,7 @@ export async function runPicksScan(ctx, callbacks) {
 
     const risk2=(ltp-sl); const useS1=sl>0&&sr?.pivotS1>0&&Math.abs(sl-sr.pivotS1)<risk2*0.3;
     const slTargets={consMethod:useS1?'S1 support':'ATR+VIX',modMethod:'2:1 R:R'};
-    const pot  = calcPotential(ltp,tgtMod,sl,numInds,preRec);
+    const pot  = calcPotential(ltp,tgtMod,sl,numInds,preRec,mlModels?.thresholds?.stock?.wrByRec);
     const risk = calcRisk(ltp,sl,tgtMod,t.atr||0,vixVal);
     const mlRank = applyMlRanking(conf, mlModels || null, {
       type: 'STOCK',
