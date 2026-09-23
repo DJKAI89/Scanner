@@ -167,6 +167,14 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
     // the learned threshold whenever it's already the more permissive one.
     const effMinConf = Math.min(mlModels?.thresholds?.option?.minConfidence ?? 999, cfg.minOptConf);
     if (p.confidence < effMinConf) return false;
+    // Hard RR floor — same treatment as stockScan.js's `pot.rr >= minRR` gate.
+    // p.rr is computed upstream in technical.js's scanChain (calcSmartOptionSLTarget
+    // + applyExpiryDayAdjustment), so it's a real per-pick value, not a stub.
+    // Previously RR only fed a soft confidence penalty in mlRanking.suppressionPenalty;
+    // a signal that fails the learned RR floor should be dropped outright rather
+    // than just nudged down a few confidence points.
+    const minRR = mlModels?.thresholds?.option?.minRR || cfg.optRR || 1.5;
+    if ((p.rr || 0) < minRR) return false;
     // Capital is a hard user-set budget ceiling, not a "let more signals
     // through" knob like confidence/risk/RR were — so unlike those, the
     // learned threshold should only ever be allowed to tighten this, never
