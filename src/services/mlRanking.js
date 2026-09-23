@@ -352,8 +352,16 @@ function calibrateProbability(prob, calibrator) {
   if (!calibrator?.length) return prob;
   const idx = Math.min(calibrator.length - 1, Math.floor(clamp(prob, 0, 0.9999) * calibrator.length));
   const bin = calibrator[idx];
-  if (!bin || bin.actual == null || bin.total < 3) return prob;
-  return clamp(bin.actual * 0.7 + prob * 0.3, 0.01, 0.99);
+  if (!bin || bin.actual == null) return prob;
+  // Was a hard cliff: bins with >=3 samples got trusted at a flat 70% weight,
+  // bins with 0-2 fell back to raw probability entirely. With typical early
+  // dataset sizes most of the 10 bins sit near that cliff, so calibration was
+  // either overconfident on a 3-sample bin or a no-op on a 2-sample one.
+  // Shrink continuously toward the bin's observed rate as its sample size
+  // grows instead, so a 3-sample bin barely moves the estimate and a
+  // 50-sample bin is trusted almost fully.
+  const weight = clamp(bin.total / (bin.total + 15), 0, 0.85);
+  return clamp(bin.actual * weight + prob * (1 - weight), 0.01, 0.99);
 }
 
 function summarizeCostAdjusted(rows, costPct) {
@@ -434,15 +442,41 @@ function calibrateRegimePenalties(closedSignals) {
   return out;
 }
 
+// Learns the actual win rate per `rec` bucket (STRONG BUY / BUY / MODERATE /
+// WATCH / other) from closed-signal outcomes — replaces the static guess
+// table in technical.js's calcPotential with a measured one once a bucket has
+// enough samples (>=20) to trust. Buckets below that are omitted so the
+// caller falls back to the static table for those specific recs only.
+function calibrateExpectedWR(closedSignals) {
+  const buckets = {};
+  for (const s of closedSignals) {
+    const rec = s?.rec;
+    if (!rec) continue;
+    (buckets[rec] || (buckets[rec] = [])).push(s.status === 'TARGET_HIT' ? 1 : 0);
+  }
+  const out = {};
+  for (const [rec, results] of Object.entries(buckets)) {
+    if (results.length < 20) continue;
+    const wr = Math.round((results.reduce((a, b) => a + b, 0) / results.length) * 100);
+    out[rec] = clamp(wr, 35, 80);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 function optimizeThresholds(dataset, model, type) {
   const rows = buildBacktestRows(dataset.map((d) => d.signal || d), model, type);
-  const SAFE_DEFAULTS = { probability: 0.62, minConfidence: 65, maxRisk: 55, minRR: 1.2, maxCapital: 0, deltaGate: 0.40, ivGate: 15, sampleSize: rows.length };
+  // minRR floor raised from 1.2/1.3 to 1.6 for both types: at ~55-60% win
+  // rate and real transaction costs (BASE_COST_PCT above), a sub-1.5 RR
+  // barely clears breakeven after costs — see avgNet in summarizeBacktest.
+  const SAFE_DEFAULTS = { probability: 0.62, minConfidence: 65, maxRisk: 55, minRR: 1.6, maxCapital: 0, deltaGate: 0.40, ivGate: 15, sampleSize: rows.length };
   // Hard floor: below 40 closed signals, learned thresholds are too easily
   // overfit to noise (this exact failure mode silently starved all option
   // picks in production once already) — stay on safe defaults entirely.
   if (rows.length < 40) return SAFE_DEFAULTS;
 
-  const candidates = [0.55, 0.58, 0.6, 0.62, 0.65, 0.68, 0.7, 0.74];
+  // Dropped 0.55 from the sweep — that floor let too many marginal signals
+  // through once combined with the (now-tightened) RR floor above.
+  const candidates = [0.58, 0.6, 0.62, 0.65, 0.68, 0.7, 0.74];
   let best = { probability: 0.62, score: -Infinity };
   for (const p of candidates) {
     const filtered = rows.filter((r) => r.mlProb >= p);
@@ -476,10 +510,10 @@ function optimizeThresholds(dataset, model, type) {
   }
 
   return {
-    probability: clamp(best.probability, 0.55, 0.68),
-    minConfidence: Math.round(clamp(best.probability, 0.55, 0.68) * 100),
+    probability: clamp(best.probability, 0.58, 0.7),
+    minConfidence: Math.round(clamp(best.probability, 0.58, 0.7) * 100),
     maxRisk: type === 'STOCK' ? 48 : 58,
-    minRR: type === 'STOCK' ? 1.4 : 1.3,
+    minRR: 1.6,
     maxCapital: type === 'OPTION' ? 120000 : 0,
     deltaGate, ivGate,
     sampleSize: rows.length,
@@ -626,13 +660,28 @@ function trainWalkForward(dataset, featureNames, type, label) {
   };
 }
 
+// Segment models train on a fraction of the global dataset, so at the old
+// floor (trainedOn >= 25, no walk-forward check) a segment could win this
+// selection purely by overfitting a small slice — in-sample edge/accuracy
+// looks great, live performance doesn't. Require a real sample size AND
+// walk-forward accuracy that actually matches or beats the global model
+// before trusting a segment over it.
+const MIN_SEGMENT_SAMPLES = 40;
+const SEGMENT_WF_TOLERANCE = 0.02;
+
 function chooseRollback(globalModel, segmentModels) {
-  const candidates = [globalModel, ...segmentModels.filter(Boolean)];
-  return candidates.sort((a, b) => {
-    const ea = (a?.edge || 0) + (a?.walkForward?.accuracy || 0) * 0.2;
-    const eb = (b?.edge || 0) + (b?.walkForward?.accuracy || 0) * 0.2;
+  const globalWF = globalModel?.walkForward?.accuracy ?? globalModel?.accuracy ?? 0;
+  const qualified = segmentModels.filter((m) => {
+    if (!m || m.trainedOn < MIN_SEGMENT_SAMPLES) return false;
+    if (m.walkForward?.accuracy == null) return false;
+    return m.walkForward.accuracy >= globalWF - SEGMENT_WF_TOLERANCE;
+  });
+  if (!qualified.length) return globalModel;
+  return qualified.sort((a, b) => {
+    const ea = (a.edge || 0) + (a.walkForward?.accuracy || 0) * 0.2;
+    const eb = (b.edge || 0) + (b.walkForward?.accuracy || 0) * 0.2;
     return eb - ea;
-  })[0] || globalModel;
+  })[0];
 }
 
 function trainFamily(signals, type, featureNames) {
@@ -655,7 +704,9 @@ function trainFamily(signals, type, featureNames) {
   // Must exclude OPEN signals — calibrateRegimePenalties treats anything
   // that isn't status==='TARGET_HIT' as a loss, so an unresolved position
   // would get silently counted as a loss for its regime bucket otherwise.
-  thresholds.regimePenalties = calibrateRegimePenalties(signals.filter((s) => s.type === type && s.status !== 'OPEN'));
+  const resolvedSignals = signals.filter((s) => s.type === type && s.status !== 'OPEN');
+  thresholds.regimePenalties = calibrateRegimePenalties(resolvedSignals);
+  if (type === 'STOCK') thresholds.wrByRec = calibrateExpectedWR(resolvedSignals);
   return {
     global: globalModel,
     segments: Object.fromEntries(segmentModels.map((m) => [m.label, m])),
@@ -702,7 +753,13 @@ function selectServingModel(models, sigLike) {
   if (!fam) return sigLike.type === 'STOCK' ? models.stock : models.option;
   const label = getSegmentLabel(sigLike, sigLike.type);
   const seg = fam.segments?.[label];
-  if (seg && seg.trainedOn >= 25) return seg;
+  // Same overfitting gate as chooseRollback (training time): a segment only
+  // serves live traffic once it has enough samples AND its walk-forward
+  // accuracy actually holds up against the global model.
+  const globalWF = fam.global?.walkForward?.accuracy ?? fam.global?.accuracy ?? 0;
+  if (seg && seg.trainedOn >= MIN_SEGMENT_SAMPLES
+    && seg.walkForward?.accuracy != null
+    && seg.walkForward.accuracy >= globalWF - SEGMENT_WF_TOLERANCE) return seg;
   if (fam.drift?.rollbackTo && fam.segments?.[fam.drift.rollbackTo]) return fam.segments[fam.drift.rollbackTo];
   return fam.global;
 }
@@ -717,22 +774,31 @@ function portfolioPenalty(sigLike) {
   return penalty;
 }
 
+// `regime` is already a model feature (getRegimeValue feeds getStockFeatureVector
+// /getOptionFeatureVector), so the model itself learns whatever weight a high-regime
+// reading deserves. The old flat "regime > 0.75 -> +0.03" bonus here boosted the
+// output a second time on top of that — double-counting the same signal. Dropped;
+// kept is the composite/direction divergence check below, which flags a genuine
+// disagreement the leaf splits don't reliably isolate at the sample sizes this
+// system trains on.
 function regimeAdjustment(sigLike, prob) {
-  const regime = getRegimeValue(sigLike);
   const bullish = isBullishSignal(sigLike);
   const composite = toNum(sigLike?.compositeScore, 0);
   if (bullish && composite < -1) return clamp(prob - 0.06, 0.01, 0.99);
   if (!bullish && composite > 1) return clamp(prob - 0.06, 0.01, 0.99);
-  if (regime > 0.75) return clamp(prob + 0.03, 0.01, 0.99);
   return prob;
 }
 
+// RR and risk are already model features (rr/riskInv) AND already hard-filtered
+// at the scan level (stockScan.js's `pot.rr >= minRR` / `risk < maxRisk`, and
+// optionScan.js's matching RR filter) — the penalties that used to live here for
+// those two conditions applied the same signal a third time. Only the modelProb
+// floor and the option IV/counter-trend interaction (not something the model
+// reliably isolates on its own) remain as a genuine backstop.
 function suppressionPenalty(sigLike, modelProb, thresholds) {
   let penalty = 0;
   if (modelProb < (thresholds?.probability || 0.62) - 0.08) penalty += 6;
   if (sigLike?.type === 'OPTION' && toNum(sigLike?.iv, 0) > 45 && sigLike?.trendAligned === false) penalty += 5;
-  if (toNum(sigLike?.rr ?? sigLike?.pot?.rr, 0) < (thresholds?.minRR || 1.2)) penalty += 4;
-  if (toNum(sigLike?.risk, 0) > (thresholds?.maxRisk || 55)) penalty += 5;
   return penalty;
 }
 
@@ -842,7 +908,11 @@ export function applyMlRanking(confidence, models, sigLike) {
   const walkForwardFactor = clamp((model.walkForward?.accuracy || model.accuracy || 0.5), 0.35, 0.8);
   const trust = 0.18 + (0.28 * sampleFactor) + (0.18 * edgeFactor) + (0.18 * walkForwardFactor);
   let adj = clamp((probability - baseProb) * 100 * trust, -18, 18);
-  adj -= portfolioPenalty(sigLike);
+  // portfolioPenalty (capital load / cluster risk) is intentionally NOT applied
+  // here anymore — it's a position-sizing concern (see getPortfolioAiGuidance),
+  // not a probability-of-winning concern, and capitalLoad/trendAligned are
+  // already model features. Folding it into confidence conflated "how likely
+  // is this to win" with "how much should I risk on it".
   adj -= suppressionPenalty(sigLike, probability, familyThresholds);
 
   const nextConfidence = clamp(Math.round(confidence + adj), 1, 99);
