@@ -841,14 +841,15 @@ export function explainMlPrediction(sigLike, models) {
 }
 
 // ── Storage split ──────────────────────────────────────────────────
-// ai-models/{uid}/latest.json (the single combined model file) grows with
-// every segment that crosses its training-sample floor and every boosting
-// iteration added as data accumulates — measured this hitting several
-// hundred KB well before a mature dataset, against GitHub Contents API's
-// 1MB per-file cap. Splitting stock/option into their own files roughly
-// halves worst-case size and gives real headroom again. These two helpers
-// are the single source of truth for that split/merge shape so github.js
-// (client) and train-ai-model.mjs (offline script) can't drift apart on it.
+// The combined single model file grows with every segment that crosses its
+// training-sample floor and every boosting iteration added as data
+// accumulates — measured this hitting several hundred KB well before a
+// mature dataset, against GitHub Contents API's 1MB per-file cap. Splitting
+// stock/option into their own files (github.js additionally partitions each
+// by month, so a new period always starts a fresh pair instead of growing
+// one file forever) keeps this bounded. These two helpers are the single
+// source of truth for that split/merge shape so github.js (client) and
+// train-ai-model.mjs (offline script) can't drift apart on it.
 export function splitModelForStorage(models) {
   if (!models) return { stock: null, option: null };
   const meta = { modelName: models.modelName, version: models.version, computedAt: models.computedAt };
