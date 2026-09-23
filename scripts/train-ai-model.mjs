@@ -327,12 +327,16 @@ async function main() {
 
       const snapshot = brain.buildModelSnapshot(models);
       const today = new Date().toISOString().slice(0, 10);
-      // Split into per-family files (see mlRanking.js splitModelForStorage) —
-      // the combined latest.json this used to write grows past GitHub
-      // Contents API's 1MB limit as more segments mature; two smaller files
-      // buy real headroom back. latest.json itself is no longer written.
-      const stockPath  = `ai-models/${userId}/stock.json`;
-      const optionPath = `ai-models/${userId}/option.json`;
+      const month = today.slice(0, 7); // YYYY-MM
+      // Month-partitioned storage: ai-models/{uid}/{month}/stock.json + option.json.
+      // Each retrain overwrites the CURRENT month's files (still just two small
+      // files, same as before), but a new month starts a fresh pair instead of
+      // growing the same one forever — so file size is bounded going forward
+      // regardless of how long the account has been running. ai-models/{uid}/index.json
+      // tracks which month is current so the app knows where to read from.
+      const stockPath  = `ai-models/${userId}/${month}/stock.json`;
+      const optionPath = `ai-models/${userId}/${month}/option.json`;
+      const modelIndexPath = `ai-models/${userId}/index.json`;
       const historyIndexPath = `ai-models/${userId}/history/index.json`;
       const historyDayPath = `ai-models/${userId}/history/${today}.json`;
       const savedAt = new Date().toISOString();
@@ -340,12 +344,17 @@ async function main() {
       const { stock, option } = brain.splitModelForStorage(models);
       if (stock) {
         const existing = await ghFetch(stockPath);
-        await ghPut(stockPath, { ...stock, trainedOffline: true, userId, savedAt }, existing?.sha || null, `SCANNER AI offline retrain (stock) · ${userId}`);
+        await ghPut(stockPath, { ...stock, trainedOffline: true, userId, month, savedAt }, existing?.sha || null, `SCANNER AI offline retrain (stock) · ${userId} · ${month}`);
       }
       if (option) {
         const existing = await ghFetch(optionPath);
-        await ghPut(optionPath, { ...option, trainedOffline: true, userId, savedAt }, existing?.sha || null, `SCANNER AI offline retrain (option) · ${userId}`);
+        await ghPut(optionPath, { ...option, trainedOffline: true, userId, month, savedAt }, existing?.sha || null, `SCANNER AI offline retrain (option) · ${userId} · ${month}`);
       }
+
+      const modelIndexExisting = await ghFetch(modelIndexPath);
+      const modelIndex = decodeContent(modelIndexExisting?.content) || { months: [] };
+      const months = Array.from(new Set([...(modelIndex.months || []), month])).sort();
+      await ghPut(modelIndexPath, { months, latestMonth: month, updatedAt: savedAt }, modelIndexExisting?.sha || null, `SCANNER AI model index · ${userId} · ${month}`);
 
       const historyDayExisting = await ghFetch(historyDayPath);
       await ghPut(historyDayPath, { date: today, snapshot, trainedOffline: true, userId }, historyDayExisting?.sha || null, `SCANNER AI history · ${userId} · ${today}`);
