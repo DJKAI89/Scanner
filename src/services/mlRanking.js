@@ -557,6 +557,23 @@ function evaluateModel(model, dataset) {
   };
 }
 
+// `gain` only matters while training (collectFeatureImportance sums it into
+// topFeatures, which is stored separately) — once that's done, keeping gain
+// on every persisted node is dead weight repeated across every tree, and
+// this hand-rolled GBM's JSON has no way to compress repeated key names.
+// Stripped here, after topFeatures is computed but before the model is
+// returned for storage.
+function stripTrainingOnlyFields(node) {
+  if (!node) return node;
+  if (node.feature == null) return { value: node.value };
+  return {
+    feature: node.feature,
+    threshold: node.threshold,
+    left: stripTrainingOnlyFields(node.left),
+    right: stripTrainingOnlyFields(node.right),
+  };
+}
+
 function trainLightGbmStyleModel(dataset, featureNames, type, label) {
   if (dataset.length < 30) return null;
   const positives = dataset.filter((row) => row.y === 1).length;
@@ -601,13 +618,15 @@ function trainLightGbmStyleModel(dataset, featureNames, type, label) {
   model.calibrator = fitCalibrator(dataset, model);
   const metrics = evaluateModel(model, dataset);
   const baseBrier = +(baseRate * (1 - baseRate)).toFixed(4);
+  const topFeatures = collectFeatureImportance(model).slice(0, 8);
   return {
     ...model,
+    trees: model.trees.map(stripTrainingOnlyFields),
     accuracy: metrics.accuracy,
     brier: metrics.brier,
     baseBrier,
     edge: +(baseBrier - metrics.brier).toFixed(4),
-    topFeatures: collectFeatureImportance(model).slice(0, 8),
+    topFeatures,
   };
 }
 
@@ -819,6 +838,48 @@ export function explainMlPrediction(sigLike, models) {
       value: fullVector[idx],
     };
   }).sort((a, b) => Math.abs(b.impact) - Math.abs(a.impact)).slice(0, 5);
+}
+
+// ── Storage split ──────────────────────────────────────────────────
+// ai-models/{uid}/latest.json (the single combined model file) grows with
+// every segment that crosses its training-sample floor and every boosting
+// iteration added as data accumulates — measured this hitting several
+// hundred KB well before a mature dataset, against GitHub Contents API's
+// 1MB per-file cap. Splitting stock/option into their own files roughly
+// halves worst-case size and gives real headroom again. These two helpers
+// are the single source of truth for that split/merge shape so github.js
+// (client) and train-ai-model.mjs (offline script) can't drift apart on it.
+export function splitModelForStorage(models) {
+  if (!models) return { stock: null, option: null };
+  const meta = { modelName: models.modelName, version: models.version, computedAt: models.computedAt };
+  return {
+    stock: models.families?.stock ? { ...meta, family: models.families.stock } : null,
+    option: models.families?.option ? { ...meta, family: models.families.option } : null,
+  };
+}
+
+export function mergeModelFromStorage(stockFile, optionFile) {
+  if (!stockFile && !optionFile) return null;
+  const meta = stockFile || optionFile;
+  return {
+    modelName: meta.modelName,
+    version: meta.version,
+    computedAt: meta.computedAt,
+    stock: stockFile?.family?.global || null,
+    option: optionFile?.family?.global || null,
+    families: {
+      stock: stockFile?.family || null,
+      option: optionFile?.family || null,
+    },
+    thresholds: {
+      stock: stockFile?.family?.thresholds || null,
+      option: optionFile?.family?.thresholds || null,
+    },
+    drift: {
+      stock: stockFile?.family?.drift || null,
+      option: optionFile?.family?.drift || null,
+    },
+  };
 }
 
 export function buildModelSnapshot(models) {
