@@ -1,5 +1,8 @@
 // ── GitHub API service ── exact port from HTML ──
 
+import { splitModelForStorage, mergeModelFromStorage } from './mlRanking.js';
+
+
 // ── userId helper — sanitised same as HTML ──
 function _uid() {
   return (localStorage.getItem('scanner_user_id') || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -16,7 +19,9 @@ function getLogFolder()      { return `signal-logs/${_uid()}`; }
 function getLogDayPath(date) { return `${getLogFolder()}/${date}.json`; }
 function getLogIndexPath()   { return `${getLogFolder()}/index.json`; }
 function getAiFolder()       { return `ai-models/${_uid()}`; }
-function getAiLatestPath()   { return `${getAiFolder()}/latest.json`; }
+function getAiLatestPath()   { return `${getAiFolder()}/latest.json`; } // legacy combined file — read-only fallback now
+function getAiStockPath()    { return `${getAiFolder()}/stock.json`; }
+function getAiOptionPath()   { return `${getAiFolder()}/option.json`; }
 function getAiHistoryIndexPath()        { return `${getAiFolder()}/history/index.json`; }
 function getAiHistoryDayPath(date)      { return `${getAiFolder()}/history/${date}.json`; }
 function getVixHistoryPath()            { return `${getAiFolder()}/vix-history.json`; }
@@ -110,24 +115,42 @@ export async function pullSettingsFromGH(gh) {
 
 export async function pullAiModelFromGH(gh) {
   try {
-    const d = await _ghFetch(gh, getAiLatestPath());
-    if (!d) return null;
-    return _decode(d.content);
+    const [stockRes, optionRes] = await Promise.all([
+      _ghFetch(gh, getAiStockPath()),
+      _ghFetch(gh, getAiOptionPath()),
+    ]);
+    const stockFile  = stockRes  ? _decode(stockRes.content)  : null;
+    const optionFile = optionRes ? _decode(optionRes.content) : null;
+    if (stockFile || optionFile) return mergeModelFromStorage(stockFile, optionFile);
+
+    // Neither split file exists yet — either a brand-new account, or one
+    // that hasn't retrained since this split shipped. Fall back to the old
+    // combined file so nothing regresses until the next training run writes
+    // the new split files.
+    const legacy = await _ghFetch(gh, getAiLatestPath());
+    if (!legacy) return null;
+    return _decode(legacy.content);
   } catch (_) { return null; }
 }
 
 export async function pushAiModelToGH(gh, modelPayload) {
   if (!gh.token || !gh.user || !gh.repo || !modelPayload) return false;
   try {
-    const existing = await _ghFetch(gh, getAiLatestPath());
-    const sha = existing?.sha || null;
-    const payload = {
-      ...modelPayload,
-      savedAt: new Date().toISOString(),
-      upstoxId: _uid(),
-    };
-    const r = await _ghPut(gh, getAiLatestPath(), payload, sha, `SCANNER AI model · ${_uid()}`);
-    return r?.ok ?? false;
+    const { stock, option } = splitModelForStorage(modelPayload);
+    const savedAt = new Date().toISOString();
+    const upstoxId = _uid();
+    let ok = true;
+    if (stock) {
+      const existing = await _ghFetch(gh, getAiStockPath());
+      const r = await _ghPut(gh, getAiStockPath(), { ...stock, savedAt, upstoxId }, existing?.sha || null, `SCANNER AI stock model · ${upstoxId}`);
+      ok = ok && (r?.ok ?? false);
+    }
+    if (option) {
+      const existing = await _ghFetch(gh, getAiOptionPath());
+      const r = await _ghPut(gh, getAiOptionPath(), { ...option, savedAt, upstoxId }, existing?.sha || null, `SCANNER AI option model · ${upstoxId}`);
+      ok = ok && (r?.ok ?? false);
+    }
+    return ok;
   } catch (_) { return false; }
 }
 
