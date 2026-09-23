@@ -769,14 +769,25 @@ export function calcRisk(ltp, sl, target, atr, vix) {
 }
 
 // ── calcPotential — EXACT port from HTML ─────────────────────
-export function calcPotential(ltp, target, sl, numInds, rec) {
+// learnedWR: optional { [rec]: winRatePct } computed from actual closed-signal
+// outcomes (mlRanking.calibrateExpectedWR), only populated once a rec bucket
+// has enough samples to trust. Falls back to the static guess table below
+// when absent — previously that guess table was used unconditionally, so the
+// "expected win rate" the ranker relied on had no connection to reality.
+export function calcPotential(ltp, target, sl, numInds, rec, learnedWR = null) {
   const base = ltp > 0 ? (target - ltp) / ltp * 100 : 0;
   const rr   = Math.min(3.0, ltp > sl && sl > 0 ? (target - ltp) / (ltp - sl) : 1);
-  let wr = rec === 'STRONG BUY' ? 68 : rec === 'BUY' ? 62 : rec === 'MODERATE' ? 57 : rec === 'WATCH' ? 52 : 45;
-  if      (numInds >= 5) wr += 8;
-  else if (numInds >= 4) wr += 5;
-  else if (numInds >= 3) wr += 2;
-  else if (numInds <= 1) wr -= 6;
+  let wr;
+  const learned = learnedWR?.[rec];
+  if (Number.isFinite(learned)) {
+    wr = learned;
+  } else {
+    wr = rec === 'STRONG BUY' ? 68 : rec === 'BUY' ? 62 : rec === 'MODERATE' ? 57 : rec === 'WATCH' ? 52 : 45;
+    if      (numInds >= 5) wr += 8;
+    else if (numInds >= 4) wr += 5;
+    else if (numInds >= 3) wr += 2;
+    else if (numInds <= 1) wr -= 6;
+  }
   wr = Math.min(75, Math.max(35, wr));
   const adj    = base * (wr / 100) * rr;
   const slDist = ltp > 0 && sl > 0 ? Math.abs((ltp - sl) / ltp * 100) : base / 2;
