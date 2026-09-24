@@ -420,6 +420,24 @@ export function computeVixPercentile(series, value) {
   return Math.round((below / series.length) * 100);
 }
 
+// How far today's VIX sits from its own recent (5-session) average, as a
+// 0-1 score. Signals generated right after a volatility regime shift are
+// structurally the least reliable — indicators, SL/target sizing, and the
+// confidence formula are all still calibrated to the OLD regime — but that
+// was previously invisible to the model, which only saw a snapshot `regime`
+// label with no sense of how fresh it is. Reuses vixHistorySeries (already
+// tracked for computeVixPercentile) rather than adding new persisted state.
+export function vixRegimeShiftScore(series, vix) {
+  if (!Array.isArray(series) || series.length < 5 || vix == null) return 0;
+  const recent = series.slice(-5);
+  const avg = recent.reduce((a, b) => a + b, 0) / recent.length;
+  if (avg <= 0) return 0;
+  const pctMove = Math.abs(vix - avg) / avg;
+  // >40% deviation from the 5-session average is a sharp, recent shift; scale
+  // linearly up to that and clamp.
+  return Math.max(0, Math.min(1, pctMove / 0.4));
+}
+
 export function classifyMarketRegime(normTrendStrength, vix, vixPercentile = null) {
   const ts = Math.max(0, Math.min(1, normTrendStrength || 0));
   // When enough rolling VIX history exists, classify off where today's VIX

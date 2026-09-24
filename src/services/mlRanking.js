@@ -2,14 +2,14 @@ const STOCK_FEATURES = [
   'baseConf', 'rr', 'riskInv', 'numInds', 'potential', 'expectedWR',
   'composite', 'momentum', 'bullish', 'reversal', 'aboveVWAP', 'nearSupport',
   'deliveryHigh', 'deliveryLow', 'macdBullCross', 'adxBull', 'rsiBullDiv', 'bbSqueeze',
-  'weekday', 'phase', 'regime', 'sectorStrength', 'newsSentiment', 'gapType',
+  'weekday', 'phase', 'regime', 'volRegimeShift', 'sectorStrength', 'newsSentiment', 'gapType',
 ];
 
 const OPTION_FEATURES = [
   'baseConf', 'rr', 'score', 'composite', 'momentum', 'bullish',
   'trendAligned', 'freshCross', 'momentumFresh', 'volSpike', 'oiBuildUp',
   'deltaAbs', 'iv', 'thetaAbs', 'atm', 'capitalLoad', 'nearPDH', 'nearPDL',
-  'weekday', 'phase', 'regime', 'expiryDay', 'sectorStrength', 'newsSentiment',
+  'weekday', 'phase', 'regime', 'volRegimeShift', 'expiryDay', 'sectorStrength', 'newsSentiment',
   'maxPainDist', 'counterTrend',
 ];
 
@@ -17,6 +17,23 @@ const BASE_COST_PCT = {
   STOCK: 0.18,
   OPTION: 0.45,
 };
+
+// The flat 0.45% option cost applied identically to every trade regardless
+// of strike liquidity. A thin contract (near the 500-OI scan floor in
+// technical.js's scanChain) trades on a far wider bid-ask spread than a deep
+// ATM contract with 10k+ OI — the EV/threshold math was quietly optimistic
+// on exactly the trades most likely to bleed to spread. Scales the flat
+// baseline by open interest, which is already logged on every option pick.
+function estimateCostPct(row, type) {
+  if (type !== 'OPTION') return BASE_COST_PCT.STOCK;
+  const oi = toNum(row?.signal?.oi ?? row?.oi, 0);
+  const base = BASE_COST_PCT.OPTION;
+  if (oi <= 0)     return base * 2.5; // no OI on record — treat conservatively
+  if (oi >= 10000) return base;
+  if (oi >= 3000)  return base * 1.3;
+  if (oi >= 1000)  return base * 1.8;
+  return base * 2.5; // near the liquidity floor
+}
 
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
@@ -138,6 +155,7 @@ function getStockFeatureVector(sig) {
     weekday: weekday / 6,
     phase: getPhaseValue(sig),
     regime: getRegimeValue(sig),
+    volRegimeShift: clamp(toNum(sig?.volRegimeShift, 0), 0, 1),
     sectorStrength: getSectorStrength(sig),
     newsSentiment: getNewsSentiment(sig),
     gapType: getGapType(sig),
@@ -174,6 +192,7 @@ function getOptionFeatureVector(sig) {
     weekday: weekday / 6,
     phase: getPhaseValue(sig),
     regime: getRegimeValue(sig),
+    volRegimeShift: clamp(toNum(sig?.volRegimeShift, 0), 0, 1),
     expiryDay: clamp(toNum(sig?._dte ?? sig?.dte, 3) <= 1 ? 1 : toNum(sig?._dte ?? sig?.dte, 3) <= 3 ? 0.6 : 0.2, 0, 1),
     sectorStrength: getSectorStrength(sig),
     newsSentiment: getNewsSentiment(sig),
@@ -364,12 +383,12 @@ function calibrateProbability(prob, calibrator) {
   return clamp(bin.actual * weight + prob * (1 - weight), 0.01, 0.99);
 }
 
-function summarizeCostAdjusted(rows, costPct) {
+function summarizeCostAdjusted(rows, type) {
   if (!rows.length) return null;
   const total = rows.length;
   const hits = rows.filter((r) => r.y === 1).length;
   const wr = Math.round((hits / total) * 100);
-  const avgNet = rows.reduce((sum, row) => sum + ((toNum(row.pnlPct, 0) - costPct)), 0) / total;
+  const avgNet = rows.reduce((sum, row) => sum + (toNum(row.pnlPct, 0) - estimateCostPct(row, type)), 0) / total;
   return { total, wr, avgNet: +avgNet.toFixed(2) };
 }
 
@@ -404,7 +423,7 @@ function summarizeBacktest(rows, type, thresholds) {
   const bottomQuartileWr = wr(bottom);
   const threshold = thresholds?.probability ?? 0.62;
   const filtered = rows.filter((r) => r.mlProb >= threshold);
-  const costSummary = summarizeCostAdjusted(filtered, BASE_COST_PCT[type] || 0.2);
+  const costSummary = summarizeCostAdjusted(filtered, type);
   return {
     total: rows.length,
     overallWr,
@@ -482,7 +501,7 @@ function optimizeThresholds(dataset, model, type) {
     const filtered = rows.filter((r) => r.mlProb >= p);
     if (filtered.length < Math.max(10, rows.length * 0.1)) continue;
     const wr = filtered.filter((r) => r.y === 1).length / filtered.length;
-    const avgNet = filtered.reduce((sum, r) => sum + (r.pnlPct - (BASE_COST_PCT[type] || 0.2)), 0) / filtered.length;
+    const avgNet = filtered.reduce((sum, r) => sum + (r.pnlPct - estimateCostPct(r, type)), 0) / filtered.length;
     const score = wr * 0.7 + (avgNet / 100) * 0.3;
     if (score > best.score) best = { probability: p, score };
   }
@@ -574,15 +593,19 @@ function stripTrainingOnlyFields(node) {
   };
 }
 
-function trainLightGbmStyleModel(dataset, featureNames, type, label) {
+function trainLightGbmStyleModel(dataset, featureNames, type, label, fast = false) {
   if (dataset.length < 30) return null;
   const positives = dataset.filter((row) => row.y === 1).length;
   const negatives = dataset.length - positives;
   if (positives < 6 || negatives < 6) return null;
   const params = {
-    numIterations: dataset.length >= 150 ? 42 : dataset.length >= 90 ? 32 : 24,
+    // `fast`: used by trainWalkForward, which retrains a model up to
+    // MAX_RETRAINS times just to get a relative accuracy/brier estimate for
+    // the overfitting gate — it doesn't need full training-quality depth,
+    // so cap iterations/leaves hard to keep the repeated retraining cheap.
+    numIterations: fast ? 15 : (dataset.length >= 150 ? 42 : dataset.length >= 90 ? 32 : 24),
     learningRate: dataset.length >= 150 ? 0.07 : 0.09,
-    maxLeaves: dataset.length >= 150 ? 10 : 8,
+    maxLeaves: fast ? 6 : (dataset.length >= 150 ? 10 : 8),
     minDataInLeaf: dataset.length >= 150 ? 10 : 6,
     lambdaL2: 1.5,
     minGainToSplit: 0.0001,
@@ -607,7 +630,8 @@ function trainLightGbmStyleModel(dataset, featureNames, type, label) {
   for (let iter = 0; iter < params.numIterations; iter++) {
     const rows = dataset.map((row, idx) => {
       const p = sigmoid(scores[idx]);
-      return { x: row.x, grad: row.y - p, hess: Math.max(p * (1 - p), 1e-5) };
+      const w = row.weight ?? 1;
+      return { x: row.x, grad: (row.y - p) * w, hess: Math.max(p * (1 - p), 1e-5) * w };
     });
     const tree = buildLeafWiseTree(rows, featureNames, params);
     model.trees.push(tree);
@@ -641,7 +665,7 @@ function getSegmentLabel(sig, type) {
 }
 
 function buildDataset(signals, type, featureNames, label = null) {
-  return signals
+  const rows = signals
     .filter((sig) => sig?.type === type)
     .filter((sig) => !label || getSegmentLabel(sig, type) === label)
     .map((sig) => {
@@ -652,18 +676,44 @@ function buildDataset(signals, type, featureNames, label = null) {
         x: vectorize(features, featureNames),
       };
     });
+  // Multiple signals on the same underlying on the same day are usually one
+  // real market move counted several times (e.g. 5 option strikes on NIFTY
+  // all riding the same intraday swing). Without down-weighting, the split
+  // search treats them as 5 independent confirmations of whatever pattern
+  // that one day happened to have, inflating the model's apparent edge on
+  // patterns that are really just "that one day". Weight each row by
+  // 1/(group size) so a clustered day counts once in total, not N times.
+  const groups = {};
+  for (const row of rows) {
+    const key = `${row.signal?.date || ''}|${(row.signal?.stock || row.signal?.und || 'IDX').toUpperCase()}`;
+    (groups[key] || (groups[key] = [])).push(row);
+  }
+  for (const group of Object.values(groups)) {
+    const weight = 1 / group.length;
+    for (const row of group) row.weight = weight;
+  }
+  return rows;
 }
 
 function trainWalkForward(dataset, featureNames, type, label) {
   if (dataset.length < 40) return null;
   const sorted = [...dataset].sort((a, b) => `${a.signal.date}${a.signal.time || ''}`.localeCompare(`${b.signal.date}${b.signal.time || ''}`));
   const minTrain = Math.max(25, Math.floor(sorted.length * 0.5));
+  // Retraining a full model at every single step is O(n^2) — timed out past
+  // ~1600 rows in testing. Cap total retrains to a fixed budget by striding
+  // through the test window instead of walking it one point at a time; this
+  // keeps runtime bounded as the closed-signal count grows without silently
+  // returning null (which — since fix #2's overfitting gate — makes every
+  // segment model fail the trust check and fall back to global).
+  const testPoints = sorted.length - minTrain;
+  const MAX_RETRAINS = 120;
+  const stride = Math.max(1, Math.ceil(testPoints / MAX_RETRAINS));
   let correct = 0;
   let tested = 0;
   let brier = 0;
-  for (let i = minTrain; i < sorted.length; i++) {
+  for (let i = minTrain; i < sorted.length; i += stride) {
     const train = sorted.slice(0, i);
-    const model = trainLightGbmStyleModel(train, featureNames, type, label);
+    const model = trainLightGbmStyleModel(train, featureNames, type, label, true);
     if (!model) continue;
     const raw = sigmoid(predictScore(model, sorted[i].x));
     const prob = calibrateProbability(raw, model.calibrator);

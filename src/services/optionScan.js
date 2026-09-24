@@ -5,7 +5,7 @@
 import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api.js';
 import { getIST, sleep } from '../utils/marketTime.js';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config.js';
-import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, interpretFIIDII, computeVixPercentile } from './technical.js';
+import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, interpretFIIDII, computeVixPercentile, vixRegimeShiftScore } from './technical.js';
 import { logSignals, buildOptionSignal } from './github.js';
 import { applyMlRanking } from './mlRanking.js';
 
@@ -114,7 +114,7 @@ function buildIndicatorSnapshot(p, confluence, fiiInterp, isBuyLean) {
 // fed into applyAdaptWeights below, same as the stock scan path, so their
 // actual confidence impact is learned from closed-signal win rates instead of
 // a hardcoded magnitude.
-function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalibration, regime, cfg, maxPain = 0, spot = 0 }) {
+function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalibration, regime, volRegimeShift = 0, cfg, maxPain = 0, spot = 0 }) {
   const fiiInterp = interpretFIIDII(fiiData || null);
   return picks.map(p => {
     const base = p.confidence;
@@ -142,12 +142,13 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
     const indSnap = buildIndicatorSnapshot(p, confluence, fiiInterp, isBuyLean);
     c = applyAdaptWeights(c, adaptWeights?.option || null, indSnap);
     const adaptAdj = c - prev;
-    const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap: indSnap });
+    const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, regime, volRegimeShift, _indSnap: indSnap });
     const finalConf = Math.min(99, Math.max(1, Math.round(mlRank.confidence)));
     return {
       ...p,
       confidence: finalConf,
       regime,
+      volRegimeShift,
       confluence,
       confBreakdown: { base, calAdj, regimeAdj, adaptAdj, mlAdj: mlRank.mlAdj, final: finalConf },
       _indSnap: indSnap,
@@ -324,7 +325,8 @@ export async function runOptionsScan(ctx, caches, callbacks) {
 
     // Apply FII bias + adaptive weights + ML ranking, then filter
     const idxRegime = classifyMarketRegime(Math.abs(richCtx.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
-    const picksWithFII = scoreAndFilterPicks(allIdxPicks, { fiiData, adaptWeights, mlModels, confCalibration, regime: idxRegime, cfg, maxPain, spot });
+    const idxVolRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
+    const picksWithFII = scoreAndFilterPicks(allIdxPicks, { fiiData, adaptWeights, mlModels, confCalibration, regime: idxRegime, volRegimeShift: idxVolRegimeShift, cfg, maxPain, spot });
 
     lg(`${idx.name}: ${expiriesToScan.length} expiry(s) → ${allIdxPicks.length} raw → ${picksWithFII.length} ≥${cfg.minOptConf}% | composite=${richCtx.compositeScore} pcr=${pcr}`, 'o');
     built.push({ name: idx.name, spot, spotChg, picks: picksWithFII, expiry, expiries: expiriesToScan, chain, maxPain, oiWalls, pcr, pcrTrend, ivTrend });
@@ -415,7 +417,8 @@ export async function runOptionsScan(ctx, caches, callbacks) {
         }
 
         const stkRegime = classifyMarketRegime(Math.abs(stkCtx.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
-        const fPicks2 = scoreAndFilterPicks(allStkPicks, { fiiData, adaptWeights, mlModels, confCalibration, regime: stkRegime, cfg, maxPain: stkMaxPain, spot });
+        const stkVolRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
+        const fPicks2 = scoreAndFilterPicks(allStkPicks, { fiiData, adaptWeights, mlModels, confCalibration, regime: stkRegime, volRegimeShift: stkVolRegimeShift, cfg, maxPain: stkMaxPain, spot });
         if (fPicks2.length) { built.push({ name:inst.s, spot, spotChg, picks:fPicks2, expiry, expiries:expiriesToScan2, chain, maxPain:stkMaxPain, oiWalls:calcOIWalls(chain), pcr:pcr2, pcrTrend:stkCtx.pcrTrend, ivTrend:ivTrend2, type:'stock', fullName:inst.n }); lg(`${inst.s}: ${expiriesToScan2.length} expiry(s) → ${allStkPicks.length} raw → ${fPicks2.length} signals`, 'o'); }
       } catch(e) { lg(inst.s + ' opts: ' + e.message, 'w'); }
     }

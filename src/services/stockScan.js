@@ -13,7 +13,7 @@ import {
   countIndicatorsEx, getRec, autoSLTarget, calcEntryTrigger, detectReversal,
   calcMACD, isNearSupport, calcRSIDivergence, getSector, calcConfidence, calcVWAP,
   calcVWAPBands, applyCalibration, applyAdaptWeights, calcEMA, calcIVPercentile,
-  applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment, computeVixPercentile,
+  applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment, computeVixPercentile, vixRegimeShiftScore,
 } from './technical.js';
 import { applyMlRanking } from './mlRanking.js';
 import { getIST, getISTDate, sleep } from '../utils/marketTime.js';
@@ -284,6 +284,7 @@ export async function runPicksScan(ctx, callbacks) {
     conf=applyCalibration(conf, confCalibration||null);
     const _calAdj = conf - _confBase; let _prev = conf;
     const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(nChgPct) / 1.0), vixVal, computeVixPercentile(vixHistorySeries, vixVal));
+    const volRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
     conf=applyRegimeAdjustment(conf, stockRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties);
     const _regimeAdj = conf - _prev; _prev = conf;
     // Confluence — 6 independent modules vote bullish/bearish/no-opinion; stocks are
@@ -397,7 +398,7 @@ export async function runPicksScan(ctx, callbacks) {
       macd, macdBull, bb, adx, rsiDiv,
       a50, a200, nearSupp:nearSuppF, patterns,
       vwap, aboveVWAP, vwapType:'daily', vwapBands,
-      vol, avgVol20, high, low, delivPct, regime: stockRegime, confluence,
+      vol, avgVol20, high, low, delivPct, regime: stockRegime, volRegimeShift, confluence,
       _indSnap, confBreakdown,
       mlProbability: mlRank.mlProbability,
       mlAdj: mlRank.mlAdj,
@@ -562,6 +563,7 @@ export async function runBreakoutScan(ctx, callbacks) {
   const niftyTrendPct = niftyCloses.length >= 6
     ? Math.abs((niftyCloses.at(-1) - niftyCloses.at(-6)) / niftyCloses.at(-6) * 100) : 0;
   const marketRegime = classifyMarketRegime(Math.min(1, niftyTrendPct / 2.5), vixVal, computeVixPercentile(vixHistorySeries, vixVal));
+  const boVolRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
   const scanList=stocks.filter(s=>s.scan!==false);
   // WebSocket quotes — same as picks scan
   setBoProgress('Fetching quotes via WebSocket...');
@@ -653,7 +655,7 @@ export async function runBreakoutScan(ctx, callbacks) {
       rec:isBull?(score>=7?'STRONG BUY':'BUY'):(score>=7?'SELL':'WATCH'),
       conf:applyConfluenceAdjustment(applyRegimeAdjustment(Math.min(95,score*10), marketRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties), boConfluence, cfg),
       sl:trade.sl, target:trade.target,
-      regime: marketRegime, confluence: boConfluence,
+      regime: marketRegime, volRegimeShift: boVolRegimeShift, confluence: boConfluence,
       pot:{cons:trade.sl,mod:trade.target,agg:trade.target,rr:trade.rr,wr:0,base:0,adj:0,ev:0},
       numInds:score, risk:50, rsi:null, high:q.ohlc?.high||ltp, low:q.ohlc?.low||ltp,
       rawVol:boVol, avgVol20:0, macd:{}, rsiDiv:null, patterns:{},
