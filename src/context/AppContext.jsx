@@ -229,8 +229,8 @@ export function AppProvider({ children }) {
         n:    item.n    || item.name   || item.s || '',
         sec:  item.sec  || item.sector || 'NSE',
         scan: true,
-        fo:   !!(item.fo ?? item.hasOption ?? false),
-        lot:  item.lot  || 0,
+        fo:   !!(item.fo ?? item.isFO ?? item.hasOption ?? false),
+        lot:  item.lot  || item.lotSize || 0,
         step: item.step || 0,
       })).filter((s) => s.key && s.s);
       setStocks(list);
