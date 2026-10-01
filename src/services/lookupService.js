@@ -9,7 +9,7 @@ import {
   getRec, autoSLTarget, calcEntryTrigger, detectReversal, calcMACD,
   isNearSupport, calcRSIDivergence, getSignalStrength,
   calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain,
-  applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX, computeVixPercentile,
+  applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX, computeVixPercentile, vixRegimeShiftScore,
 } from './technical';
 import { applyMlRanking } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
@@ -117,6 +117,7 @@ export async function lookupInstrument(ctx, callbacks) {
       let conf = calcConfidence(null, vixSc, pcrSc, chgPct > 0, 0, q.volume || 0, volObj?.avgVol || 1, pats, preRec, numInds);
       conf=applyCalibration(conf, confCalibration||null);
       const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(chgPct) / 1.0), vixVal, computeVixPercentile(vixHistorySeries, vixVal));
+      const volRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
       conf=applyRegimeAdjustment(conf, stockRegime, cfg);
       // Confluence — same 6-module framework as stockScan.js (parity); no peer
       // group here for a real sector score, so marketContext relies on NIFTY PCR only.
@@ -132,7 +133,7 @@ export async function lookupInstrument(ctx, callbacks) {
       };
       const confluence = computeConfluence(confluenceModules, 1);
       const risk = calcRisk(ltp, sl, target, atr, 0);
-      const pot = calcPotential(ltp, target, sl, numInds, rec);
+      const pot = calcPotential(ltp, target, sl, numInds, rec, mlModels?.thresholds?.stock?.wrByRec);
       const reversal = detectReversal(ltp, rsi, pats, sr, 0, 1.0, chgPct > 0, chgPct, atr, q.ohlc?.high || ltp, q.ohlc?.low || ltp);
       const vwap = calcVWAP(candles);
       const aboveVWAP = vwap > 0 ? ltp >= vwap : null;
@@ -172,12 +173,12 @@ export async function lookupInstrument(ctx, callbacks) {
         fiiAgainst: !!(fiiInterp && ((fiiInterp.bias>0) !== isBuyLean) && fiiInterp.bias!==0),
       };
       conf = applyAdaptWeights(conf, adaptWeights?.stock || null, _indSnap);
-      const mlRank = applyMlRanking(conf, mlModels || null, { type:'STOCK', confidence: conf, numInds, risk, pot, rec: preRec, reversal, vix: vixVal, _indSnap });
+      const mlRank = applyMlRanking(conf, mlModels || null, { type:'STOCK', confidence: conf, numInds, risk, pot, rec: preRec, reversal, vix: vixVal, regime: stockRegime, volRegimeShift, _indSnap });
       conf = mlRank.confidence;
       const finalRec = getRec(conf, pot.base, risk, pot.rr);
       const strength = getSignalStrength(numInds, conf, reversal);
       const entry = calcEntryTrigger(ltp, q.ohlc?.high || ltp, sr, atr, finalRec, vwap, chgPct);
-      tech = { rsi, ema, macd, bb, atr, adx, sr, pats, rsiDiv, a50, a200, volOk, nearS, numInds, rec: finalRec, conf, sl, target, targets, pot, risk, strength, vwap, entry, reversal, avgVol: volObj?.avgVol || 0, volRatio: volObj?.ratio || 1, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj, regime: stockRegime, confluence };
+      tech = { rsi, ema, macd, bb, atr, adx, sr, pats, rsiDiv, a50, a200, volOk, nearS, numInds, rec: finalRec, conf, sl, target, targets, pot, risk, strength, vwap, entry, reversal, avgVol: volObj?.avgVol || 0, volRatio: volObj?.ratio || 1, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj, mlSegment: mlRank.mlSegment, regime: stockRegime, volRegimeShift, confluence };
     }
   } catch (e) {
     lg('Daily candles: ' + e.message, 'w');
@@ -259,6 +260,7 @@ export async function lookupInstrument(ctx, callbacks) {
         const atm = Math.round(ltp / step) * step;
         const ctxForChain = marketCtx || computeCtxFromCandles([], ltp, chgPct, 0, null);
         const optRegime = classifyMarketRegime(Math.abs(ctxForChain?.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
+        const optVolRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
         const picks = scanChain(chain, atm, ltp, s, expiry, inst.lot, chgPct > 0, 0, maxPain, pcr, ctxForChain, cfg);
         const filteredPicks = picks
           .map((p) => {
@@ -295,16 +297,27 @@ export async function lookupInstrument(ctx, callbacks) {
             c = applyCalibration(c, confCalibration || null);
             c = applyRegimeAdjustment(c, optRegime, cfg);
             c = applyAdaptWeights(c, adaptWeights?.option || null, _indSnap);
-            const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap });
-            return { ...p, regime: optRegime, confluence, confidence: mlRank.confidence, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj };
+            const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, regime: optRegime, volRegimeShift: optVolRegimeShift, _indSnap });
+            return {
+              ...p, regime: optRegime, volRegimeShift: optVolRegimeShift, confluence,
+              confidence: mlRank.confidence, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj,
+              mlSegment: mlRank.mlSegment, mlExplain: mlRank.explanation,
+              aiBlock: mlRank.aiBlock, aiModel: mlRank.mlSegment,
+            };
           })
+          // Mirrors optionScan.js's scoreAndFilterPicks filter exactly — this path
+          // (single-symbol option lookup) previously only checked manual confidence
+          // and a looser capital fallback, so a pick the Options page would hard-block
+          // or drop on RR/capital could still show up here.
           .filter((p) => {
-            if (p.confidence < cfg.minOptConf) return false;
-            // Same cap optionScan.js already applies — this path (option
-            // chain lookup for a single symbol) was missing it entirely,
-            // so picks above Settings' Max Capital were never filtered out.
-            const capLimit = mlModels?.thresholds?.option?.maxCapital || cfg.maxOptCapital;
-            if (!capLimit || capLimit <= 0) return true;
+            if (p.aiBlock) return false;
+            const effMinConf = Math.min(mlModels?.thresholds?.option?.minConfidence ?? 999, cfg.minOptConf);
+            if (p.confidence < effMinConf) return false;
+            const minRR = mlModels?.thresholds?.option?.minRR || cfg.optRR || 1.5;
+            if ((p.rr || 0) < minRR) return false;
+            const learnedCap = mlModels?.thresholds?.option?.maxCapital;
+            const capLimit = Math.min(learnedCap > 0 ? learnedCap : Infinity, cfg.maxOptCapital > 0 ? cfg.maxOptCapital : Infinity);
+            if (!Number.isFinite(capLimit)) return true;
             return p.amtRequired <= capLimit;
           });
 

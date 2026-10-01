@@ -360,6 +360,11 @@ export async function runPicksScan(ctx, callbacks) {
       delivPct,
       reversal,
       vix: vixVal,
+      // Was missing here despite being logged on the pick below — meant live
+      // scoring always saw volRegimeShift=0 while the model trained on real
+      // values from closed signals (train/serve mismatch).
+      regime: stockRegime,
+      volRegimeShift,
       _indSnap,
     });
     conf = mlRank.confidence;
@@ -398,7 +403,7 @@ export async function runPicksScan(ctx, callbacks) {
       macd, macdBull, bb, adx, rsiDiv,
       a50, a200, nearSupp:nearSuppF, patterns,
       vwap, aboveVWAP, vwapType:'daily', vwapBands,
-      vol, avgVol20, high, low, delivPct, regime: stockRegime, volRegimeShift, confluence,
+      vol, avgVol20, high, low, delivPct, regime: stockRegime, volRegimeShift, mlSegment: mlRank.mlSegment, confluence,
       _indSnap, confBreakdown,
       mlProbability: mlRank.mlProbability,
       mlAdj: mlRank.mlAdj,
