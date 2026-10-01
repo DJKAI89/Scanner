@@ -55,9 +55,20 @@ export function enrichPortfolioRows(arr, lastPrices) {
     const live      = lastPrices[key];
     const ltp       = num(live?.ltp, item.last_price, item.ltp, item.close_price);
     const qty       = num(item.quantity, item.used_quantity, item.available_quantity, item.t1_quantity, item.qty);
-    const avg       = num(item.average_price, item.average_cost, item.avg_price, item.buy_price);
+    // Upstox's Positions response doesn't always carry average_price/avg_price/
+    // buy_price under those names (varies from the Holdings response) — when
+    // none of them are present, `avg` fell straight to 0 and stayed there,
+    // which is why "Avg ₹0.00" showed even though Overall P&L (sourced from
+    // item.pnl directly below) was correct. Derive avg from the broker's own
+    // reported P&L + ltp as a fallback, so the displayed average is always
+    // consistent with the P&L actually shown, regardless of field naming.
+    const directAvg = num(item.average_price, item.average_cost, item.avg_price, item.buy_price);
+    const reportedPnl = num(item.pnl, item.profit_and_loss);
+    const avg = directAvg > 0 ? directAvg
+      : (qty > 0 && ltp > 0 && reportedPnl !== 0) ? +(ltp - reportedPnl / qty).toFixed(2)
+      : 0;
     const prevClose = num(live?.cp, item.close_price, item.previous_close, item.prev_close, item.ohlc?.close);
-    const pnl       = avg > 0 ? (ltp - avg) * qty : num(item.pnl, item.profit_and_loss);
+    const pnl       = avg > 0 ? (ltp - avg) * qty : reportedPnl;
     const pnlPct    = avg > 0 ? ((ltp - avg) / avg) * 100 : 0;
     const todayPnl  = prevClose > 0 ? (ltp - prevClose) * qty : num(item.day_pnl, item.dayPnl);
     const todayPct  = prevClose > 0 ? ((ltp - prevClose) / prevClose) * 100 : 0;

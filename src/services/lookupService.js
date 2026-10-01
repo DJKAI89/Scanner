@@ -11,7 +11,7 @@ import {
   calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain,
   applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX, computeVixPercentile, vixRegimeShiftScore,
 } from './technical';
-import { applyMlRanking } from './mlRanking';
+import { applyMlRanking, resolveThresholds } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
 import { interpVIXSc, interpPCR, getDeliveryPct } from './stockScan';
 
@@ -311,11 +311,14 @@ export async function lookupInstrument(ctx, callbacks) {
           // or drop on RR/capital could still show up here.
           .filter((p) => {
             if (p.aiBlock) return false;
-            const effMinConf = Math.min(mlModels?.thresholds?.option?.minConfidence ?? 999, cfg.minOptConf);
+            // Same index-vs-stock subtype resolution as optionScan.js — see
+            // mlRanking.resolveThresholds.
+            const t = resolveThresholds(mlModels, p);
+            const effMinConf = Math.min(t?.minConfidence ?? 999, cfg.minOptConf);
             if (p.confidence < effMinConf) return false;
-            const minRR = mlModels?.thresholds?.option?.minRR || cfg.optRR || 1.5;
+            const minRR = t?.minRR || cfg.optRR || 1.5;
             if ((p.rr || 0) < minRR) return false;
-            const learnedCap = mlModels?.thresholds?.option?.maxCapital;
+            const learnedCap = t?.maxCapital;
             const capLimit = Math.min(learnedCap > 0 ? learnedCap : Infinity, cfg.maxOptCapital > 0 ? cfg.maxOptCapital : Infinity);
             if (!Number.isFinite(capLimit)) return true;
             return p.amtRequired <= capLimit;

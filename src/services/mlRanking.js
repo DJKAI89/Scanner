@@ -24,7 +24,7 @@ const BASE_COST_PCT = {
 // ATM contract with 10k+ OI — the EV/threshold math was quietly optimistic
 // on exactly the trades most likely to bleed to spread. Scales the flat
 // baseline by open interest, which is already logged on every option pick.
-function estimateCostPct(row, type) {
+export function estimateCostPct(row, type) {
   if (type !== 'OPTION') return BASE_COST_PCT.STOCK;
   const oi = toNum(row?.signal?.oi ?? row?.oi, 0);
   const base = BASE_COST_PCT.OPTION;
@@ -770,6 +770,23 @@ function trainFamily(signals, type, featureNames) {
 
   const servingModel = chooseRollback(globalModel, segmentModels);
   const thresholds = optimizeThresholds(baseDataset, servingModel, type);
+  // Index options (NIFTY/BANKNIFTY) and individual-stock options have different
+  // liquidity, IV behavior, and win-rate curves, but optimizeThresholds above
+  // tunes one set of numbers against the whole blended OPTION dataset — likely
+  // dominated by whichever subtype fires more signals. A single stock's option
+  // pick then gets scored by a (correctly) stock-specific model but filtered
+  // against a bar really tuned on the mixed set. Compute a subtype-specific
+  // threshold where there's enough data to trust one; resolveThresholds() below
+  // falls back to the blended `thresholds` above wherever this isn't populated.
+  if (type === 'OPTION') {
+    thresholds.bySubtype = {};
+    for (const subtype of ['index', 'stock']) {
+      const subsetSignals = signals.filter((s) => s.type === 'OPTION' && getOptionSubtype(s) === subtype);
+      const subsetDataset = buildDataset(subsetSignals, type, featureNames);
+      if (subsetDataset.length < 40) continue; // same trust floor as optimizeThresholds itself
+      thresholds.bySubtype[subtype] = optimizeThresholds(subsetDataset, globalModel, type);
+    }
+  }
   // Must exclude OPEN signals — calibrateRegimePenalties treats anything
   // that isn't status==='TARGET_HIT' as a loss, so an unresolved position
   // would get silently counted as a loss for its regime bucket otherwise.
@@ -1004,10 +1021,40 @@ export function getPortfolioAiGuidance(openSignals = [], candidateSignals = [], 
   };
 }
 
+// Same selection logic as selectServingModel, but returns which label served
+// the prediction (for logging/analysis) instead of the model object itself.
+function describeServingLabel(models, sigLike) {
+  if (!models || !sigLike) return 'none';
+  const fam = sigLike.type === 'STOCK' ? models.families?.stock : models.families?.option;
+  if (!fam) return 'global';
+  const label = getSegmentLabel(sigLike, sigLike.type);
+  const seg = fam.segments?.[label];
+  const globalWF = fam.global?.walkForward?.accuracy ?? fam.global?.accuracy ?? 0;
+  if (seg && seg.trainedOn >= MIN_SEGMENT_SAMPLES
+    && seg.walkForward?.accuracy != null
+    && seg.walkForward.accuracy >= globalWF - SEGMENT_WF_TOLERANCE) return label;
+  if (fam.drift?.rollbackTo && fam.segments?.[fam.drift.rollbackTo]) return `rollback:${fam.drift.rollbackTo}`;
+  return 'global';
+}
+
+// Single source of truth for which threshold set applies to a given signal —
+// used here, and by optionScan.js/lookupService.js's hard filters, so the
+// index-vs-stock split (see trainFamily) can't drift out of sync between
+// where the probability is scored and where it's filtered, the way the
+// un-segmented thresholds used to drift between pages.
+export function resolveThresholds(models, sig) {
+  const base = sig?.type === 'STOCK' ? models?.thresholds?.stock : models?.thresholds?.option;
+  if (sig?.type === 'OPTION' && base?.bySubtype) {
+    const subtype = getOptionSubtype(sig);
+    return base.bySubtype[subtype] || base;
+  }
+  return base;
+}
+
 export function applyMlRanking(confidence, models, sigLike) {
   const model = models?.featureNames ? models : selectServingModel(models, sigLike);
   if (!model || !sigLike) return { confidence, mlProbability: null, mlAdj: 0, aiBlock: false, explanation: [] };
-  const familyThresholds = sigLike.type === 'STOCK' ? models?.thresholds?.stock : models?.thresholds?.option;
+  const familyThresholds = resolveThresholds(models, sigLike);
   const features = getFeatureVector(sigLike, sigLike.type);
   const vector = vectorize(features, model.featureNames);
   const rawProb = sigmoid(predictScore(model, vector));
@@ -1044,6 +1091,7 @@ export function applyMlRanking(confidence, models, sigLike) {
     mlProbability: Math.round(probability * 100),
     mlAdj: +adj.toFixed(1),
     aiBlock,
+    mlSegment: models?.featureNames ? 'external' : describeServingLabel(models, sigLike),
     explanation,
     servingLabel: model.label,
   };
