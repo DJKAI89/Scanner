@@ -234,6 +234,35 @@ export async function lookupInstrument(ctx, callbacks) {
     }
   } catch (e) { lg('Intraday fetch: ' + e.message, 'w'); }
 
+  // ── Multi-timeframe agreement ── previously tf30/tf5 were fetched and
+  // shown in the "Multi-Timeframe Analysis" card but never fed back into the
+  // decision — daily set conf/rec entirely on its own, 30-min/5-min were
+  // pure display. A daily BUY with both lower timeframes actively rolling
+  // over is a structurally weaker setup than one where all three agree, and
+  // that distinction was invisible in the single conf number. Only runs when
+  // daily bias is constructive to begin with (nothing to agree/conflict with
+  // on an already-AVOID/WATCH call).
+  if (tech && (tf30.trend || tf5.trend != null)) {
+    const dailyBullish = tech.rec === 'STRONG BUY' || tech.rec === 'BUY' || tech.rec === 'MODERATE';
+    if (dailyBullish) {
+      const votes = [tf30.trend === 'UP', tf5.emaBull ?? (tf5.trend === 'UP' ? true : tf5.trend === 'DOWN' ? false : null)]
+        .filter((v) => v !== null && v !== undefined);
+      if (votes.length) {
+        const agreeCount = votes.filter((v) => v === true).length;
+        const conflictCount = votes.length - agreeCount;
+        const tfAdj = conflictCount === 0 ? 3 : conflictCount === votes.length ? -12 : -5;
+        tech.conf = Math.min(99, Math.max(1, Math.round(tech.conf + tfAdj)));
+        tech.timeframeConflict = conflictCount >= 1;
+        tech.timeframeAgreement = +(agreeCount / votes.length).toFixed(2);
+        // Recompute rec from the adjusted conf — a daily BUY that both lower
+        // timeframes contradict can now actually drop out of BUY territory,
+        // instead of the conflict being silently absorbed into a number with
+        // no visible effect on the call itself.
+        tech.rec = getRec(tech.conf, tech.pot?.base ?? 0, tech.risk ?? 50, tech.pot?.rr ?? 0);
+      }
+    }
+  }
+
   setProgress('Checking option contracts...');
   let foData = { unsupported: true, picks: [] };
   try {

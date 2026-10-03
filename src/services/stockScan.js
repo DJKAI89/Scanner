@@ -409,7 +409,7 @@ export async function runPicksScan(ctx, callbacks) {
       mlAdj: mlRank.mlAdj,
       mlExplain: mlRank.explanation,
       aiBlock: mlRank.aiBlock,
-      aiModel: mlRank.servingLabel,
+      aiModel: mlRank.mlSegment,
       entryTrigger, reversal,
       recentCandles:(t.candles||[]).slice(0,20), closes:t.closes||[],
     };
@@ -653,14 +653,37 @@ export async function runBreakoutScan(ctx, callbacks) {
       :wk52?.breakHigh?'52WK_HIGH':wk52?.breakLow?'52WK_LOW'
       :pdhl?.bullBreakout?'PDH_BREAK':pdhl?.bearBreakout?'PDL_BREAK'
       :st?.crossed?(st.trend==='UP'?'ST_CROSS_UP':'ST_CROSS_DOWN'):'GENERIC';
+    const boRec = isBull?(score>=7?'STRONG BUY':'BUY'):(score>=7?'SELL':'WATCH');
+    const boBaseConf = applyConfluenceAdjustment(applyRegimeAdjustment(Math.min(95,score*10), marketRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties), boConfluence, cfg);
+    // Previously this pipeline stopped at heuristic regime+confluence
+    // adjustment — no ML probability, no learned threshold, no aiBlock veto,
+    // unlike the main Stocks scan. A breakout pick's confidence came from a
+    // meaningfully less-validated process with nothing on screen to show
+    // that distinction. trade.rr already handles both bull and bear
+    // breakouts correctly (boSLTarget is direction-aware), so it's reused
+    // as-is rather than recomputed via the long-only calcPotential/calcRisk.
+    const boIndSnap = {
+      macdBullCross: !!ema?.goldenCross,
+      adxBull: !!adx?.bullTrend,
+      bbSqueeze: !!bb?.squeeze,
+    };
+    const boMlRank = applyMlRanking(boBaseConf, mlModels || null, {
+      type: 'STOCK', confidence: boBaseConf, numInds: score,
+      risk: 50, pot: { rr: trade.rr, wr: 0, base: 0, adj: 0, ev: 0 },
+      rec: boRec, reversal: false, vix: vixVal,
+      regime: marketRegime, volRegimeShift: boVolRegimeShift, _indSnap: boIndSnap,
+    });
+    if (boMlRank.aiBlock) continue;
+    const boConf = Math.min(99, Math.max(1, Math.round(boMlRank.confidence)));
     results.push({
       ...item, ltp, chgPct:getChgPct(q), ema, pdhl, st, vol, score, bullScore, bearScore, dir, wk52, mom, nr7, bb, gap, adx, rs, wMTF, wick,
       trade, atr:t.atr, isBull, phase, sectorScore, sec:item.sec||item.s||'NSE',
       ivPct, primaryType,
-      rec:isBull?(score>=7?'STRONG BUY':'BUY'):(score>=7?'SELL':'WATCH'),
-      conf:applyConfluenceAdjustment(applyRegimeAdjustment(Math.min(95,score*10), marketRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties), boConfluence, cfg),
+      rec: boRec,
+      conf: boConf,
       sl:trade.sl, target:trade.target,
       regime: marketRegime, volRegimeShift: boVolRegimeShift, confluence: boConfluence,
+      mlProbability: boMlRank.mlProbability, mlAdj: boMlRank.mlAdj, mlSegment: boMlRank.mlSegment, aiBlock: boMlRank.aiBlock,
       pot:{cons:trade.sl,mod:trade.target,agg:trade.target,rr:trade.rr,wr:0,base:0,adj:0,ev:0},
       numInds:score, risk:50, rsi:null, high:q.ohlc?.high||ltp, low:q.ohlc?.low||ltp,
       rawVol:boVol, avgVol20:0, macd:{}, rsiDiv:null, patterns:{},
