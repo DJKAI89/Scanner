@@ -232,7 +232,16 @@ export function AppProvider({ children }) {
         fo:   !!(item.fo ?? item.isFO ?? item.hasOption ?? false),
         lot:  item.lot  || item.lotSize || 0,
         step: item.step || 0,
-      })).filter((s) => s.key && s.s);
+      }))
+        .filter((s) => s.key && s.s)
+        // NSE issues "Dummy" placeholder instruments (synthetic ISIN, e.g.
+        // "DUM545A01024") as bookkeeping shells during a demerger/spin-off,
+        // before the real entity gets its actual ISIN and starts trading.
+        // They sit in the instrument master file but were never tradable, so
+        // Upstox has no quote data for them — they showed up as permanently
+        // empty grey tiles on the heatmap. Excluded here instead of silently
+        // failing per-request at scan time.
+        .filter((s) => !s.s.toUpperCase().startsWith('DUMMY'));
       setStocks(list);
       localStorage.setItem('scanner_stocks_loaded_date', today);
       const foCount = list.filter((s) => s.fo && s.lot > 0).length;
