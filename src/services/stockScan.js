@@ -673,8 +673,22 @@ export async function runBreakoutScan(ctx, callbacks) {
       rec: boRec, reversal: false, vix: vixVal,
       regime: marketRegime, volRegimeShift: boVolRegimeShift, _indSnap: boIndSnap,
     });
-    if (boMlRank.aiBlock) continue;
     const boConf = Math.min(99, Math.max(1, Math.round(boMlRank.confidence)));
+    // Parity with the main Stocks pipeline's `passes` check (line ~388) — this
+    // previously only vetoed on aiBlock, so a pick that cleared the hard veto
+    // but would fail the learned RR/risk/confidence floor everywhere else
+    // still showed up here. risk is a flat 50 placeholder in this pipeline
+    // (not per-stock computed, unlike the main pipeline's calcRisk) — kept
+    // as-is, this only adds the missing threshold comparisons, not a risk
+    // recalculation.
+    const boAiThresholds = mlModels?.thresholds?.stock || null;
+    const boEffMinConf = Math.min(boAiThresholds?.minConfidence ?? 999, cfg.minStockConf || 65);
+    const boPasses = !boMlRank.aiBlock
+      && boConf >= boEffMinConf
+      && 50 < (boAiThresholds?.maxRisk || cfg.risk || 55)
+      && trade.rr >= (boAiThresholds?.minRR || cfg.rr || 1.2)
+      && boRec !== 'WATCH';
+    if (!boPasses) continue;
     results.push({
       ...item, ltp, chgPct:getChgPct(q), ema, pdhl, st, vol, score, bullScore, bearScore, dir, wk52, mom, nr7, bb, gap, adx, rs, wMTF, wick,
       trade, atr:t.atr, isBull, phase, sectorScore, sec:item.sec||item.s||'NSE',
