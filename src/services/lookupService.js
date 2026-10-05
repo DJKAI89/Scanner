@@ -11,7 +11,7 @@ import {
   calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain,
   applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX, computeVixPercentile, vixRegimeShiftScore,
 } from './technical';
-import { applyMlRanking, resolveThresholds } from './mlRanking';
+import { applyMlRanking, evaluateSignalGate } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
 import { interpVIXSc, interpPCR, getDeliveryPct } from './stockScan';
 
@@ -338,20 +338,14 @@ export async function lookupInstrument(ctx, callbacks) {
           // (single-symbol option lookup) previously only checked manual confidence
           // and a looser capital fallback, so a pick the Options page would hard-block
           // or drop on RR/capital could still show up here.
-          .filter((p) => {
-            if (p.aiBlock) return false;
-            // Same index-vs-stock subtype resolution as optionScan.js — see
-            // mlRanking.resolveThresholds.
-            const t = resolveThresholds(mlModels, p);
-            const effMinConf = Math.min(t?.minConfidence ?? 999, cfg.minOptConf);
-            if (p.confidence < effMinConf) return false;
-            const minRR = t?.minRR || cfg.optRR || 1.5;
-            if ((p.rr || 0) < minRR) return false;
-            const learnedCap = t?.maxCapital;
-            const capLimit = Math.min(learnedCap > 0 ? learnedCap : Infinity, cfg.maxOptCapital > 0 ? cfg.maxOptCapital : Infinity);
-            if (!Number.isFinite(capLimit)) return true;
-            return p.amtRequired <= capLimit;
-          });
+          .filter((p) =>
+            // Shared gate (mlRanking.evaluateSignalGate) — identical to
+            // optionScan.js's filter now, by construction, not by manual sync.
+            evaluateSignalGate({
+              type: 'OPTION', aiBlock: p.aiBlock, conf: p.confidence, rr: p.rr,
+              amtRequired: p.amtRequired, mlModels, cfg, sigForThresholds: p,
+            }).passes
+          );
 
         let multiExpiry = null;
         if (nextExp) {

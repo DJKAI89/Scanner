@@ -15,7 +15,7 @@ import {
   calcVWAPBands, applyCalibration, applyAdaptWeights, calcEMA, calcIVPercentile,
   applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment, computeVixPercentile, vixRegimeShiftScore,
 } from './technical.js';
-import { applyMlRanking } from './mlRanking.js';
+import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
 import { getIST, getISTDate, sleep } from '../utils/marketTime.js';
 import { fetchIntraday } from './api.js';
 
@@ -375,22 +375,16 @@ export async function runPicksScan(ctx, callbacks) {
       adaptAdj: Math.round(_adaptAdj), mlAdj: Math.round(mlRank.mlAdj || 0), final: conf,
     };
     const rec  = getRec(conf,pot.base,risk,pot.rr);
-    const aiThresholds = mlModels?.thresholds?.stock || null;
-    // The learned minConfidence can go stale relative to the CURRENT scoring
-    // formula (e.g. right after removing fixed indicator bonuses in favor of
-    // adaptWeights) — and since only PASSING signals get logged (see
-    // logSignals below), a too-high learned threshold is a lockout: nothing
-    // passes -> nothing logs -> nothing to retrain the threshold down from.
-    // Taking the min against the user's manual Settings value gives a way
-    // out of that lockout without discarding the learned threshold when it's
-    // already the more permissive (i.e. trusted) one.
-    const effMinConf = Math.min(aiThresholds?.minConfidence ?? 999, cfg.minStockConf || 65);
-    const passes = !mlRank.aiBlock
-      && conf >= effMinConf
-      && pot.base >= (cfg.pot || 3)
-      && risk < (aiThresholds?.maxRisk || cfg.risk || 55)
-      && pot.rr >= (aiThresholds?.minRR || cfg.rr || 1.2)
-      && rec !== 'WATCH' && rec !== 'AVOID';
+    // Shared gate (mlRanking.evaluateSignalGate) — see that function for why:
+    // this exact sequence (learned-vs-manual confidence floor, since only
+    // passing signals get logged so a too-high learned threshold is a
+    // self-reinforcing lockout; RR/risk/potential floors; aiBlock veto) used
+    // to be hand-rewritten at every pipeline and had already drifted apart
+    // more than once.
+    const passes = evaluateSignalGate({
+      type: 'STOCK', aiBlock: mlRank.aiBlock, conf, rr: pot.rr, potBase: pot.base,
+      risk, rec, mlModels, cfg,
+    }).passes;
 
     const entryTrigger=calcEntryTrigger(ltp,high,sr,t.atr||0,rec,vwap,chgPct);
     const macd=t.macd||{}, macdBull=t.macdBull, bb=t.bb, adx=t.adx, rsiDiv=t.rsiDiv;
@@ -674,20 +668,20 @@ export async function runBreakoutScan(ctx, callbacks) {
       regime: marketRegime, volRegimeShift: boVolRegimeShift, _indSnap: boIndSnap,
     });
     const boConf = Math.min(99, Math.max(1, Math.round(boMlRank.confidence)));
-    // Parity with the main Stocks pipeline's `passes` check (line ~388) — this
-    // previously only vetoed on aiBlock, so a pick that cleared the hard veto
-    // but would fail the learned RR/risk/confidence floor everywhere else
-    // still showed up here. risk is a flat 50 placeholder in this pipeline
-    // (not per-stock computed, unlike the main pipeline's calcRisk) — kept
-    // as-is, this only adds the missing threshold comparisons, not a risk
-    // recalculation.
-    const boAiThresholds = mlModels?.thresholds?.stock || null;
-    const boEffMinConf = Math.min(boAiThresholds?.minConfidence ?? 999, cfg.minStockConf || 65);
-    const boPasses = !boMlRank.aiBlock
-      && boConf >= boEffMinConf
-      && 50 < (boAiThresholds?.maxRisk || cfg.risk || 55)
-      && trade.rr >= (boAiThresholds?.minRR || cfg.rr || 1.2)
-      && boRec !== 'WATCH';
+    // boPotBase was previously a hardcoded 0 in the pushed pot object below
+    // (never actually computed for this pipeline) — meaningless as a value
+    // and would always fail a ">= cfg.pot" check, which is exactly why that
+    // check was never applied here. Computed for real now so the shared gate
+    // (evaluateSignalGate) can apply the same potential-floor rule it applies
+    // to the main pipeline, instead of this pipeline silently skipping it.
+    const boPotBase = +Math.abs((trade.target - ltp) / ltp * 100).toFixed(2);
+    // risk stays a flat 50 placeholder — this pipeline doesn't compute a
+    // per-stock risk the way the main pipeline's calcRisk does; only the
+    // missing threshold comparisons are added here, not a risk recalculation.
+    const boPasses = evaluateSignalGate({
+      type: 'STOCK', aiBlock: boMlRank.aiBlock, conf: boConf, rr: trade.rr,
+      potBase: boPotBase, risk: 50, rec: boRec, mlModels, cfg,
+    }).passes;
     if (!boPasses) continue;
     results.push({
       ...item, ltp, chgPct:getChgPct(q), ema, pdhl, st, vol, score, bullScore, bearScore, dir, wk52, mom, nr7, bb, gap, adx, rs, wMTF, wick,
@@ -698,7 +692,7 @@ export async function runBreakoutScan(ctx, callbacks) {
       sl:trade.sl, target:trade.target,
       regime: marketRegime, volRegimeShift: boVolRegimeShift, confluence: boConfluence,
       mlProbability: boMlRank.mlProbability, mlAdj: boMlRank.mlAdj, mlSegment: boMlRank.mlSegment, aiBlock: boMlRank.aiBlock,
-      pot:{cons:trade.sl,mod:trade.target,agg:trade.target,rr:trade.rr,wr:0,base:0,adj:0,ev:0},
+      pot:{cons:trade.sl,mod:trade.target,agg:trade.target,rr:trade.rr,wr:0,base:boPotBase,adj:0,ev:0},
       numInds:score, risk:50, rsi:null, high:q.ohlc?.high||ltp, low:q.ohlc?.low||ltp,
       rawVol:boVol, avgVol20:0, macd:{}, rsiDiv:null, patterns:{},
       a50:ema?.uptrend||false, a200:ltp>(ema?.ema200||0),

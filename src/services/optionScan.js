@@ -6,7 +6,7 @@ import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api.js';
 import { getIST, sleep } from '../utils/marketTime.js';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config.js';
 import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, interpretFIIDII, computeVixPercentile, vixRegimeShiftScore } from './technical.js';
-import { applyMlRanking, resolveThresholds } from './mlRanking.js';
+import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
 import { logSignals, buildOptionSignal } from './github.js';
 
 export const VIX_KEY = 'NSE_INDEX|India VIX';
@@ -161,40 +161,16 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
       aiBlock: mlRank.aiBlock,
       aiModel: mlRank.mlSegment,
     };
-  }).filter(p => {
-    if (p.aiBlock) return false;
-    // resolveThresholds picks the index-vs-stock subtype threshold (where
-    // there's enough data to trust one) instead of the blended option
-    // threshold — a stock-option pick no longer gets filtered against a bar
-    // tuned mostly on index-option behavior just because index options fire
-    // more often in the combined training set.
-    const t = resolveThresholds(mlModels, p);
-    // Same lockout risk as the stock path (see stockScan.js): only passing
-    // signals get logged, so a stale learned threshold can never self-correct.
-    // Min against the manual Settings value gives a way out without losing
-    // the learned threshold whenever it's already the more permissive one.
-    const effMinConf = Math.min(t?.minConfidence ?? 999, cfg.minOptConf);
-    if (p.confidence < effMinConf) return false;
-    // Hard RR floor — same treatment as stockScan.js's `pot.rr >= minRR` gate.
-    // p.rr is computed upstream in technical.js's scanChain (calcSmartOptionSLTarget
-    // + applyExpiryDayAdjustment), so it's a real per-pick value, not a stub.
-    // Previously RR only fed a soft confidence penalty in mlRanking.suppressionPenalty;
-    // a signal that fails the learned RR floor should be dropped outright rather
-    // than just nudged down a few confidence points.
-    const minRR = t?.minRR || cfg.optRR || 1.5;
-    if ((p.rr || 0) < minRR) return false;
-    // Capital is a hard user-set budget ceiling, not a "let more signals
-    // through" knob like confidence/risk/RR were — so unlike those, the
-    // learned threshold should only ever be allowed to tighten this, never
-    // loosen it past what Settings says. Previously `||` let a learned
-    // maxCapital silently override (in either direction) the user's actual
-    // Max Capital setting — e.g. Settings=20000 but a learned threshold of
-    // 68513+ meant picks above the user's real limit still got shown.
-    const learnedCap = t?.maxCapital;
-    const capLimit = Math.min(learnedCap > 0 ? learnedCap : Infinity, cfg.maxOptCapital > 0 ? cfg.maxOptCapital : Infinity);
-    if (!Number.isFinite(capLimit)) return true; // no capital cap configured anywhere
-    return p.amtRequired <= capLimit;
-  });
+  }).filter(p =>
+    // Shared gate (mlRanking.evaluateSignalGate) — aiBlock veto, index-vs-stock
+    // subtype threshold resolution, RR floor, and the capital ceiling (which
+    // only ever tightens past Settings' Max Capital, never loosens it) all
+    // live there now instead of being hand-rewritten per pipeline.
+    evaluateSignalGate({
+      type: 'OPTION', aiBlock: p.aiBlock, conf: p.confidence, rr: p.rr,
+      amtRequired: p.amtRequired, mlModels, cfg, sigForThresholds: p,
+    }).passes
+  );
 }
 
 // ── Main scan ────────────────────────────────────────────────────

@@ -1051,6 +1051,44 @@ export function resolveThresholds(models, sig) {
   return base;
 }
 
+// ── Shared signal gate ──────────────────────────────────────────
+// The pass/fail decision (learned-vs-manual confidence floor, RR floor, risk/
+// capital ceiling, hard aiBlock veto) was being hand-rewritten at every call
+// site — stockScan.js's main pipeline, stockScan.js's breakout pipeline,
+// optionScan.js, and lookupService.js (twice, stock + option) — and had
+// already drifted apart more than once: a missing RR floor, a looser capital
+// fallback, a missing aiBlock check, incomplete breakout parity. One function,
+// called everywhere a signal is accepted or rejected, so the gate itself
+// can't diverge from itself again — fixing it once now fixes it everywhere.
+// Callers pass flat, already-extracted values (not nested pot/sig shapes) so
+// a shape mismatch between pipelines can't silently change behavior; for
+// OPTION, sigForThresholds is the pick itself, needed only so resolveThresholds
+// can read its underlying for the index-vs-stock subtype split.
+export function evaluateSignalGate({ type, aiBlock, conf, rr, potBase = null, risk = null, rec = null, amtRequired = null, mlModels, cfg, sigForThresholds }) {
+  if (aiBlock) return { passes: false, reason: 'aiBlock' };
+
+  if (type === 'STOCK') {
+    const t = mlModels?.thresholds?.stock || null;
+    const effMinConf = Math.min(t?.minConfidence ?? 999, cfg.minStockConf || 65);
+    if (conf < effMinConf) return { passes: false, reason: 'minConfidence' };
+    if (potBase != null && potBase < (cfg.pot || 3)) return { passes: false, reason: 'potential' };
+    if (risk != null && risk >= (t?.maxRisk || cfg.risk || 55)) return { passes: false, reason: 'maxRisk' };
+    if ((rr ?? 0) < (t?.minRR || cfg.rr || 1.2)) return { passes: false, reason: 'minRR' };
+    if (rec === 'WATCH' || rec === 'AVOID') return { passes: false, reason: 'rec' };
+    return { passes: true };
+  }
+
+  // OPTION
+  const t = resolveThresholds(mlModels, sigForThresholds);
+  const effMinConf = Math.min(t?.minConfidence ?? 999, cfg.minOptConf);
+  if (conf < effMinConf) return { passes: false, reason: 'minConfidence' };
+  if ((rr || 0) < (t?.minRR || cfg.optRR || 1.5)) return { passes: false, reason: 'minRR' };
+  const learnedCap = t?.maxCapital;
+  const capLimit = Math.min(learnedCap > 0 ? learnedCap : Infinity, cfg.maxOptCapital > 0 ? cfg.maxOptCapital : Infinity);
+  if (Number.isFinite(capLimit) && amtRequired > capLimit) return { passes: false, reason: 'maxCapital' };
+  return { passes: true };
+}
+
 export function applyMlRanking(confidence, models, sigLike) {
   const model = models?.featureNames ? models : selectServingModel(models, sigLike);
   if (!model || !sigLike) return { confidence, mlProbability: null, mlAdj: 0, aiBlock: false, explanation: [] };
