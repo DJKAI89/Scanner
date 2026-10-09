@@ -489,6 +489,59 @@ export function computeConfluence(modules, actionDir) {
   return { agree, conflicting, total, ratio: total > 0 ? agree / total : 0 };
 }
 
+// ── Shared option confluence + indicator snapshot ─────────────────────────
+// optionScan.js and lookupService.js each hand-wrote their own copy of this,
+// and the two had drifted: lookupService.js compared priceZone/oiBuildType
+// against strings scanChain never emits ('PDH_BREAK', 'NEAR_PDH', 'CE_BUILD',
+// 'PE_BUILD'), so nearPDH/nearPDL/oiBuildUp were always false and the
+// priceAction/institutional confluence modules always voted 0 on the Analyse
+// Stock page. One implementation, used by both.
+//
+// Every confluence module votes in UNDERLYING direction (+1 = underlying up)
+// and is compared to actionDir (CE = +1, PE = -1). scanChain's oiBuildType is
+// already normalised to "favourable for THIS option" (LONG_BUILD on a PE means
+// bearish underlying + rising OI), so it must be flipped back to underlying
+// direction for PE — previously it wasn't, so for every PE a favourable OI
+// build counted as a conflict and an unfavourable one as agreement.
+export function buildOptionConfluence(p) {
+  const actionDir = p.type === 'CE' ? 1 : -1;
+  const oiVote = p.oiBuildType === 'LONG_BUILD' ? 1 : p.oiBuildType === 'SHORT_BUILD' ? -1 : 0;
+  const modules = {
+    trend: Math.sign((p.emaTrendBull === true ? 1 : p.emaTrendBull === false ? -1 : 0) + (p.emaCross === 'bullish_cross' ? 1 : p.emaCross === 'bearish_cross' ? -1 : 0)),
+    momentum: p.momentumFresh ? Math.sign(p.compositeScore || 0) : 0,
+    volume: (p.volRatio >= 1.5) ? Math.sign(p.compositeScore || 0) : 0,
+    priceAction: (p.priceZone === 'abovePDH' || p.priceZone === 'nearPDH') ? 1 : (p.priceZone === 'belowPDL' || p.priceZone === 'nearPDL') ? -1 : 0,
+    institutional: oiVote * actionDir,
+    marketContext: p.stockPCR != null ? (p.stockPCR > 1.2 ? 1 : p.stockPCR < 0.8 ? -1 : 0) : 0,
+  };
+  return computeConfluence(modules, actionDir);
+}
+
+export function buildOptionIndSnap(p, confluence, fiiInterp, isBuyLean) {
+  return {
+    trendAligned: p.trendAligned || false,
+    emaBull: p.emaTrendBull === true,
+    emaBearish: p.emaTrendBull === false,
+    freshCross: p.emaCross === 'bullish_cross' || p.emaCross === 'bearish_cross',
+    momentumFresh: p.momentumFresh || false,
+    volSpike: (p.volRatio ?? 0) >= 1.5,
+    lowVol: (p.volRatio ?? 1) < 0.7,
+    nearPDH: p.priceZone === 'abovePDH' || p.priceZone === 'nearPDH',
+    nearPDL: p.priceZone === 'belowPDL' || p.priceZone === 'nearPDL',
+    oiBuildUp: p.oiBuildType === 'LONG_BUILD' || p.oiBuildType === 'SHORT_COVER',
+    compositeHigh: Math.abs(p.compositeScore ?? 0) >= 2,
+    compositeMed: Math.abs(p.compositeScore ?? 0) >= 1,
+    atm: p.atm || false,
+    vixVeryLow: (p.vix ?? 0) > 0 && (p.vix ?? 0) < 14,
+    vixHighFear: (p.vix ?? 0) > 20,
+    confluenceStrong: !!confluence && confluence.total > 0 && confluence.ratio >= 0.65 && confluence.agree >= 4,
+    confluenceWeak: !!confluence && confluence.total > 0 && confluence.ratio < 0.5,
+    confluenceConflict: !!confluence && confluence.conflicting >= 2,
+    fiiAligned: !!(fiiInterp && ((fiiInterp.bias > 0) === isBuyLean) && fiiInterp.bias !== 0),
+    fiiAgainst: !!(fiiInterp && ((fiiInterp.bias > 0) !== isBuyLean) && fiiInterp.bias !== 0),
+  };
+}
+
 export function applyConfluenceAdjustment(conf, confluence, cfg = {}) {
   if (!confluence || confluence.total === 0) return conf;
   const { agree, conflicting, ratio } = confluence;

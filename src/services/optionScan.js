@@ -5,7 +5,7 @@
 import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api.js';
 import { getIST, sleep } from '../utils/marketTime.js';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config.js';
-import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, interpretFIIDII, computeVixPercentile, vixRegimeShiftScore } from './technical.js';
+import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, buildOptionConfluence, buildOptionIndSnap, interpretFIIDII, computeVixPercentile, vixRegimeShiftScore } from './technical.js';
 import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
 import { logSignals, buildOptionSignal } from './github.js';
 
@@ -82,30 +82,6 @@ export function calcStructure(chain) {
 
 // Builds the per-pick indicator snapshot used by adaptive-weights + ML ranking.
 // Shared by both index-chain and stock-chain scoring passes below.
-function buildIndicatorSnapshot(p, confluence, fiiInterp, isBuyLean) {
-  return {
-    trendAligned: p.trendAligned || false,
-    emaBull: p.emaTrendBull === true,
-    emaBearish: p.emaTrendBull === false,
-    freshCross: p.emaCross === 'bullish_cross' || p.emaCross === 'bearish_cross',
-    momentumFresh: p.momentumFresh || false,
-    volSpike: (p.volRatio ?? 0) >= 1.5,
-    lowVol: (p.volRatio ?? 1) < 0.7,
-    nearPDH: p.priceZone === 'abovePDH' || p.priceZone === 'nearPDH',
-    nearPDL: p.priceZone === 'belowPDL' || p.priceZone === 'nearPDL',
-    oiBuildUp: p.oiBuildType === 'LONG_BUILD' || p.oiBuildType === 'SHORT_COVER',
-    compositeHigh: Math.abs(p.compositeScore ?? 0) >= 2,
-    compositeMed: Math.abs(p.compositeScore ?? 0) >= 1,
-    atm: p.atm || false,
-    vixVeryLow: (p.vix ?? 0) > 0 && (p.vix ?? 0) < 14,
-    vixHighFear: (p.vix ?? 0) > 20,
-    confluenceStrong: !!confluence && confluence.total > 0 && confluence.ratio >= 0.65 && confluence.agree >= 4,
-    confluenceWeak: !!confluence && confluence.total > 0 && confluence.ratio < 0.5,
-    confluenceConflict: !!confluence && confluence.conflicting >= 2,
-    fiiAligned: !!(fiiInterp && ((fiiInterp.bias > 0) === isBuyLean) && fiiInterp.bias !== 0),
-    fiiAgainst: !!(fiiInterp && ((fiiInterp.bias > 0) !== isBuyLean) && fiiInterp.bias !== 0),
-  };
-}
 
 // Applies calibration + regime + adaptive weights (learned) + ML ranking to a
 // raw scanChain pick, then filters by confidence/capital thresholds. FII-bias
@@ -124,22 +100,10 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
     const calAdj = c - prev; prev = c;
     c = applyRegimeAdjustment(c, regime, cfg, mlModels?.thresholds?.option?.regimePenalties);
     const regimeAdj = c - prev; prev = c;
-    // Confluence — same 6-module framework as stocks/breakout. actionDir is based
-    // on option type (CE wants underlying up, PE wants underlying down) — the same
-    // basis trendAligned/action already use in scanChain, not raw BUY/SELL (a SELL
-    // is still a directional bet on the underlying via the option's type).
-    const actionDir = p.type === 'CE' ? 1 : -1;
-    const confluenceModules = {
-      trend: Math.sign((p.emaTrendBull===true?1:p.emaTrendBull===false?-1:0) + (p.emaCross==='bullish_cross'?1:p.emaCross==='bearish_cross'?-1:0)),
-      momentum: p.momentumFresh ? Math.sign(p.compositeScore || 0) : 0,
-      volume: (p.volRatio >= 1.5) ? Math.sign(p.compositeScore || 0) : 0,
-      priceAction: (p.priceZone==='abovePDH'||p.priceZone==='nearPDH') ? 1 : (p.priceZone==='belowPDL'||p.priceZone==='nearPDL') ? -1 : 0,
-      institutional: p.oiBuildType==='LONG_BUILD' ? 1 : p.oiBuildType==='SHORT_BUILD' ? -1 : 0,
-      marketContext: p.stockPCR != null ? (p.stockPCR > 1.2 ? 1 : p.stockPCR < 0.8 ? -1 : 0) : 0,
-    };
-    const confluence = computeConfluence(confluenceModules, actionDir);
+    // Shared with lookupService.js (technical.js buildOptionConfluence) — see there.
+    const confluence = buildOptionConfluence(p);
     const isBuyLean = p.action === 'BUY';
-    const indSnap = buildIndicatorSnapshot(p, confluence, fiiInterp, isBuyLean);
+    const indSnap = buildOptionIndSnap(p, confluence, fiiInterp, isBuyLean);
     c = applyAdaptWeights(c, adaptWeights?.option || null, indSnap);
     const adaptAdj = c - prev;
     const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, regime, volRegimeShift, _indSnap: indSnap });
