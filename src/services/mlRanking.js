@@ -124,6 +124,21 @@ function getOptionSubtype(sig) {
   return 'stock';
 }
 
+// Logged signals store the FINAL confidence — i.e. AFTER this model's own mlAdj
+// was already applied — while live scoring is handed the PRE-ML confidence.
+// Training on the post-ML value meant baseConf carried the previous model's
+// own output as an input (a feedback loop) and differed from what the model
+// sees at serve time by up to ±18 points. Undo the logged mlAdj so both
+// sides see the same quantity. Live sigLikes have no mlAdj, so this is a
+// no-op at serve time; older logs without mlAdj are likewise unchanged.
+// (Also used for the backtest baseline, so "base ranking vs ML ranking" is a
+// fair comparison rather than the ML ranking compared against itself.)
+function preMlConfidence(sig, fallback = 50) {
+  const c = toNum(sig?.confidence ?? sig?.conf, fallback);
+  const adj = Number(sig?.mlAdj);
+  return Number.isFinite(adj) ? c - adj : c;
+}
+
 function getStockFeatureVector(sig) {
   const ind = getIndicators(sig);
   const pot = sig?.pot || {};
@@ -134,7 +149,7 @@ function getStockFeatureVector(sig) {
   const impliedRR = entry > 0 && sl > 0 && target > entry && entry > sl ? (target - entry) / (entry - sl) : 0;
   const { weekday } = safeDateParts(sig);
   return {
-    baseConf: clamp(toNum(sig?.confidence ?? sig?.conf, 50) / 100, 0, 1),
+    baseConf: clamp(preMlConfidence(sig) / 100, 0, 1),
     rr: clamp(toNum(sig?.rr ?? pot?.rr, impliedRR) / 4, 0, 1.5),
     riskInv: clamp(1 - toNum(sig?.risk, 50) / 100, 0, 1),
     numInds: clamp(toNum(sig?.numInds, 0) / 10, 0, 1.5),
@@ -171,7 +186,7 @@ function getOptionFeatureVector(sig) {
   const maxPain = toNum(sig?.maxPain, strike);
   const maxPainDist = spot > 0 ? Math.abs(strike - maxPain) / spot : 0;
   return {
-    baseConf: clamp(toNum(sig?.confidence, 50) / 100, 0, 1),
+    baseConf: clamp(preMlConfidence(sig) / 100, 0, 1),
     rr: clamp(toNum(sig?.rr, 0) / 4, 0, 1.5),
     score: clamp(toNum(sig?.score ?? sig?.numInds, 0) / 12, 0, 1.5),
     composite: clamp(toNum(sig?.compositeScore, 0) / 4, -1.5, 1.5),
@@ -403,7 +418,7 @@ function buildBacktestRows(signals, model, type) {
       return {
         signal: sig,
         mlProb,
-        baseConf: clamp(toNum(sig?.confidence ?? sig?.conf, 50) / 100, 0, 1),
+        baseConf: clamp(preMlConfidence(sig) / 100, 0, 1),
         y: sig.status === 'TARGET_HIT' ? 1 : 0,
         pnlPct: toNum(sig.pnlPct, 0),
       };
@@ -1089,7 +1104,23 @@ export function evaluateSignalGate({ type, aiBlock, conf, rr, potBase = null, ri
   return { passes: true };
 }
 
-export function applyMlRanking(confidence, models, sigLike) {
+// Same clock buildStockSignal/buildOptionSignal (github.js) stamp onto a signal
+// when it is logged. Scoring happens BEFORE a signal exists, so sigLike has no
+// date/time — which silently pinned weekday to Monday and phase to 0.5 for every
+// live score while the model trained on the real values, and (because the STOCK
+// segment label is derived from phase) meant stock_opening / stock_midday models
+// could never be selected live.
+function istClock() {
+  const d = new Date();
+  return {
+    date: d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }),
+    time: d.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }),
+  };
+}
+
+export function applyMlRanking(confidence, models, sigLikeIn) {
+  const clock = sigLikeIn ? istClock() : null;
+  const sigLike = sigLikeIn ? { ...sigLikeIn, date: sigLikeIn.date || clock.date, time: sigLikeIn.time || clock.time } : sigLikeIn;
   const model = models?.featureNames ? models : selectServingModel(models, sigLike);
   if (!model || !sigLike) return { confidence, mlProbability: null, mlAdj: 0, aiBlock: false, explanation: [] };
   const familyThresholds = resolveThresholds(models, sigLike);

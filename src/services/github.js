@@ -447,6 +447,11 @@ export function buildStockSignal(p, vixVal) {
     momentumScore:  p.momentumScore  ?? null,
     mlProbability:  p.mlProbability ?? null,
     mlAdj:          p.mlAdj ?? null,
+    // Persisted so training sees the same values live scoring does, and so the
+    // Analysis page's regime-shift / which-model sections have data to read.
+    // (Neither field was logged before, so volRegimeShift trained as a constant 0.)
+    volRegimeShift: p.volRegimeShift ?? null,
+    mlSegment:      p.mlSegment ?? null,
     // ── Indicator snapshot — used by adaptWeights to learn which signals predict wins ──
     // p._indSnap is the SAME object already used at scan time (applyAdaptWeights)
     // in stockScan.js/lookupService.js. Persisting it directly — instead of a
@@ -512,6 +517,15 @@ export function buildOptionSignal(p, vixVal) {
     momentumScore:  p.momentumScore   ?? null,
     mlProbability:  p.mlProbability ?? null,
     mlAdj:          p.mlAdj ?? null,
+    // oi was on every pick but never logged, so estimateCostPct (mlRanking.js) saw
+    // oi=0 for every closed option and charged the thin-liquidity cost to all of
+    // them, and the Analysis liquidity bands could only ever show "0 / no OI".
+    // dte likewise: expiryDay trained as a constant while live scoring varied.
+    oi:             p.oi ?? null,
+    oiChg:          p.oiChg ?? null,
+    dte:            p._dte ?? null,
+    volRegimeShift: p.volRegimeShift ?? null,
+    mlSegment:      p.mlSegment ?? null,
     emaCross:       p.emaCross        ?? null,
     priceZone:      p.priceZone       || '',
     oiBuildType:    p.oiBuildType     || '',
