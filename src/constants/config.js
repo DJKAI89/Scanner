@@ -25,7 +25,7 @@ export const DEF = {
   maxOptCapital: 0,
   portSize:     500000,
   riskPct:      2,
-  optStockScanCount: 20,
+  optStockScanCount: 50,
   // ── Trade management: partial exits + trailing stop ──
   t1ClosePct:   50,    // % of position closed at T1
   t2ClosePct:   30,    // % of position closed at T2 (remainder closes at T3)
