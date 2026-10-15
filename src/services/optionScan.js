@@ -5,7 +5,7 @@
 import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api.js';
 import { getIST, sleep } from '../utils/marketTime.js';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config.js';
-import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, buildOptionConfluence, buildOptionIndSnap, interpretFIIDII, computeVixPercentile, vixRegimeShiftScore } from './technical.js';
+import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, buildOptionConfluence, buildOptionIndSnap, candleOrder, interpretFIIDII, computeVixPercentile, vixRegimeShiftScore } from './technical.js';
 import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
 import { logSignals, buildOptionSignal } from './github.js';
 
@@ -90,8 +90,8 @@ export function calcStructure(chain) {
 // fed into applyAdaptWeights below, same as the stock scan path, so their
 // actual confidence impact is learned from closed-signal win rates instead of
 // a hardcoded magnitude.
-function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalibration, regime, volRegimeShift = 0, cfg, maxPain = 0, spot = 0 }) {
-  const fiiInterp = interpretFIIDII(fiiData || null);
+function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, adaptWeights, mlModels, confCalibration, regime, volRegimeShift = 0, cfg, maxPain = 0, spot = 0 }) {
+  const fiiInterp = fiiInterpIn || interpretFIIDII(fiiData || null);
   return picks.map(p => {
     const base = p.confidence;
     let c = base;
@@ -141,12 +141,102 @@ function scoreAndFilterPicks(picks, { fiiData, adaptWeights, mlModels, confCalib
 // ctx: { accessToken, cfg, stocks, fiiData, adaptWeights, mlModels, gh, onTokenExpired, lg }
 // caches: { prevAvgIVCache, prevPCRCache } — refs persisted across scans for trend deltas
 // callbacks: { setProgress, setMarketCtxMap, setVix }
+// Learned delta/IV gates (mlRanking.optimizeThresholds) override the static
+// defaults once enough logged option signals exist. Shared so every page that
+// scans a stock's option chain applies the same gates.
+export function effectiveOptionCfg(cfgIn, mlModels) {
+  const g = mlModels?.thresholds?.option;
+  return g?.deltaGate != null ? { ...cfgIn, delta: g.deltaGate, iv: g.ivGate } : cfgIn;
+}
+
+// ── Shared per-stock option scan ─────────────────────────────────────────
+// The F&O Options page and the Analyse Stock page each built a stock's option
+// picks their own way, so the same stock showed different (or no) options on
+// each page. Differences that were found: the Analyse Stock page passed the
+// STOCK's own day-change as the market bias (Options page: NIFTY's), hard-coded
+// VIX to 0 (Options page: real India VIX), built its context from 5-min candles
+// only (empty before the open) instead of daily-with-5-min-fallback, scanned
+// only the first expiry instead of every expiry this month, and skipped the
+// learned delta/IV gates. One implementation now, called by both.
+//
+// Returns { ok:false, reason } when the stock can't be scanned (already logged),
+// otherwise { ok:true, picks, rawCount, expiry, expiries, allExpiries, chain,
+// maxPain, pcr, ivTrend, atm, stkCtx }. `expiries` may be passed in if the caller
+// already has them.
+export async function scanStockOptions({ inst, spot, spotChg, deps, env, expiries: preExpiries = null }) {
+  const { accessToken, cfg, fiiData = null, fiiInterp = null, adaptWeights, mlModels, confCalibration, onTokenExpired, lg, vixHistorySeries } = deps;
+  const { niftyBull, vixVal, ctxMap = {}, prevPCRCache = { current: {} }, prevAvgIVCache = { current: {} } } = env;
+
+  // Fetch both daily (for EMA50/200 context) AND 5-min intraday (for momentum/VWAP)
+  let stkCandles = [];
+  let stkDailyCandles = [];
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const from365 = new Date(Date.now() - 365*86400000).toISOString().split('T')[0];
+    [stkCandles, stkDailyCandles] = await Promise.all([
+      fetchIntraday(inst.key, '5minute', accessToken, onTokenExpired).catch(() => []),
+      fetchCandles(inst.key, from365, today, 'day', accessToken, onTokenExpired).catch(() => []),
+    ]);
+  } catch (_) {}
+  // Use daily candles for EMA200 — intraday for momentum signals
+  const candlesForCtx = stkDailyCandles.length >= 50 ? stkDailyCandles : stkCandles;
+  const ctxKey = SECTOR_CTX_MAP[inst.s] || 'NIFTY';
+  const baseCtx = ctxMap[ctxKey] || ctxMap['NIFTY'] || {};
+  const stkCtx = { ...(computeCtxFromCandles(candlesForCtx, spot, spotChg, vixVal, null) || baseCtx) };
+  stkCtx.spot = spot; stkCtx.dayChange = spotChg;
+  stkCtx.bullish = stkCtx.compositeScore > 0;
+  stkCtx.neutral = Math.abs(stkCtx.compositeScore || 0) < 0.5;
+
+  let allExpiries = preExpiries;
+  if (!allExpiries) {
+    allExpiries = [];
+    try {
+      const cd = await fetch(`https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent(inst.key)}`, { headers:{ Authorization:'Bearer '+accessToken, Accept:'application/json' } }).then(r=>r.json());
+      allExpiries = (cd?.data?.map(e=>e.expiry).filter(Boolean)||[]);
+    } catch(e) {}
+  }
+  if (!allExpiries.length) { lg(inst.s + ': no option expiries returned — skipped', 'w'); return { ok:false, reason:'no-expiries' }; }
+  const expiriesToScan = expiriesInCurrentMonth(allExpiries);
+  const expiry = expiriesToScan[0]; // nearest — drives structural stats below
+  await sleep(300);
+  const chain = await fetchOptions(inst.key, expiry, accessToken, onTokenExpired);
+  if (!chain.length) { lg(inst.s + ': empty option chain — skipped', 'w'); return { ok:false, reason:'empty-chain', expiry }; }
+  const ceOI = chain.reduce((s,x)=>s+(x.call_options?.market_data?.oi||0),0), peOI = chain.reduce((s,x)=>s+(x.put_options?.market_data?.oi||0),0);
+  const pcr = ceOI > 0 ? +(peOI/ceOI).toFixed(2) : 1;
+  const prevPCR = prevPCRCache.current[inst.s] ?? pcr; prevPCRCache.current[inst.s] = pcr;
+  const chainIVs = chain.flatMap(r=>[r.call_options?.option_greeks?.iv,r.put_options?.option_greeks?.iv]).filter(v=>v>0);
+  const avgIV = chainIVs.length ? +(chainIVs.reduce((a,b)=>a+b,0)/chainIVs.length).toFixed(1) : null;
+  const prevAvgIV = prevAvgIVCache.current[inst.s] ?? avgIV; if (avgIV!=null) prevAvgIVCache.current[inst.s]=avgIV;
+  const ivTrend = avgIV!=null&&prevAvgIV!=null ? +(avgIV-prevAvgIV).toFixed(2) : 0;
+  stkCtx.pcr=pcr; stkCtx.pcrTrend=+(pcr-prevPCR).toFixed(3); stkCtx.ivTrend=ivTrend; stkCtx.avgIV=avgIV;
+  const step = spot<200?5:spot<500?10:spot<2000?20:spot<5000?50:100;
+  const atm = Math.round(spot/step)*step;
+  const stkMaxPain = calcMaxPain(chain);
+
+  // Scan every expiry in the current month, merging picks (each pick carries its own .expiry)
+  const allStkPicks = [];
+  for (const [ei, exp] of expiriesToScan.entries()) {
+    const expChain = exp === expiry ? chain : await fetchOptions(inst.key, exp, accessToken, onTokenExpired).catch(() => []);
+    if (!expChain.length) continue;
+    const expMaxPain = exp === expiry ? stkMaxPain : calcMaxPain(expChain);
+    allStkPicks.push(...scanChain(expChain, atm, spot, inst.s, exp, inst.lot, niftyBull, vixVal, expMaxPain, pcr, stkCtx, cfg));
+    if (exp !== expiry) await sleep(300);
+  }
+
+  const stkRegime = classifyMarketRegime(Math.abs(stkCtx.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
+  const stkVolRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
+  const picks = scoreAndFilterPicks(allStkPicks, { fiiData, fiiInterp, adaptWeights, mlModels, confCalibration, regime: stkRegime, volRegimeShift: stkVolRegimeShift, cfg, maxPain: stkMaxPain, spot });
+  // Always report the raw → final count, so a stock whose picks were all filtered out
+  // (RR / capital / confidence gate) is visible in the log instead of vanishing silently.
+  if (!picks.length) lg(`${inst.s}: ${allStkPicks.length} raw → 0 signals (all filtered by gate/thresholds)`, 'w');
+  return { ok:true, picks, rawCount: allStkPicks.length, expiry, expiries: expiriesToScan, allExpiries, chain, maxPain: stkMaxPain, pcr, ivTrend, atm, stkCtx };
+}
+
 export async function runOptionsScan(ctx, caches, callbacks) {
   const { accessToken, cfg: cfgIn, stocks, fiiData, adaptWeights, mlModels, confCalibration, gh, onTokenExpired, lg, vixHistorySeries } = ctx;
   // Learned delta/IV gates (mlRanking.optimizeThresholds) override the static
   // 0.40/15 defaults once enough logged option signals exist to sweep them.
-  const optGates = mlModels?.thresholds?.option;
-  const cfg = optGates?.deltaGate != null ? { ...cfgIn, delta: optGates.deltaGate, iv: optGates.ivGate } : cfgIn;
+  const cfg = effectiveOptionCfg(cfgIn, mlModels);
   const { prevAvgIVCache, prevPCRCache } = caches;
   const { setProgress, setMarketCtxMap, setVix } = callbacks;
 
@@ -160,7 +250,7 @@ export async function runOptionsScan(ctx, caches, callbacks) {
   if (stocks?.length > 0 && foFromJson.length === 0) {
     lg(`⚠ stocks.json has ${stocks.length} stocks but none flagged fo:true — using static F&O fallback list instead. Check your stocks.json data.`, 'w');
   }
-  const scanCount = Math.max(1, cfg.optStockScanCount || 20);
+  const scanCount = Math.max(1, cfg.optStockScanCount || 50);
   const totalSteps = eligibleFOStocks.length > 0 ? 4 : 3;
 
   // ── Step 1: Market context (Nifty + VIX + PCR) ──────────
@@ -192,6 +282,8 @@ export async function runOptionsScan(ctx, caches, callbacks) {
     await sleep(400);
   }
 
+  // Show what order the API actually returns candles in (computeCtxFromCandles now normalises it).
+  { const _k = INDEX_CANDLE_KEYS.find(k => (idxCandles[k] || []).length > 1); if (_k) lg(`Candle order from API: ${candleOrder(idxCandles[_k])} (${idxCandles[_k].length} candles) — normalised to chronological for market context`, 'o'); }
   // Compute per-index marketCtx
   const ctxMap = {};
   for (const idx of INDEX_OPTS) {
@@ -294,12 +386,33 @@ export async function runOptionsScan(ctx, caches, callbacks) {
       } catch (e) { lg('FO universe batch ' + b + ': ' + e.message, 'w'); }
       if (b + 1 < batches) await sleep(250);
     }
-    foStocks = eligibleFOStocks
-      .map(s => ({ ...s, _vol: allSpots[s.key]?.volume || 0, _hasQuote: !!allSpots[s.key]?.last_price }))
-      .filter(s => s._hasQuote)
-      .sort((a, b) => b._vol - a._vol)
+    // Rank by BOTH activity and movement, not raw share volume. Share volume alone
+    // favours cheap, heavily traded stocks and ignores whether the stock is moving.
+    //   activity   = turnover (volume x price) — money traded, comparable across prices
+    //   volatility = the larger of today's high-low range and |change|, as % of prev close
+    // Each is converted to a percentile among the F&O universe and averaged 50/50, so
+    // a stock needs to be both liquid and active to rank high. Top `scanCount` are scanned.
+    const ranked = eligibleFOStocks.map(s => {
+      const q = allSpots[s.key]; const px = q?.last_price || 0; const vol = q?.volume || 0;
+      const prev = q?.ohlc?.close || 0, hi = q?.ohlc?.high || 0, lo = q?.ohlc?.low || 0;
+      const base = prev > 0 ? prev : px;
+      const rangePct = base > 0 && hi > 0 && lo > 0 ? ((hi - lo) / base) * 100 : 0;
+      return { ...s, _hasQuote: px > 0, _vol: vol, _turnover: vol * px, _volatility: Math.max(rangePct, Math.abs(getChgPct(q) || 0)) };
+    }).filter(s => s._hasQuote);
+    const pctRank = (key) => {
+      const sorted = ranked.map(r => r[key]).sort((a, b) => a - b);
+      return (v) => { let lo = 0, hi = sorted.length; while (lo < hi) { const m = (lo + hi) >> 1; if (sorted[m] <= v) lo = m + 1; else hi = m; } return sorted.length ? lo / sorted.length : 0; };
+    };
+    const rTurn = pctRank('_turnover'), rVola = pctRank('_volatility');
+    const noLiveVolume = ranked.length > 0 && ranked.every(r => r._turnover === 0);
+    if (noLiveVolume) lg('⚠ No live volume in quotes (market closed / pre-open?) — ranking by volatility only this scan.', 'w');
+    foStocks = ranked
+      .map(r => ({ ...r, _score: noLiveVolume ? rVola(r._volatility) : 0.5 * rTurn(r._turnover) + 0.5 * rVola(r._volatility) }))
+      .sort((a, b) => b._score - a._score)
       .slice(0, scanCount);
-    lg(`F&O universe: ${eligibleFOStocks.length} eligible → ${foStocks.length} selected by volume (top ${scanCount})`, 'o');
+    lg(`F&O universe: ${eligibleFOStocks.length} eligible → ${foStocks.length} selected by volume + volatility (top ${scanCount})`, 'o');
+    if (foStocks.length) lg('Top picks: ' + foStocks.slice(0, 8).map(r => `${r.s} (${Math.round(r._score * 100)})`).join(', '), 'o');
+    if (foStocks.length === 0) lg(`⚠ F&O stock options: 0 of ${eligibleFOStocks.length} eligible stocks returned a usable quote — stock options will be skipped this scan. Check the quote API / instrument keys.`, 'w');
   }
   if (foStocks.length > 0) {
     // Reuse quotes already fetched during ranking — no need to refetch.
@@ -312,61 +425,17 @@ export async function runOptionsScan(ctx, caches, callbacks) {
         const q = foSpots2[inst.key]; const spot = q?.last_price || 0;
         if (spot < 1) { lg(inst.s + ': no spot', 'w'); continue; }
         const spotChg = getChgPct(q);
-        // Fetch both daily (for EMA50/200 context) AND 5-min intraday (for momentum/VWAP)
-        let stkCandles = [];
-        let stkDailyCandles = [];
-        try {
-          const today = new Date().toISOString().split('T')[0];
-          const from365 = new Date(Date.now() - 365*86400000).toISOString().split('T')[0];
-          [stkCandles, stkDailyCandles] = await Promise.all([
-            fetchIntraday(inst.key, '5minute', accessToken, onTokenExpired).catch(() => []),
-            fetchCandles(inst.key, from365, today, 'day', accessToken, onTokenExpired).catch(() => []),
-          ]);
-        } catch(_) {}
-        // Use daily candles for EMA200 — intraday for momentum signals
-        const candlesForCtx = stkDailyCandles.length >= 50 ? stkDailyCandles : stkCandles;
-        const ctxKey = SECTOR_CTX_MAP[inst.s] || 'NIFTY';
-        const baseCtx = ctxMap[ctxKey] || ctxMap['NIFTY'] || {};
-        // Compute full context with real candles instead of empty array
-        const stkCtx = { ...(computeCtxFromCandles(candlesForCtx, spot, spotChg, vixVal, null) || baseCtx) };
-        stkCtx.spot = spot; stkCtx.dayChange = spotChg;
-        stkCtx.bullish = stkCtx.compositeScore > 0;
-        stkCtx.neutral = Math.abs(stkCtx.compositeScore || 0) < 0.5;
-        let allExpiries2 = [];
-        try { const cd = await fetch(`https://api.upstox.com/v2/option/contract?instrument_key=${encodeURIComponent(inst.key)}`, { headers:{ Authorization:'Bearer '+accessToken, Accept:'application/json' } }).then(r=>r.json()); allExpiries2 = (cd?.data?.map(e=>e.expiry).filter(Boolean)||[]); } catch(e) {}
-        if (!allExpiries2.length) continue;
-        const expiriesToScan2 = expiriesInCurrentMonth(allExpiries2);
-        const expiry = expiriesToScan2[0]; // nearest — drives structural stats below
-        await sleep(300);
-        const chain = await fetchOptions(inst.key, expiry, accessToken, onTokenExpired);
-        if (!chain.length) continue;
-        const ceOI2 = chain.reduce((s,x)=>s+(x.call_options?.market_data?.oi||0),0), peOI2 = chain.reduce((s,x)=>s+(x.put_options?.market_data?.oi||0),0);
-        const pcr2 = ceOI2 > 0 ? +(peOI2/ceOI2).toFixed(2) : 1;
-        const prevPCR2 = prevPCRCache.current[inst.s] ?? pcr2; prevPCRCache.current[inst.s] = pcr2;
-        const chainIVs2 = chain.flatMap(r=>[r.call_options?.option_greeks?.iv,r.put_options?.option_greeks?.iv]).filter(v=>v>0);
-        const avgIV2 = chainIVs2.length ? +(chainIVs2.reduce((a,b)=>a+b,0)/chainIVs2.length).toFixed(1) : null;
-        const prevAvgIV2 = prevAvgIVCache.current[inst.s] ?? avgIV2; if(avgIV2!=null) prevAvgIVCache.current[inst.s]=avgIV2;
-        const ivTrend2 = avgIV2!=null&&prevAvgIV2!=null ? +(avgIV2-prevAvgIV2).toFixed(2) : 0;
-        stkCtx.pcr=pcr2; stkCtx.pcrTrend=+(pcr2-prevPCR2).toFixed(3); stkCtx.ivTrend=ivTrend2; stkCtx.avgIV=avgIV2;
-        const step2 = spot<200?5:spot<500?10:spot<2000?20:spot<5000?50:100;
-        const atm2 = Math.round(spot/step2)*step2;
-        const stkMaxPain = calcMaxPain(chain);
-
-        // Scan every expiry in the current month, merging picks (each pick carries its own .expiry)
-        const allStkPicks = [];
-        for (const [ei, exp] of expiriesToScan2.entries()) {
-          if (expiriesToScan2.length > 1) setProgress(`Step 3/${totalSteps}: ${inst.s} expiry ${ei+1}/${expiriesToScan2.length} (${exp})...`);
-          const expChain = exp === expiry ? chain : await fetchOptions(inst.key, exp, accessToken, onTokenExpired).catch(() => []);
-          if (!expChain.length) continue;
-          const expMaxPain = exp === expiry ? stkMaxPain : calcMaxPain(expChain);
-          allStkPicks.push(...scanChain(expChain, atm2, spot, inst.s, exp, inst.lot, niftyBull, vixVal, expMaxPain, pcr2, stkCtx, cfg));
-          if (exp !== expiry) await sleep(300);
+        // Same scan the Analyse Stock page runs (scanStockOptions above) — one implementation.
+        const r = await scanStockOptions({
+          inst, spot, spotChg,
+          deps: { accessToken, cfg, fiiData, adaptWeights, mlModels, confCalibration, onTokenExpired, lg, vixHistorySeries },
+          env: { niftyBull, vixVal, ctxMap, prevPCRCache, prevAvgIVCache },
+        });
+        if (!r.ok) continue; // reason already logged
+        if (r.picks.length) {
+          built.push({ name:inst.s, spot, spotChg, picks:r.picks, expiry:r.expiry, expiries:r.expiries, chain:r.chain, maxPain:r.maxPain, oiWalls:calcOIWalls(r.chain), pcr:r.pcr, pcrTrend:r.stkCtx.pcrTrend, ivTrend:r.ivTrend, type:'stock', fullName:inst.n });
+          lg(`${inst.s}: ${r.expiries.length} expiry(s) → ${r.rawCount} raw → ${r.picks.length} signals`, 'o');
         }
-
-        const stkRegime = classifyMarketRegime(Math.abs(stkCtx.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
-        const stkVolRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
-        const fPicks2 = scoreAndFilterPicks(allStkPicks, { fiiData, adaptWeights, mlModels, confCalibration, regime: stkRegime, volRegimeShift: stkVolRegimeShift, cfg, maxPain: stkMaxPain, spot });
-        if (fPicks2.length) { built.push({ name:inst.s, spot, spotChg, picks:fPicks2, expiry, expiries:expiriesToScan2, chain, maxPain:stkMaxPain, oiWalls:calcOIWalls(chain), pcr:pcr2, pcrTrend:stkCtx.pcrTrend, ivTrend:ivTrend2, type:'stock', fullName:inst.n }); lg(`${inst.s}: ${expiriesToScan2.length} expiry(s) → ${allStkPicks.length} raw → ${fPicks2.length} signals`, 'o'); }
       } catch(e) { lg(inst.s + ' opts: ' + e.message, 'w'); }
     }
   }

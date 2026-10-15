@@ -3,17 +3,23 @@
 // All calculation, scoring, and API-call logic for the Lookup tab lives here.
 
 import { fetchQ, fetchCandles, fetchIntraday, fetchOptions, fetchOptionContracts } from './api';
+import { scanStockOptions, effectiveOptionCfg } from './optionScan';
 import {
   calcRSI, calcEMACrossover, calcATR, calcBBSqueeze, calcSR, calcVWAP, calcVWAPBands,
   detectPatterns, calcRisk, calcPotential, calcConfidence, countIndicatorsEx,
   getRec, autoSLTarget, calcEntryTrigger, detectReversal, calcMACD,
   isNearSupport, calcRSIDivergence, getSignalStrength,
-  calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain,
-  applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, buildOptionConfluence, buildOptionIndSnap, calcVolumeSurge, calcEMA, calcADX, computeVixPercentile, vixRegimeShiftScore,
+  calcOIWalls, computeCtxFromCandles,
+  applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX, computeVixPercentile, vixRegimeShiftScore,
 } from './technical';
-import { applyMlRanking, evaluateSignalGate } from './mlRanking';
+import { applyMlRanking } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
 import { interpVIXSc, interpPCR, getDeliveryPct } from './stockScan';
+
+// PCR / IV trend are measured against the previous scan of the same symbol; the Options
+// page keeps these caches across scans, so the Analyse Stock page keeps them across lookups.
+const _lookupPcrCache = { current: {} };
+const _lookupIvCache  = { current: {} };
 
 export function getChgPct(q) {
   if (!q) return 0;
@@ -60,10 +66,16 @@ export async function lookupInstrument(ctx, callbacks) {
   // vixSc/pcrSc regardless of actual market regime, causing Lookup's rec to diverge
   // from Stocks/Options on days where real VIX/PCR meaningfully shift the picture.
   let vixSc = 50, marketPcr = null, vixVal = 0;
+  let niftyBull = true; // same definition as the Options page: NIFTY not down more than 0.3%
   try {
-    const vQ = await fetchQ('NSE_INDEX|India VIX', token, onTokenExpired);
-    vixVal = vQ['NSE_INDEX|India VIX']?.last_price || 0;
+    const mQ = await fetchQ('NSE_INDEX|India VIX,NSE_INDEX|Nifty 50', token, onTokenExpired);
+    vixVal = mQ['NSE_INDEX|India VIX']?.last_price || 0;
     if (vixVal > 0) vixSc = interpVIXSc(vixVal).sc;
+    const nQ = mQ['NSE_INDEX|Nifty 50'];
+    if (nQ?.last_price) {
+      const nNet = nQ.net_change ?? (nQ.ohlc?.close ? nQ.last_price - nQ.ohlc.close : 0);
+      niftyBull = ((nNet / nQ.last_price) * 100) > -0.3;
+    }
   } catch (e) {}
   try {
     const expRes = await fetch(
@@ -271,62 +283,23 @@ export async function lookupInstrument(ctx, callbacks) {
     if (expiries.length) {
       const lotFromApi = contracts.find((c) => c.lot_size)?.lot_size || contracts[0]?.lot_size || inst.lot || 1;
       inst = { ...inst, fo: true, lot: lotFromApi };
-      const expiry = expiries[0];
-      const nextExp = expiries[1] || '';
       setProgress('Loading options chain...');
-      await sleep(400);
-      const chain = await fetchOptions(inst.key, expiry, token, onTokenExpired);
-
-      if (!chain.length) {
-        foData = { empty: true, expiry, picks: [] };
+      // The very same per-stock scan the F&O Options page runs (optionScan.scanStockOptions):
+      // NIFTY market bias, real VIX, daily-or-5-min context, every expiry this month, the learned
+      // delta/IV gates, and the shared confluence + confidence gate. Previously this page ran its
+      // own copy with the stock's own day-change as bias, VIX=0 and the first expiry only, so the
+      // same stock showed different (or no) options on each page.
+      const r = await scanStockOptions({
+        inst, spot: ltp, spotChg: chgPct, expiries,
+        deps: { accessToken: token, cfg: effectiveOptionCfg(cfg, mlModels), fiiInterp, adaptWeights, mlModels, confCalibration, onTokenExpired, lg, vixHistorySeries },
+        env: { niftyBull, vixVal: vixVal > 0 ? vixVal : 15, ctxMap: {}, prevPCRCache: _lookupPcrCache, prevAvgIVCache: _lookupIvCache },
+      });
+      if (!r.ok) {
+        foData = r.reason === 'empty-chain' ? { empty: true, expiry: r.expiry, picks: [] } : { error: 'No option expiries returned', picks: [] };
       } else {
-        const maxPain = calcMaxPain(chain);
+        const { chain, expiry, atm, maxPain, pcr } = r;
         const oiWalls = calcOIWalls(chain);
-        const ceOI = chain.reduce((sum, x) => sum + (x.call_options?.market_data?.oi || 0), 0);
-        const peOI = chain.reduce((sum, x) => sum + (x.put_options?.market_data?.oi || 0), 0);
-        const pcr = ceOI > 0 ? +(peOI / ceOI).toFixed(2) : 1.0;
-        const step = inst.step || (ltp < 200 ? 5 : ltp < 500 ? 10 : ltp < 2000 ? 20 : ltp < 5000 ? 50 : 100);
-        const atm = Math.round(ltp / step) * step;
-        const ctxForChain = marketCtx || computeCtxFromCandles([], ltp, chgPct, 0, null);
-        const optRegime = classifyMarketRegime(Math.abs(ctxForChain?.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
-        const optVolRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
-        const picks = scanChain(chain, atm, ltp, s, expiry, inst.lot, chgPct > 0, 0, maxPain, pcr, ctxForChain, cfg);
-        const filteredPicks = picks
-          .map((p) => {
-            // Shared with optionScan.js (technical.js buildOptionConfluence /
-            // buildOptionIndSnap). This file used to carry its own copy that
-            // compared against strings scanChain never emits, so nearPDH/
-            // nearPDL/oiBuildUp were always false here.
-            // fiiInterp comes from ctx (already interpreted upstream in
-            // LookupPane) — do NOT re-derive it here.
-            const confluence = buildOptionConfluence(p);
-            const isBuyLean = p.action === 'BUY';
-            const _indSnap = buildOptionIndSnap(p, confluence, fiiInterp, isBuyLean);
-            let c = p.confidence;
-            c = applyCalibration(c, confCalibration || null);
-            c = applyRegimeAdjustment(c, optRegime, cfg);
-            c = applyAdaptWeights(c, adaptWeights?.option || null, _indSnap);
-            const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, regime: optRegime, volRegimeShift: optVolRegimeShift, _indSnap });
-            return {
-              ...p, regime: optRegime, volRegimeShift: optVolRegimeShift, confluence,
-              confidence: mlRank.confidence, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj,
-              mlSegment: mlRank.mlSegment, mlExplain: mlRank.explanation,
-              aiBlock: mlRank.aiBlock, aiModel: mlRank.mlSegment,
-            };
-          })
-          // Mirrors optionScan.js's scoreAndFilterPicks filter exactly — this path
-          // (single-symbol option lookup) previously only checked manual confidence
-          // and a looser capital fallback, so a pick the Options page would hard-block
-          // or drop on RR/capital could still show up here.
-          .filter((p) =>
-            // Shared gate (mlRanking.evaluateSignalGate) — identical to
-            // optionScan.js's filter now, by construction, not by manual sync.
-            evaluateSignalGate({
-              type: 'OPTION', aiBlock: p.aiBlock, conf: p.confidence, rr: p.rr,
-              amtRequired: p.amtRequired, mlModels, cfg, sigForThresholds: p,
-            }).passes
-          );
-
+        const nextExp = expiries.find((e) => e > expiry) || '';
         let multiExpiry = null;
         if (nextExp) {
           try {
@@ -334,18 +307,14 @@ export async function lookupInstrument(ctx, callbacks) {
             const nextChain = await fetchOptions(inst.key, nextExp, token, onTokenExpired);
             if (nextChain.length) {
               const findATM = (ch, side) => {
-                const row = ch.find((r) => r.strike_price === atm) || ch.reduce((a, b) => Math.abs(b.strike_price - atm) < Math.abs(a.strike_price - atm) ? b : a, ch[0]);
+                const row = ch.find((r2) => r2.strike_price === atm) || ch.reduce((a2, b2) => Math.abs(b2.strike_price - atm) < Math.abs(a2.strike_price - atm) ? b2 : a2, ch[0]);
                 const opt = side === 'CE' ? row?.call_options : row?.put_options;
                 return { ltp: opt?.market_data?.ltp || 0, iv: opt?.option_greeks?.iv || 0, delta: opt?.option_greeks?.delta || 0, theta: opt?.option_greeks?.theta || 0 };
               };
               const dteCur = Math.max(0, Math.round((new Date(expiry) - new Date()) / 86400000));
               const dteNxt = Math.max(0, Math.round((new Date(nextExp) - new Date()) / 86400000));
               multiExpiry = {
-                expiry,
-                nextExp,
-                dteCur,
-                dteNxt,
-                atm,
+                expiry, nextExp, dteCur, dteNxt, atm,
                 ce: { cur: findATM(chain, 'CE'), nxt: findATM(nextChain, 'CE') },
                 pe: { cur: findATM(chain, 'PE'), nxt: findATM(nextChain, 'PE') },
               };
@@ -354,8 +323,7 @@ export async function lookupInstrument(ctx, callbacks) {
             lg('Multi-expiry: ' + e.message, 'w');
           }
         }
-
-        foData = { chain, picks: filteredPicks, maxPain, oiWalls, pcr, expiry, nextExp, atm, multiExpiry };
+        foData = { chain, picks: r.picks, maxPain, oiWalls, pcr, expiry, nextExp, atm, multiExpiry };
       }
     }
   } catch (e) {
