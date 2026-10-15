@@ -1338,7 +1338,28 @@ export function getSignalStrength(numInds, conf, reversal) {
 // ── computeCtxFromCandles — EXACT port from HTML ─────────────
 // Builds composite market direction from 5-min intraday candles
 // Used for EVERY index individually and for stock option scanning
-export function computeCtxFromCandles(candles, spot, chgPct, vix, pdhl = null) {
+// Upstox returns candles NEWEST-first (the rest of the codebase reverses them
+// everywhere it needs chronological order — see stockScan.js / lookupService.js),
+// but computeCtxFromCandles below is written for OLDEST-first: "last two
+// candles" is slice(-2), "latest volume" is volumes[n-1], and its EMAs are seeded
+// from the front. Every caller passed the raw API array, so a clean uptrend was
+// read as a downtrend (and vice versa) — the trend/momentum/composite values that
+// choose CE vs PE and set trendAligned for every option signal were computed on
+// reversed data. Order is decided from the candles' own timestamps rather than
+// assumed, so correctly ordered input is untouched.
+export function candleOrder(candles) {
+  if (!Array.isArray(candles) || candles.length < 2) return 'unknown';
+  const first = Date.parse(candles[0]?.[0]);
+  const last  = Date.parse(candles[candles.length - 1]?.[0]);
+  if (!Number.isFinite(first) || !Number.isFinite(last) || first === last) return 'unknown';
+  return first > last ? 'newest-first' : 'oldest-first';
+}
+export function toChronological(candles) {
+  return candleOrder(candles) === 'newest-first' ? [...candles].reverse() : (candles || []);
+}
+
+export function computeCtxFromCandles(candlesIn, spot, chgPct, vix, pdhl = null) {
+  const candles = toChronological(candlesIn);
   const _ema = (closes, period) => {
     if (closes.length < period) return null;
     const k = 2 / (period + 1);
