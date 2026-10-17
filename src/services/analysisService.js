@@ -3,7 +3,7 @@
 // All calculation and GitHub-read logic for the Analysis tab lives here.
 
 import { ghReadMultipleDays } from './github';
-import { runMlBacktest } from './mlRanking';
+import { runMlBacktest, estimateCostPct } from './mlRanking';
 
 // ── Pure helpers (exported for reuse in pane render where needed) ──
 export function wr(arr) {
@@ -131,6 +131,93 @@ export async function loadAnalysisData(ctx) {
       }).filter(Boolean)
     : [];
 
+  // ── Cost-adjusted net P&L ── real edge after estimated liquidity-scaled
+  // transaction cost (mlRanking.estimateCostPct), not just raw target/SL %.
+  const costRows = closed.filter(s => s.pnlPct != null);
+  const avgRawPct = avgOf(costRows);
+  const avgNetPct = costRows.length
+    ? +(costRows.reduce((sum, s) => sum + (s.pnlPct - estimateCostPct(s, s.type)), 0) / costRows.length).toFixed(2)
+    : null;
+  const netAdjusted = costRows.length >= 5
+    ? { avgRawPct, avgNetPct, costDragPct: (avgRawPct != null && avgNetPct != null) ? +(avgRawPct - avgNetPct).toFixed(2) : null, t: costRows.length }
+    : null;
+
+  // ── Liquidity (OI) impact — options only ── validates whether thin-OI
+  // contracts actually lose more to spread, as the cost model assumes.
+  const optClosed = closed.filter(s => s.type === 'OPTION');
+  const oiBandDefs = [
+    { band: '0 / no OI', min: 0,     max: 0 },
+    { band: '<1k',       min: 1,     max: 999 },
+    { band: '1k–3k',     min: 1000,  max: 2999 },
+    { band: '3k–10k',    min: 3000,  max: 9999 },
+    { band: '10k+',      min: 10000, max: Infinity },
+  ];
+  const liquidityBands = oiBandDefs.map(b => {
+    const g = optClosed.filter(s => (s.oi || 0) >= b.min && (s.oi || 0) <= b.max);
+    const r2 = wr(g);
+    if (!r2 || r2.t < 2) return null;
+    const avgNet = +(g.reduce((sum, s) => sum + ((s.pnlPct || 0) - estimateCostPct(s, 'OPTION')), 0) / g.length).toFixed(2);
+    return { band: b.band, ...r2, avgNet };
+  }).filter(Boolean);
+
+  // ── Volatility regime-shift impact ── validates whether signals fired
+  // right after a VIX spike/collapse actually perform worse (mlRanking
+  // feature `volRegimeShift`). Older logged signals won't have this field.
+  const shiftEligible = closed.filter(s => s.volRegimeShift != null);
+  const shiftBandDefs = [
+    { band: 'Stable (<0.3)',      min: 0,   max: 0.3 },
+    { band: 'Moderate (0.3–0.6)', min: 0.3, max: 0.6 },
+    { band: 'Sharp shift (0.6+)', min: 0.6, max: 1.01 },
+  ];
+  const regimeShiftBands = shiftEligible.length >= 5
+    ? shiftBandDefs.map(b => {
+        const g = shiftEligible.filter(s => s.volRegimeShift >= b.min && s.volRegimeShift < b.max);
+        const r2 = wr(g);
+        return r2 && r2.t >= 2 ? { band: b.band, ...r2 } : null;
+      }).filter(Boolean)
+    : [];
+
+  // ── Which model served each signal ── global vs. a specific segment (see
+  // mlRanking.describeServingLabel). Only signals logged after this field
+  // was added will have it, so this fills in over time.
+  const segmentEligible = closed.filter(s => s.mlSegment);
+  const segmentLabels = [...new Set(segmentEligible.map(s => s.mlSegment))];
+  const modelAttribution = segmentEligible.length >= 5
+    ? segmentLabels.map(label => {
+        const g = segmentEligible.filter(s => s.mlSegment === label);
+        const r2 = wr(g);
+        return r2 && r2.t >= 2 ? { label, ...r2 } : null;
+      }).filter(Boolean).sort((a, b) => b.t - a.t)
+    : [];
+
+  // ── Planned RR vs. realized R-multiple ── are wins/losses landing near
+  // their planned target/SL, or getting cut short / running long?
+  const rrPoints = closed
+    .filter(s => s.entry > 0 && s.sl > 0 && s.entry !== s.sl)
+    .map(s => {
+      const riskPct = Math.abs((s.entry - s.sl) / s.entry * 100);
+      if (riskPct <= 0) return null;
+      return {
+        plannedRR: s.rr ?? s.pot?.rr ?? null,
+        realizedR: +((s.pnlPct || 0) / riskPct).toFixed(2),
+      };
+    }).filter(Boolean);
+  const plannedList = rrPoints.filter(p => p.plannedRR != null).map(p => p.plannedRR);
+  const avgPlannedRR = plannedList.length ? +(plannedList.reduce((a, b) => a + b, 0) / plannedList.length).toFixed(2) : null;
+  const avgRealizedR = rrPoints.length ? +(rrPoints.reduce((a, p) => a + p.realizedR, 0) / rrPoints.length).toFixed(2) : null;
+  const rBucketDefs = [
+    { label: '< -1R',    min: -Infinity, max: -1 },
+    { label: '-1R to 0', min: -1,        max: 0 },
+    { label: '0 to 1R',  min: 0,         max: 1 },
+    { label: '1R to 2R', min: 1,         max: 2 },
+    { label: '2R+',      min: 2,         max: Infinity },
+  ];
+  const rrHistogram = rBucketDefs.map(b => ({
+    label: b.label,
+    t: rrPoints.filter(p => p.realizedR >= b.min && p.realizedR < b.max).length,
+  }));
+  const rrRealized = rrPoints.length >= 5 ? { avgPlannedRR, avgRealizedR, t: rrPoints.length, histogram: rrHistogram } : null;
+
   // Alerts
   const alerts = [];
   if (overall.r < 35) alerts.push({ level: 'danger', msg: `Win rate ${overall.r}% — signals losing systematically. Raise min confidence to 75%+.` });
@@ -150,5 +237,6 @@ export async function loadAnalysisData(ctx) {
     ceWR: wr(ceSignals), peWR: wr(peSignals),
     sigTypes, confBands, timeBreak, dailyRows,
     csRows, scoredSignals, alerts, mlBacktest,
+    netAdjusted, liquidityBands, regimeShiftBands, modelAttribution, rrRealized,
   };
 }
