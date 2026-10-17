@@ -424,8 +424,12 @@ export default function LookupPane() {
             </div>
           )}
 
-          {/* Trade setup */}
-          {r.tech.sl > 0 && (
+          {/* Trade setup — only for an actually actionable call. Previously
+              rendered any time sl>0, which is true even for AVOID/WATCH
+              (autoSLTarget always computes a level), showing a clean-looking
+              Entry/SL/Target card for a stock the recommendation itself says
+              to stay out of. */}
+          {r.tech.sl > 0 && r.tech.rec !== 'AVOID' && r.tech.rec !== 'WATCH' && (
             <SectionCard title="Trade Setup" accent="#16a34a">
               <LevelsStrip
                 entry={fmt(r.tech.entry?.trigger || r.ltp)}
@@ -434,6 +438,11 @@ export default function LookupPane() {
                 entrySub={r.tech.entry?.method}
                 tgtSub={r.tech.pot?.rr ? `R:R ${r.tech.pot.rr.toFixed(1)}:1` : null}
               />
+              {r.tech.timeframeConflict && (
+                <div style={{ marginTop: 8, fontSize: 10, fontWeight: 700, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '6px 10px' }}>
+                  ⚠ Timeframe Conflict — daily is bullish but the 30-min/5-min read disagrees (see Multi-Timeframe Analysis below). Confidence already reflects this; size down or wait for alignment.
+                </div>
+              )}
             </SectionCard>
           )}
 
@@ -459,6 +468,11 @@ export default function LookupPane() {
                 {r.tf5?.volRatio != null && <StatCard label="INTRA VOL" value={`${r.tf5.volRatio}×`} sub="vs avg 5m candle" valClass={r.tf5.volRatio >= 2 ? 'up' : r.tf5.volRatio >= 1.5 ? 'am' : 'dn'} />}
                 {r.tf5?.emaBull != null && <StatCard label="5M EMA" value={r.tf5.emaBull ? '▲ Bull' : '▼ Bear'} sub="EMA 5 vs 13" valClass={r.tf5.emaBull ? 'up' : 'dn'} />}
               </div>
+              {r.tech.timeframeAgreement != null && (
+                <div style={{ marginTop: 8, fontSize: 10, fontWeight: 700, color: r.tech.timeframeConflict ? '#b45309' : '#16a34a' }}>
+                  {r.tech.timeframeConflict ? '⚠' : '✓'} Timeframe agreement: {Math.round(r.tech.timeframeAgreement * 100)}% — {r.tech.timeframeConflict ? 'confidence reduced for conflict' : '30m/5m confirm daily bias'}
+                </div>
+              )}
 
               {/* Intraday signal tags */}
               {r.intraData && (r.intraData.volRatio >= 1.5 || r.intraData.emaBull != null || r.intraData.accelerating) && (

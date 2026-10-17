@@ -13,9 +13,9 @@ import {
   countIndicatorsEx, getRec, autoSLTarget, calcEntryTrigger, detectReversal,
   calcMACD, isNearSupport, calcRSIDivergence, getSector, calcConfidence, calcVWAP,
   calcVWAPBands, applyCalibration, applyAdaptWeights, calcEMA, calcIVPercentile,
-  applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment, computeVixPercentile,
+  applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment, computeVixPercentile, vixRegimeShiftScore,
 } from './technical.js';
-import { applyMlRanking } from './mlRanking.js';
+import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
 import { getIST, getISTDate, sleep } from '../utils/marketTime.js';
 import { fetchIntraday } from './api.js';
 
@@ -284,6 +284,7 @@ export async function runPicksScan(ctx, callbacks) {
     conf=applyCalibration(conf, confCalibration||null);
     const _calAdj = conf - _confBase; let _prev = conf;
     const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(nChgPct) / 1.0), vixVal, computeVixPercentile(vixHistorySeries, vixVal));
+    const volRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
     conf=applyRegimeAdjustment(conf, stockRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties);
     const _regimeAdj = conf - _prev; _prev = conf;
     // Confluence — 6 independent modules vote bullish/bearish/no-opinion; stocks are
@@ -345,7 +346,7 @@ export async function runPicksScan(ctx, callbacks) {
 
     const risk2=(ltp-sl); const useS1=sl>0&&sr?.pivotS1>0&&Math.abs(sl-sr.pivotS1)<risk2*0.3;
     const slTargets={consMethod:useS1?'S1 support':'ATR+VIX',modMethod:'2:1 R:R'};
-    const pot  = calcPotential(ltp,tgtMod,sl,numInds,preRec);
+    const pot  = calcPotential(ltp,tgtMod,sl,numInds,preRec,mlModels?.thresholds?.stock?.wrByRec);
     const risk = calcRisk(ltp,sl,tgtMod,t.atr||0,vixVal);
     const mlRank = applyMlRanking(conf, mlModels || null, {
       type: 'STOCK',
@@ -359,6 +360,11 @@ export async function runPicksScan(ctx, callbacks) {
       delivPct,
       reversal,
       vix: vixVal,
+      // Was missing here despite being logged on the pick below — meant live
+      // scoring always saw volRegimeShift=0 while the model trained on real
+      // values from closed signals (train/serve mismatch).
+      regime: stockRegime,
+      volRegimeShift,
       _indSnap,
     });
     conf = mlRank.confidence;
@@ -369,22 +375,16 @@ export async function runPicksScan(ctx, callbacks) {
       adaptAdj: Math.round(_adaptAdj), mlAdj: Math.round(mlRank.mlAdj || 0), final: conf,
     };
     const rec  = getRec(conf,pot.base,risk,pot.rr);
-    const aiThresholds = mlModels?.thresholds?.stock || null;
-    // The learned minConfidence can go stale relative to the CURRENT scoring
-    // formula (e.g. right after removing fixed indicator bonuses in favor of
-    // adaptWeights) — and since only PASSING signals get logged (see
-    // logSignals below), a too-high learned threshold is a lockout: nothing
-    // passes -> nothing logs -> nothing to retrain the threshold down from.
-    // Taking the min against the user's manual Settings value gives a way
-    // out of that lockout without discarding the learned threshold when it's
-    // already the more permissive (i.e. trusted) one.
-    const effMinConf = Math.min(aiThresholds?.minConfidence ?? 999, cfg.minStockConf || 65);
-    const passes = !mlRank.aiBlock
-      && conf >= effMinConf
-      && pot.base >= (cfg.pot || 3)
-      && risk < (aiThresholds?.maxRisk || cfg.risk || 55)
-      && pot.rr >= (aiThresholds?.minRR || cfg.rr || 1.2)
-      && rec !== 'WATCH' && rec !== 'AVOID';
+    // Shared gate (mlRanking.evaluateSignalGate) — see that function for why:
+    // this exact sequence (learned-vs-manual confidence floor, since only
+    // passing signals get logged so a too-high learned threshold is a
+    // self-reinforcing lockout; RR/risk/potential floors; aiBlock veto) used
+    // to be hand-rewritten at every pipeline and had already drifted apart
+    // more than once.
+    const passes = evaluateSignalGate({
+      type: 'STOCK', aiBlock: mlRank.aiBlock, conf, rr: pot.rr, potBase: pot.base,
+      risk, rec, mlModels, cfg,
+    }).passes;
 
     const entryTrigger=calcEntryTrigger(ltp,high,sr,t.atr||0,rec,vwap,chgPct);
     const macd=t.macd||{}, macdBull=t.macdBull, bb=t.bb, adx=t.adx, rsiDiv=t.rsiDiv;
@@ -397,13 +397,13 @@ export async function runPicksScan(ctx, callbacks) {
       macd, macdBull, bb, adx, rsiDiv,
       a50, a200, nearSupp:nearSuppF, patterns,
       vwap, aboveVWAP, vwapType:'daily', vwapBands,
-      vol, avgVol20, high, low, delivPct, regime: stockRegime, confluence,
+      vol, avgVol20, high, low, delivPct, regime: stockRegime, volRegimeShift, mlSegment: mlRank.mlSegment, confluence,
       _indSnap, confBreakdown,
       mlProbability: mlRank.mlProbability,
       mlAdj: mlRank.mlAdj,
       mlExplain: mlRank.explanation,
       aiBlock: mlRank.aiBlock,
-      aiModel: mlRank.servingLabel,
+      aiModel: mlRank.mlSegment,
       entryTrigger, reversal,
       recentCandles:(t.candles||[]).slice(0,20), closes:t.closes||[],
     };
@@ -562,6 +562,7 @@ export async function runBreakoutScan(ctx, callbacks) {
   const niftyTrendPct = niftyCloses.length >= 6
     ? Math.abs((niftyCloses.at(-1) - niftyCloses.at(-6)) / niftyCloses.at(-6) * 100) : 0;
   const marketRegime = classifyMarketRegime(Math.min(1, niftyTrendPct / 2.5), vixVal, computeVixPercentile(vixHistorySeries, vixVal));
+  const boVolRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
   const scanList=stocks.filter(s=>s.scan!==false);
   // WebSocket quotes — same as picks scan
   setBoProgress('Fetching quotes via WebSocket...');
@@ -646,15 +647,52 @@ export async function runBreakoutScan(ctx, callbacks) {
       :wk52?.breakHigh?'52WK_HIGH':wk52?.breakLow?'52WK_LOW'
       :pdhl?.bullBreakout?'PDH_BREAK':pdhl?.bearBreakout?'PDL_BREAK'
       :st?.crossed?(st.trend==='UP'?'ST_CROSS_UP':'ST_CROSS_DOWN'):'GENERIC';
+    const boRec = isBull?(score>=7?'STRONG BUY':'BUY'):(score>=7?'SELL':'WATCH');
+    const boBaseConf = applyConfluenceAdjustment(applyRegimeAdjustment(Math.min(95,score*10), marketRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties), boConfluence, cfg);
+    // Previously this pipeline stopped at heuristic regime+confluence
+    // adjustment — no ML probability, no learned threshold, no aiBlock veto,
+    // unlike the main Stocks scan. A breakout pick's confidence came from a
+    // meaningfully less-validated process with nothing on screen to show
+    // that distinction. trade.rr already handles both bull and bear
+    // breakouts correctly (boSLTarget is direction-aware), so it's reused
+    // as-is rather than recomputed via the long-only calcPotential/calcRisk.
+    const boIndSnap = {
+      macdBullCross: !!ema?.goldenCross,
+      adxBull: !!adx?.bullTrend,
+      bbSqueeze: !!bb?.squeeze,
+    };
+    const boMlRank = applyMlRanking(boBaseConf, mlModels || null, {
+      type: 'STOCK', confidence: boBaseConf, numInds: score,
+      risk: 50, pot: { rr: trade.rr, wr: 0, base: 0, adj: 0, ev: 0 },
+      rec: boRec, reversal: false, vix: vixVal,
+      regime: marketRegime, volRegimeShift: boVolRegimeShift, _indSnap: boIndSnap,
+    });
+    const boConf = Math.min(99, Math.max(1, Math.round(boMlRank.confidence)));
+    // boPotBase was previously a hardcoded 0 in the pushed pot object below
+    // (never actually computed for this pipeline) — meaningless as a value
+    // and would always fail a ">= cfg.pot" check, which is exactly why that
+    // check was never applied here. Computed for real now so the shared gate
+    // (evaluateSignalGate) can apply the same potential-floor rule it applies
+    // to the main pipeline, instead of this pipeline silently skipping it.
+    const boPotBase = +Math.abs((trade.target - ltp) / ltp * 100).toFixed(2);
+    // risk stays a flat 50 placeholder — this pipeline doesn't compute a
+    // per-stock risk the way the main pipeline's calcRisk does; only the
+    // missing threshold comparisons are added here, not a risk recalculation.
+    const boPasses = evaluateSignalGate({
+      type: 'STOCK', aiBlock: boMlRank.aiBlock, conf: boConf, rr: trade.rr,
+      potBase: boPotBase, risk: 50, rec: boRec, mlModels, cfg,
+    }).passes;
+    if (!boPasses) continue;
     results.push({
       ...item, ltp, chgPct:getChgPct(q), ema, pdhl, st, vol, score, bullScore, bearScore, dir, wk52, mom, nr7, bb, gap, adx, rs, wMTF, wick,
       trade, atr:t.atr, isBull, phase, sectorScore, sec:item.sec||item.s||'NSE',
       ivPct, primaryType,
-      rec:isBull?(score>=7?'STRONG BUY':'BUY'):(score>=7?'SELL':'WATCH'),
-      conf:applyConfluenceAdjustment(applyRegimeAdjustment(Math.min(95,score*10), marketRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties), boConfluence, cfg),
+      rec: boRec,
+      conf: boConf,
       sl:trade.sl, target:trade.target,
-      regime: marketRegime, confluence: boConfluence,
-      pot:{cons:trade.sl,mod:trade.target,agg:trade.target,rr:trade.rr,wr:0,base:0,adj:0,ev:0},
+      regime: marketRegime, volRegimeShift: boVolRegimeShift, confluence: boConfluence,
+      mlProbability: boMlRank.mlProbability, mlAdj: boMlRank.mlAdj, mlSegment: boMlRank.mlSegment, aiBlock: boMlRank.aiBlock,
+      pot:{cons:trade.sl,mod:trade.target,agg:trade.target,rr:trade.rr,wr:0,base:boPotBase,adj:0,ev:0},
       numInds:score, risk:50, rsi:null, high:q.ohlc?.high||ltp, low:q.ohlc?.low||ltp,
       rawVol:boVol, avgVol20:0, macd:{}, rsiDiv:null, patterns:{},
       a50:ema?.uptrend||false, a200:ltp>(ema?.ema200||0),

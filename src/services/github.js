@@ -1,5 +1,8 @@
 // ── GitHub API service ── exact port from HTML ──
 
+import { splitModelForStorage, mergeModelFromStorage } from './mlRanking.js';
+
+
 // ── userId helper — sanitised same as HTML ──
 function _uid() {
   return (localStorage.getItem('scanner_user_id') || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -16,7 +19,12 @@ function getLogFolder()      { return `signal-logs/${_uid()}`; }
 function getLogDayPath(date) { return `${getLogFolder()}/${date}.json`; }
 function getLogIndexPath()   { return `${getLogFolder()}/index.json`; }
 function getAiFolder()       { return `ai-models/${_uid()}`; }
-function getAiLatestPath()   { return `${getAiFolder()}/latest.json`; }
+function getAiLatestPath()   { return `${getAiFolder()}/latest.json`; }               // oldest legacy — combined file, read-only fallback
+function getAiStockPath()    { return `${getAiFolder()}/stock.json`; }                // previous scheme — flat split, read-only fallback
+function getAiOptionPath()   { return `${getAiFolder()}/option.json`; }
+function getAiModelIndexPath()        { return `${getAiFolder()}/index.json`; }       // tracks which month is current
+function getAiMonthlyStockPath(month)  { return `${getAiFolder()}/${month}/stock.json`; }
+function getAiMonthlyOptionPath(month) { return `${getAiFolder()}/${month}/option.json`; }
 function getAiHistoryIndexPath()        { return `${getAiFolder()}/history/index.json`; }
 function getAiHistoryDayPath(date)      { return `${getAiFolder()}/history/${date}.json`; }
 function getVixHistoryPath()            { return `${getAiFolder()}/vix-history.json`; }
@@ -110,24 +118,69 @@ export async function pullSettingsFromGH(gh) {
 
 export async function pullAiModelFromGH(gh) {
   try {
-    const d = await _ghFetch(gh, getAiLatestPath());
-    if (!d) return null;
-    return _decode(d.content);
+    // 1) Current scheme: month-partitioned. index.json says which month is current.
+    const indexFile = await _ghFetch(gh, getAiModelIndexPath());
+    if (indexFile) {
+      const index = _decode(indexFile.content);
+      const month = index?.latestMonth;
+      if (month) {
+        const [stockRes, optionRes] = await Promise.all([
+          _ghFetch(gh, getAiMonthlyStockPath(month)),
+          _ghFetch(gh, getAiMonthlyOptionPath(month)),
+        ]);
+        const stockFile  = stockRes  ? _decode(stockRes.content)  : null;
+        const optionFile = optionRes ? _decode(optionRes.content) : null;
+        if (stockFile || optionFile) return mergeModelFromStorage(stockFile, optionFile);
+      }
+    }
+
+    // 2) Previous scheme: flat split (stock.json/option.json, no month folder) —
+    // covers accounts that retrained under that scheme but haven't since this
+    // month-partitioned one shipped.
+    const [flatStockRes, flatOptionRes] = await Promise.all([
+      _ghFetch(gh, getAiStockPath()),
+      _ghFetch(gh, getAiOptionPath()),
+    ]);
+    const flatStock  = flatStockRes  ? _decode(flatStockRes.content)  : null;
+    const flatOption = flatOptionRes ? _decode(flatOptionRes.content) : null;
+    if (flatStock || flatOption) return mergeModelFromStorage(flatStock, flatOption);
+
+    // 3) Oldest scheme: single combined latest.json.
+    const legacy = await _ghFetch(gh, getAiLatestPath());
+    return legacy ? _decode(legacy.content) : null;
   } catch (_) { return null; }
 }
 
 export async function pushAiModelToGH(gh, modelPayload) {
   if (!gh.token || !gh.user || !gh.repo || !modelPayload) return false;
   try {
-    const existing = await _ghFetch(gh, getAiLatestPath());
-    const sha = existing?.sha || null;
-    const payload = {
-      ...modelPayload,
-      savedAt: new Date().toISOString(),
-      upstoxId: _uid(),
-    };
-    const r = await _ghPut(gh, getAiLatestPath(), payload, sha, `SCANNER AI model · ${_uid()}`);
-    return r?.ok ?? false;
+    // Partition by the month the model was actually computed in, not wall-clock
+    // "now" — keeps a retrain that runs just after midnight UTC filed under the
+    // month its training data belongs to.
+    const month = (modelPayload.computedAt || new Date().toISOString()).slice(0, 7);
+    const { stock, option } = splitModelForStorage(modelPayload);
+    const savedAt = new Date().toISOString();
+    const upstoxId = _uid();
+    let ok = true;
+    if (stock) {
+      const path = getAiMonthlyStockPath(month);
+      const existing = await _ghFetch(gh, path);
+      const r = await _ghPut(gh, path, { ...stock, savedAt, upstoxId, month }, existing?.sha || null, `SCANNER AI stock model · ${upstoxId} · ${month}`);
+      ok = ok && (r?.ok ?? false);
+    }
+    if (option) {
+      const path = getAiMonthlyOptionPath(month);
+      const existing = await _ghFetch(gh, path);
+      const r = await _ghPut(gh, path, { ...option, savedAt, upstoxId, month }, existing?.sha || null, `SCANNER AI option model · ${upstoxId} · ${month}`);
+      ok = ok && (r?.ok ?? false);
+    }
+    // Update the month index so pullAiModelFromGH knows which folder is current.
+    const indexExisting = await _ghFetch(gh, getAiModelIndexPath());
+    const index = indexExisting ? (_decode(indexExisting.content) || { months: [] }) : { months: [] };
+    const months = Array.from(new Set([...(index.months || []), month])).sort();
+    const r = await _ghPut(gh, getAiModelIndexPath(), { months, latestMonth: month, updatedAt: savedAt }, indexExisting?.sha || null, `SCANNER AI model index · ${upstoxId} · ${month}`);
+    ok = ok && (r?.ok ?? false);
+    return ok;
   } catch (_) { return false; }
 }
 
@@ -394,6 +447,11 @@ export function buildStockSignal(p, vixVal) {
     momentumScore:  p.momentumScore  ?? null,
     mlProbability:  p.mlProbability ?? null,
     mlAdj:          p.mlAdj ?? null,
+    // Persisted so training sees the same values live scoring does, and so the
+    // Analysis page's regime-shift / which-model sections have data to read.
+    // (Neither field was logged before, so volRegimeShift trained as a constant 0.)
+    volRegimeShift: p.volRegimeShift ?? null,
+    mlSegment:      p.mlSegment ?? null,
     // ── Indicator snapshot — used by adaptWeights to learn which signals predict wins ──
     // p._indSnap is the SAME object already used at scan time (applyAdaptWeights)
     // in stockScan.js/lookupService.js. Persisting it directly — instead of a
@@ -459,6 +517,15 @@ export function buildOptionSignal(p, vixVal) {
     momentumScore:  p.momentumScore   ?? null,
     mlProbability:  p.mlProbability ?? null,
     mlAdj:          p.mlAdj ?? null,
+    // oi was on every pick but never logged, so estimateCostPct (mlRanking.js) saw
+    // oi=0 for every closed option and charged the thin-liquidity cost to all of
+    // them, and the Analysis liquidity bands could only ever show "0 / no OI".
+    // dte likewise: expiryDay trained as a constant while live scoring varied.
+    oi:             p.oi ?? null,
+    oiChg:          p.oiChg ?? null,
+    dte:            p._dte ?? null,
+    volRegimeShift: p.volRegimeShift ?? null,
+    mlSegment:      p.mlSegment ?? null,
     emaCross:       p.emaCross        ?? null,
     priceZone:      p.priceZone       || '',
     oiBuildType:    p.oiBuildType     || '',

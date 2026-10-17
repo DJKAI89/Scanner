@@ -2,14 +2,14 @@ const STOCK_FEATURES = [
   'baseConf', 'rr', 'riskInv', 'numInds', 'potential', 'expectedWR',
   'composite', 'momentum', 'bullish', 'reversal', 'aboveVWAP', 'nearSupport',
   'deliveryHigh', 'deliveryLow', 'macdBullCross', 'adxBull', 'rsiBullDiv', 'bbSqueeze',
-  'weekday', 'phase', 'regime', 'sectorStrength', 'newsSentiment', 'gapType',
+  'weekday', 'phase', 'regime', 'volRegimeShift', 'sectorStrength', 'newsSentiment', 'gapType',
 ];
 
 const OPTION_FEATURES = [
   'baseConf', 'rr', 'score', 'composite', 'momentum', 'bullish',
   'trendAligned', 'freshCross', 'momentumFresh', 'volSpike', 'oiBuildUp',
   'deltaAbs', 'iv', 'thetaAbs', 'atm', 'capitalLoad', 'nearPDH', 'nearPDL',
-  'weekday', 'phase', 'regime', 'expiryDay', 'sectorStrength', 'newsSentiment',
+  'weekday', 'phase', 'regime', 'volRegimeShift', 'expiryDay', 'sectorStrength', 'newsSentiment',
   'maxPainDist', 'counterTrend',
 ];
 
@@ -17,6 +17,23 @@ const BASE_COST_PCT = {
   STOCK: 0.18,
   OPTION: 0.45,
 };
+
+// The flat 0.45% option cost applied identically to every trade regardless
+// of strike liquidity. A thin contract (near the 500-OI scan floor in
+// technical.js's scanChain) trades on a far wider bid-ask spread than a deep
+// ATM contract with 10k+ OI — the EV/threshold math was quietly optimistic
+// on exactly the trades most likely to bleed to spread. Scales the flat
+// baseline by open interest, which is already logged on every option pick.
+export function estimateCostPct(row, type) {
+  if (type !== 'OPTION') return BASE_COST_PCT.STOCK;
+  const oi = toNum(row?.signal?.oi ?? row?.oi, 0);
+  const base = BASE_COST_PCT.OPTION;
+  if (oi <= 0)     return base * 2.5; // no OI on record — treat conservatively
+  if (oi >= 10000) return base;
+  if (oi >= 3000)  return base * 1.3;
+  if (oi >= 1000)  return base * 1.8;
+  return base * 2.5; // near the liquidity floor
+}
 
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
@@ -107,6 +124,21 @@ function getOptionSubtype(sig) {
   return 'stock';
 }
 
+// Logged signals store the FINAL confidence — i.e. AFTER this model's own mlAdj
+// was already applied — while live scoring is handed the PRE-ML confidence.
+// Training on the post-ML value meant baseConf carried the previous model's
+// own output as an input (a feedback loop) and differed from what the model
+// sees at serve time by up to ±18 points. Undo the logged mlAdj so both
+// sides see the same quantity. Live sigLikes have no mlAdj, so this is a
+// no-op at serve time; older logs without mlAdj are likewise unchanged.
+// (Also used for the backtest baseline, so "base ranking vs ML ranking" is a
+// fair comparison rather than the ML ranking compared against itself.)
+function preMlConfidence(sig, fallback = 50) {
+  const c = toNum(sig?.confidence ?? sig?.conf, fallback);
+  const adj = Number(sig?.mlAdj);
+  return Number.isFinite(adj) ? c - adj : c;
+}
+
 function getStockFeatureVector(sig) {
   const ind = getIndicators(sig);
   const pot = sig?.pot || {};
@@ -117,7 +149,7 @@ function getStockFeatureVector(sig) {
   const impliedRR = entry > 0 && sl > 0 && target > entry && entry > sl ? (target - entry) / (entry - sl) : 0;
   const { weekday } = safeDateParts(sig);
   return {
-    baseConf: clamp(toNum(sig?.confidence ?? sig?.conf, 50) / 100, 0, 1),
+    baseConf: clamp(preMlConfidence(sig) / 100, 0, 1),
     rr: clamp(toNum(sig?.rr ?? pot?.rr, impliedRR) / 4, 0, 1.5),
     riskInv: clamp(1 - toNum(sig?.risk, 50) / 100, 0, 1),
     numInds: clamp(toNum(sig?.numInds, 0) / 10, 0, 1.5),
@@ -138,6 +170,7 @@ function getStockFeatureVector(sig) {
     weekday: weekday / 6,
     phase: getPhaseValue(sig),
     regime: getRegimeValue(sig),
+    volRegimeShift: clamp(toNum(sig?.volRegimeShift, 0), 0, 1),
     sectorStrength: getSectorStrength(sig),
     newsSentiment: getNewsSentiment(sig),
     gapType: getGapType(sig),
@@ -153,7 +186,7 @@ function getOptionFeatureVector(sig) {
   const maxPain = toNum(sig?.maxPain, strike);
   const maxPainDist = spot > 0 ? Math.abs(strike - maxPain) / spot : 0;
   return {
-    baseConf: clamp(toNum(sig?.confidence, 50) / 100, 0, 1),
+    baseConf: clamp(preMlConfidence(sig) / 100, 0, 1),
     rr: clamp(toNum(sig?.rr, 0) / 4, 0, 1.5),
     score: clamp(toNum(sig?.score ?? sig?.numInds, 0) / 12, 0, 1.5),
     composite: clamp(toNum(sig?.compositeScore, 0) / 4, -1.5, 1.5),
@@ -174,6 +207,7 @@ function getOptionFeatureVector(sig) {
     weekday: weekday / 6,
     phase: getPhaseValue(sig),
     regime: getRegimeValue(sig),
+    volRegimeShift: clamp(toNum(sig?.volRegimeShift, 0), 0, 1),
     expiryDay: clamp(toNum(sig?._dte ?? sig?.dte, 3) <= 1 ? 1 : toNum(sig?._dte ?? sig?.dte, 3) <= 3 ? 0.6 : 0.2, 0, 1),
     sectorStrength: getSectorStrength(sig),
     newsSentiment: getNewsSentiment(sig),
@@ -352,16 +386,24 @@ function calibrateProbability(prob, calibrator) {
   if (!calibrator?.length) return prob;
   const idx = Math.min(calibrator.length - 1, Math.floor(clamp(prob, 0, 0.9999) * calibrator.length));
   const bin = calibrator[idx];
-  if (!bin || bin.actual == null || bin.total < 3) return prob;
-  return clamp(bin.actual * 0.7 + prob * 0.3, 0.01, 0.99);
+  if (!bin || bin.actual == null) return prob;
+  // Was a hard cliff: bins with >=3 samples got trusted at a flat 70% weight,
+  // bins with 0-2 fell back to raw probability entirely. With typical early
+  // dataset sizes most of the 10 bins sit near that cliff, so calibration was
+  // either overconfident on a 3-sample bin or a no-op on a 2-sample one.
+  // Shrink continuously toward the bin's observed rate as its sample size
+  // grows instead, so a 3-sample bin barely moves the estimate and a
+  // 50-sample bin is trusted almost fully.
+  const weight = clamp(bin.total / (bin.total + 15), 0, 0.85);
+  return clamp(bin.actual * weight + prob * (1 - weight), 0.01, 0.99);
 }
 
-function summarizeCostAdjusted(rows, costPct) {
+function summarizeCostAdjusted(rows, type) {
   if (!rows.length) return null;
   const total = rows.length;
   const hits = rows.filter((r) => r.y === 1).length;
   const wr = Math.round((hits / total) * 100);
-  const avgNet = rows.reduce((sum, row) => sum + ((toNum(row.pnlPct, 0) - costPct)), 0) / total;
+  const avgNet = rows.reduce((sum, row) => sum + (toNum(row.pnlPct, 0) - estimateCostPct(row, type)), 0) / total;
   return { total, wr, avgNet: +avgNet.toFixed(2) };
 }
 
@@ -376,7 +418,7 @@ function buildBacktestRows(signals, model, type) {
       return {
         signal: sig,
         mlProb,
-        baseConf: clamp(toNum(sig?.confidence ?? sig?.conf, 50) / 100, 0, 1),
+        baseConf: clamp(preMlConfidence(sig) / 100, 0, 1),
         y: sig.status === 'TARGET_HIT' ? 1 : 0,
         pnlPct: toNum(sig.pnlPct, 0),
       };
@@ -396,7 +438,7 @@ function summarizeBacktest(rows, type, thresholds) {
   const bottomQuartileWr = wr(bottom);
   const threshold = thresholds?.probability ?? 0.62;
   const filtered = rows.filter((r) => r.mlProb >= threshold);
-  const costSummary = summarizeCostAdjusted(filtered, BASE_COST_PCT[type] || 0.2);
+  const costSummary = summarizeCostAdjusted(filtered, type);
   return {
     total: rows.length,
     overallWr,
@@ -434,21 +476,47 @@ function calibrateRegimePenalties(closedSignals) {
   return out;
 }
 
+// Learns the actual win rate per `rec` bucket (STRONG BUY / BUY / MODERATE /
+// WATCH / other) from closed-signal outcomes — replaces the static guess
+// table in technical.js's calcPotential with a measured one once a bucket has
+// enough samples (>=20) to trust. Buckets below that are omitted so the
+// caller falls back to the static table for those specific recs only.
+function calibrateExpectedWR(closedSignals) {
+  const buckets = {};
+  for (const s of closedSignals) {
+    const rec = s?.rec;
+    if (!rec) continue;
+    (buckets[rec] || (buckets[rec] = [])).push(s.status === 'TARGET_HIT' ? 1 : 0);
+  }
+  const out = {};
+  for (const [rec, results] of Object.entries(buckets)) {
+    if (results.length < 20) continue;
+    const wr = Math.round((results.reduce((a, b) => a + b, 0) / results.length) * 100);
+    out[rec] = clamp(wr, 35, 80);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 function optimizeThresholds(dataset, model, type) {
   const rows = buildBacktestRows(dataset.map((d) => d.signal || d), model, type);
-  const SAFE_DEFAULTS = { probability: 0.62, minConfidence: 65, maxRisk: 55, minRR: 1.2, maxCapital: 0, deltaGate: 0.40, ivGate: 15, sampleSize: rows.length };
+  // minRR floor raised from 1.2/1.3 to 1.6 for both types: at ~55-60% win
+  // rate and real transaction costs (BASE_COST_PCT above), a sub-1.5 RR
+  // barely clears breakeven after costs — see avgNet in summarizeBacktest.
+  const SAFE_DEFAULTS = { probability: 0.62, minConfidence: 65, maxRisk: 55, minRR: 1.6, maxCapital: 0, deltaGate: 0.40, ivGate: 15, sampleSize: rows.length };
   // Hard floor: below 40 closed signals, learned thresholds are too easily
   // overfit to noise (this exact failure mode silently starved all option
   // picks in production once already) — stay on safe defaults entirely.
   if (rows.length < 40) return SAFE_DEFAULTS;
 
-  const candidates = [0.55, 0.58, 0.6, 0.62, 0.65, 0.68, 0.7, 0.74];
+  // Dropped 0.55 from the sweep — that floor let too many marginal signals
+  // through once combined with the (now-tightened) RR floor above.
+  const candidates = [0.58, 0.6, 0.62, 0.65, 0.68, 0.7, 0.74];
   let best = { probability: 0.62, score: -Infinity };
   for (const p of candidates) {
     const filtered = rows.filter((r) => r.mlProb >= p);
     if (filtered.length < Math.max(10, rows.length * 0.1)) continue;
     const wr = filtered.filter((r) => r.y === 1).length / filtered.length;
-    const avgNet = filtered.reduce((sum, r) => sum + (r.pnlPct - (BASE_COST_PCT[type] || 0.2)), 0) / filtered.length;
+    const avgNet = filtered.reduce((sum, r) => sum + (r.pnlPct - estimateCostPct(r, type)), 0) / filtered.length;
     const score = wr * 0.7 + (avgNet / 100) * 0.3;
     if (score > best.score) best = { probability: p, score };
   }
@@ -476,10 +544,10 @@ function optimizeThresholds(dataset, model, type) {
   }
 
   return {
-    probability: clamp(best.probability, 0.55, 0.68),
-    minConfidence: Math.round(clamp(best.probability, 0.55, 0.68) * 100),
+    probability: clamp(best.probability, 0.58, 0.7),
+    minConfidence: Math.round(clamp(best.probability, 0.58, 0.7) * 100),
     maxRisk: type === 'STOCK' ? 48 : 58,
-    minRR: type === 'STOCK' ? 1.4 : 1.3,
+    minRR: 1.6,
     maxCapital: type === 'OPTION' ? 120000 : 0,
     deltaGate, ivGate,
     sampleSize: rows.length,
@@ -523,15 +591,36 @@ function evaluateModel(model, dataset) {
   };
 }
 
-function trainLightGbmStyleModel(dataset, featureNames, type, label) {
+// `gain` only matters while training (collectFeatureImportance sums it into
+// topFeatures, which is stored separately) — once that's done, keeping gain
+// on every persisted node is dead weight repeated across every tree, and
+// this hand-rolled GBM's JSON has no way to compress repeated key names.
+// Stripped here, after topFeatures is computed but before the model is
+// returned for storage.
+function stripTrainingOnlyFields(node) {
+  if (!node) return node;
+  if (node.feature == null) return { value: node.value };
+  return {
+    feature: node.feature,
+    threshold: node.threshold,
+    left: stripTrainingOnlyFields(node.left),
+    right: stripTrainingOnlyFields(node.right),
+  };
+}
+
+function trainLightGbmStyleModel(dataset, featureNames, type, label, fast = false) {
   if (dataset.length < 30) return null;
   const positives = dataset.filter((row) => row.y === 1).length;
   const negatives = dataset.length - positives;
   if (positives < 6 || negatives < 6) return null;
   const params = {
-    numIterations: dataset.length >= 150 ? 42 : dataset.length >= 90 ? 32 : 24,
+    // `fast`: used by trainWalkForward, which retrains a model up to
+    // MAX_RETRAINS times just to get a relative accuracy/brier estimate for
+    // the overfitting gate — it doesn't need full training-quality depth,
+    // so cap iterations/leaves hard to keep the repeated retraining cheap.
+    numIterations: fast ? 15 : (dataset.length >= 150 ? 42 : dataset.length >= 90 ? 32 : 24),
     learningRate: dataset.length >= 150 ? 0.07 : 0.09,
-    maxLeaves: dataset.length >= 150 ? 10 : 8,
+    maxLeaves: fast ? 6 : (dataset.length >= 150 ? 10 : 8),
     minDataInLeaf: dataset.length >= 150 ? 10 : 6,
     lambdaL2: 1.5,
     minGainToSplit: 0.0001,
@@ -556,7 +645,8 @@ function trainLightGbmStyleModel(dataset, featureNames, type, label) {
   for (let iter = 0; iter < params.numIterations; iter++) {
     const rows = dataset.map((row, idx) => {
       const p = sigmoid(scores[idx]);
-      return { x: row.x, grad: row.y - p, hess: Math.max(p * (1 - p), 1e-5) };
+      const w = row.weight ?? 1;
+      return { x: row.x, grad: (row.y - p) * w, hess: Math.max(p * (1 - p), 1e-5) * w };
     });
     const tree = buildLeafWiseTree(rows, featureNames, params);
     model.trees.push(tree);
@@ -567,13 +657,15 @@ function trainLightGbmStyleModel(dataset, featureNames, type, label) {
   model.calibrator = fitCalibrator(dataset, model);
   const metrics = evaluateModel(model, dataset);
   const baseBrier = +(baseRate * (1 - baseRate)).toFixed(4);
+  const topFeatures = collectFeatureImportance(model).slice(0, 8);
   return {
     ...model,
+    trees: model.trees.map(stripTrainingOnlyFields),
     accuracy: metrics.accuracy,
     brier: metrics.brier,
     baseBrier,
     edge: +(baseBrier - metrics.brier).toFixed(4),
-    topFeatures: collectFeatureImportance(model).slice(0, 8),
+    topFeatures,
   };
 }
 
@@ -588,7 +680,7 @@ function getSegmentLabel(sig, type) {
 }
 
 function buildDataset(signals, type, featureNames, label = null) {
-  return signals
+  const rows = signals
     .filter((sig) => sig?.type === type)
     .filter((sig) => !label || getSegmentLabel(sig, type) === label)
     .map((sig) => {
@@ -599,18 +691,44 @@ function buildDataset(signals, type, featureNames, label = null) {
         x: vectorize(features, featureNames),
       };
     });
+  // Multiple signals on the same underlying on the same day are usually one
+  // real market move counted several times (e.g. 5 option strikes on NIFTY
+  // all riding the same intraday swing). Without down-weighting, the split
+  // search treats them as 5 independent confirmations of whatever pattern
+  // that one day happened to have, inflating the model's apparent edge on
+  // patterns that are really just "that one day". Weight each row by
+  // 1/(group size) so a clustered day counts once in total, not N times.
+  const groups = {};
+  for (const row of rows) {
+    const key = `${row.signal?.date || ''}|${(row.signal?.stock || row.signal?.und || 'IDX').toUpperCase()}`;
+    (groups[key] || (groups[key] = [])).push(row);
+  }
+  for (const group of Object.values(groups)) {
+    const weight = 1 / group.length;
+    for (const row of group) row.weight = weight;
+  }
+  return rows;
 }
 
 function trainWalkForward(dataset, featureNames, type, label) {
   if (dataset.length < 40) return null;
   const sorted = [...dataset].sort((a, b) => `${a.signal.date}${a.signal.time || ''}`.localeCompare(`${b.signal.date}${b.signal.time || ''}`));
   const minTrain = Math.max(25, Math.floor(sorted.length * 0.5));
+  // Retraining a full model at every single step is O(n^2) — timed out past
+  // ~1600 rows in testing. Cap total retrains to a fixed budget by striding
+  // through the test window instead of walking it one point at a time; this
+  // keeps runtime bounded as the closed-signal count grows without silently
+  // returning null (which — since fix #2's overfitting gate — makes every
+  // segment model fail the trust check and fall back to global).
+  const testPoints = sorted.length - minTrain;
+  const MAX_RETRAINS = 120;
+  const stride = Math.max(1, Math.ceil(testPoints / MAX_RETRAINS));
   let correct = 0;
   let tested = 0;
   let brier = 0;
-  for (let i = minTrain; i < sorted.length; i++) {
+  for (let i = minTrain; i < sorted.length; i += stride) {
     const train = sorted.slice(0, i);
-    const model = trainLightGbmStyleModel(train, featureNames, type, label);
+    const model = trainLightGbmStyleModel(train, featureNames, type, label, true);
     if (!model) continue;
     const raw = sigmoid(predictScore(model, sorted[i].x));
     const prob = calibrateProbability(raw, model.calibrator);
@@ -626,13 +744,28 @@ function trainWalkForward(dataset, featureNames, type, label) {
   };
 }
 
+// Segment models train on a fraction of the global dataset, so at the old
+// floor (trainedOn >= 25, no walk-forward check) a segment could win this
+// selection purely by overfitting a small slice — in-sample edge/accuracy
+// looks great, live performance doesn't. Require a real sample size AND
+// walk-forward accuracy that actually matches or beats the global model
+// before trusting a segment over it.
+const MIN_SEGMENT_SAMPLES = 40;
+const SEGMENT_WF_TOLERANCE = 0.02;
+
 function chooseRollback(globalModel, segmentModels) {
-  const candidates = [globalModel, ...segmentModels.filter(Boolean)];
-  return candidates.sort((a, b) => {
-    const ea = (a?.edge || 0) + (a?.walkForward?.accuracy || 0) * 0.2;
-    const eb = (b?.edge || 0) + (b?.walkForward?.accuracy || 0) * 0.2;
+  const globalWF = globalModel?.walkForward?.accuracy ?? globalModel?.accuracy ?? 0;
+  const qualified = segmentModels.filter((m) => {
+    if (!m || m.trainedOn < MIN_SEGMENT_SAMPLES) return false;
+    if (m.walkForward?.accuracy == null) return false;
+    return m.walkForward.accuracy >= globalWF - SEGMENT_WF_TOLERANCE;
+  });
+  if (!qualified.length) return globalModel;
+  return qualified.sort((a, b) => {
+    const ea = (a.edge || 0) + (a.walkForward?.accuracy || 0) * 0.2;
+    const eb = (b.edge || 0) + (b.walkForward?.accuracy || 0) * 0.2;
     return eb - ea;
-  })[0] || globalModel;
+  })[0];
 }
 
 function trainFamily(signals, type, featureNames) {
@@ -652,10 +785,29 @@ function trainFamily(signals, type, featureNames) {
 
   const servingModel = chooseRollback(globalModel, segmentModels);
   const thresholds = optimizeThresholds(baseDataset, servingModel, type);
+  // Index options (NIFTY/BANKNIFTY) and individual-stock options have different
+  // liquidity, IV behavior, and win-rate curves, but optimizeThresholds above
+  // tunes one set of numbers against the whole blended OPTION dataset — likely
+  // dominated by whichever subtype fires more signals. A single stock's option
+  // pick then gets scored by a (correctly) stock-specific model but filtered
+  // against a bar really tuned on the mixed set. Compute a subtype-specific
+  // threshold where there's enough data to trust one; resolveThresholds() below
+  // falls back to the blended `thresholds` above wherever this isn't populated.
+  if (type === 'OPTION') {
+    thresholds.bySubtype = {};
+    for (const subtype of ['index', 'stock']) {
+      const subsetSignals = signals.filter((s) => s.type === 'OPTION' && getOptionSubtype(s) === subtype);
+      const subsetDataset = buildDataset(subsetSignals, type, featureNames);
+      if (subsetDataset.length < 40) continue; // same trust floor as optimizeThresholds itself
+      thresholds.bySubtype[subtype] = optimizeThresholds(subsetDataset, globalModel, type);
+    }
+  }
   // Must exclude OPEN signals — calibrateRegimePenalties treats anything
   // that isn't status==='TARGET_HIT' as a loss, so an unresolved position
   // would get silently counted as a loss for its regime bucket otherwise.
-  thresholds.regimePenalties = calibrateRegimePenalties(signals.filter((s) => s.type === type && s.status !== 'OPEN'));
+  const resolvedSignals = signals.filter((s) => s.type === type && s.status !== 'OPEN');
+  thresholds.regimePenalties = calibrateRegimePenalties(resolvedSignals);
+  if (type === 'STOCK') thresholds.wrByRec = calibrateExpectedWR(resolvedSignals);
   return {
     global: globalModel,
     segments: Object.fromEntries(segmentModels.map((m) => [m.label, m])),
@@ -702,7 +854,13 @@ function selectServingModel(models, sigLike) {
   if (!fam) return sigLike.type === 'STOCK' ? models.stock : models.option;
   const label = getSegmentLabel(sigLike, sigLike.type);
   const seg = fam.segments?.[label];
-  if (seg && seg.trainedOn >= 25) return seg;
+  // Same overfitting gate as chooseRollback (training time): a segment only
+  // serves live traffic once it has enough samples AND its walk-forward
+  // accuracy actually holds up against the global model.
+  const globalWF = fam.global?.walkForward?.accuracy ?? fam.global?.accuracy ?? 0;
+  if (seg && seg.trainedOn >= MIN_SEGMENT_SAMPLES
+    && seg.walkForward?.accuracy != null
+    && seg.walkForward.accuracy >= globalWF - SEGMENT_WF_TOLERANCE) return seg;
   if (fam.drift?.rollbackTo && fam.segments?.[fam.drift.rollbackTo]) return fam.segments[fam.drift.rollbackTo];
   return fam.global;
 }
@@ -717,22 +875,31 @@ function portfolioPenalty(sigLike) {
   return penalty;
 }
 
+// `regime` is already a model feature (getRegimeValue feeds getStockFeatureVector
+// /getOptionFeatureVector), so the model itself learns whatever weight a high-regime
+// reading deserves. The old flat "regime > 0.75 -> +0.03" bonus here boosted the
+// output a second time on top of that — double-counting the same signal. Dropped;
+// kept is the composite/direction divergence check below, which flags a genuine
+// disagreement the leaf splits don't reliably isolate at the sample sizes this
+// system trains on.
 function regimeAdjustment(sigLike, prob) {
-  const regime = getRegimeValue(sigLike);
   const bullish = isBullishSignal(sigLike);
   const composite = toNum(sigLike?.compositeScore, 0);
   if (bullish && composite < -1) return clamp(prob - 0.06, 0.01, 0.99);
   if (!bullish && composite > 1) return clamp(prob - 0.06, 0.01, 0.99);
-  if (regime > 0.75) return clamp(prob + 0.03, 0.01, 0.99);
   return prob;
 }
 
+// RR and risk are already model features (rr/riskInv) AND already hard-filtered
+// at the scan level (stockScan.js's `pot.rr >= minRR` / `risk < maxRisk`, and
+// optionScan.js's matching RR filter) — the penalties that used to live here for
+// those two conditions applied the same signal a third time. Only the modelProb
+// floor and the option IV/counter-trend interaction (not something the model
+// reliably isolates on its own) remain as a genuine backstop.
 function suppressionPenalty(sigLike, modelProb, thresholds) {
   let penalty = 0;
   if (modelProb < (thresholds?.probability || 0.62) - 0.08) penalty += 6;
   if (sigLike?.type === 'OPTION' && toNum(sigLike?.iv, 0) > 45 && sigLike?.trendAligned === false) penalty += 5;
-  if (toNum(sigLike?.rr ?? sigLike?.pot?.rr, 0) < (thresholds?.minRR || 1.2)) penalty += 4;
-  if (toNum(sigLike?.risk, 0) > (thresholds?.maxRisk || 55)) penalty += 5;
   return penalty;
 }
 
@@ -753,6 +920,49 @@ export function explainMlPrediction(sigLike, models) {
       value: fullVector[idx],
     };
   }).sort((a, b) => Math.abs(b.impact) - Math.abs(a.impact)).slice(0, 5);
+}
+
+// ── Storage split ──────────────────────────────────────────────────
+// The combined single model file grows with every segment that crosses its
+// training-sample floor and every boosting iteration added as data
+// accumulates — measured this hitting several hundred KB well before a
+// mature dataset, against GitHub Contents API's 1MB per-file cap. Splitting
+// stock/option into their own files (github.js additionally partitions each
+// by month, so a new period always starts a fresh pair instead of growing
+// one file forever) keeps this bounded. These two helpers are the single
+// source of truth for that split/merge shape so github.js (client) and
+// train-ai-model.mjs (offline script) can't drift apart on it.
+export function splitModelForStorage(models) {
+  if (!models) return { stock: null, option: null };
+  const meta = { modelName: models.modelName, version: models.version, computedAt: models.computedAt };
+  return {
+    stock: models.families?.stock ? { ...meta, family: models.families.stock } : null,
+    option: models.families?.option ? { ...meta, family: models.families.option } : null,
+  };
+}
+
+export function mergeModelFromStorage(stockFile, optionFile) {
+  if (!stockFile && !optionFile) return null;
+  const meta = stockFile || optionFile;
+  return {
+    modelName: meta.modelName,
+    version: meta.version,
+    computedAt: meta.computedAt,
+    stock: stockFile?.family?.global || null,
+    option: optionFile?.family?.global || null,
+    families: {
+      stock: stockFile?.family || null,
+      option: optionFile?.family || null,
+    },
+    thresholds: {
+      stock: stockFile?.family?.thresholds || null,
+      option: optionFile?.family?.thresholds || null,
+    },
+    drift: {
+      stock: stockFile?.family?.drift || null,
+      option: optionFile?.family?.drift || null,
+    },
+  };
 }
 
 export function buildModelSnapshot(models) {
@@ -826,10 +1036,94 @@ export function getPortfolioAiGuidance(openSignals = [], candidateSignals = [], 
   };
 }
 
-export function applyMlRanking(confidence, models, sigLike) {
+// Same selection logic as selectServingModel, but returns which label served
+// the prediction (for logging/analysis) instead of the model object itself.
+function describeServingLabel(models, sigLike) {
+  if (!models || !sigLike) return 'none';
+  const fam = sigLike.type === 'STOCK' ? models.families?.stock : models.families?.option;
+  if (!fam) return 'global';
+  const label = getSegmentLabel(sigLike, sigLike.type);
+  const seg = fam.segments?.[label];
+  const globalWF = fam.global?.walkForward?.accuracy ?? fam.global?.accuracy ?? 0;
+  if (seg && seg.trainedOn >= MIN_SEGMENT_SAMPLES
+    && seg.walkForward?.accuracy != null
+    && seg.walkForward.accuracy >= globalWF - SEGMENT_WF_TOLERANCE) return label;
+  if (fam.drift?.rollbackTo && fam.segments?.[fam.drift.rollbackTo]) return `rollback:${fam.drift.rollbackTo}`;
+  return 'global';
+}
+
+// Single source of truth for which threshold set applies to a given signal —
+// used here, and by optionScan.js/lookupService.js's hard filters, so the
+// index-vs-stock split (see trainFamily) can't drift out of sync between
+// where the probability is scored and where it's filtered, the way the
+// un-segmented thresholds used to drift between pages.
+export function resolveThresholds(models, sig) {
+  const base = sig?.type === 'STOCK' ? models?.thresholds?.stock : models?.thresholds?.option;
+  if (sig?.type === 'OPTION' && base?.bySubtype) {
+    const subtype = getOptionSubtype(sig);
+    return base.bySubtype[subtype] || base;
+  }
+  return base;
+}
+
+// ── Shared signal gate ──────────────────────────────────────────
+// The pass/fail decision (learned-vs-manual confidence floor, RR floor, risk/
+// capital ceiling, hard aiBlock veto) was being hand-rewritten at every call
+// site — stockScan.js's main pipeline, stockScan.js's breakout pipeline,
+// optionScan.js, and lookupService.js (twice, stock + option) — and had
+// already drifted apart more than once: a missing RR floor, a looser capital
+// fallback, a missing aiBlock check, incomplete breakout parity. One function,
+// called everywhere a signal is accepted or rejected, so the gate itself
+// can't diverge from itself again — fixing it once now fixes it everywhere.
+// Callers pass flat, already-extracted values (not nested pot/sig shapes) so
+// a shape mismatch between pipelines can't silently change behavior; for
+// OPTION, sigForThresholds is the pick itself, needed only so resolveThresholds
+// can read its underlying for the index-vs-stock subtype split.
+export function evaluateSignalGate({ type, aiBlock, conf, rr, potBase = null, risk = null, rec = null, amtRequired = null, mlModels, cfg, sigForThresholds }) {
+  if (aiBlock) return { passes: false, reason: 'aiBlock' };
+
+  if (type === 'STOCK') {
+    const t = mlModels?.thresholds?.stock || null;
+    const effMinConf = Math.min(t?.minConfidence ?? 999, cfg.minStockConf || 65);
+    if (conf < effMinConf) return { passes: false, reason: 'minConfidence' };
+    if (potBase != null && potBase < (cfg.pot || 3)) return { passes: false, reason: 'potential' };
+    if (risk != null && risk >= (t?.maxRisk || cfg.risk || 55)) return { passes: false, reason: 'maxRisk' };
+    if ((rr ?? 0) < (t?.minRR || cfg.rr || 1.2)) return { passes: false, reason: 'minRR' };
+    if (rec === 'WATCH' || rec === 'AVOID') return { passes: false, reason: 'rec' };
+    return { passes: true };
+  }
+
+  // OPTION
+  const t = resolveThresholds(mlModels, sigForThresholds);
+  const effMinConf = Math.min(t?.minConfidence ?? 999, cfg.minOptConf);
+  if (conf < effMinConf) return { passes: false, reason: 'minConfidence' };
+  if ((rr || 0) < (t?.minRR || cfg.optRR || 1.5)) return { passes: false, reason: 'minRR' };
+  const learnedCap = t?.maxCapital;
+  const capLimit = Math.min(learnedCap > 0 ? learnedCap : Infinity, cfg.maxOptCapital > 0 ? cfg.maxOptCapital : Infinity);
+  if (Number.isFinite(capLimit) && amtRequired > capLimit) return { passes: false, reason: 'maxCapital' };
+  return { passes: true };
+}
+
+// Same clock buildStockSignal/buildOptionSignal (github.js) stamp onto a signal
+// when it is logged. Scoring happens BEFORE a signal exists, so sigLike has no
+// date/time — which silently pinned weekday to Monday and phase to 0.5 for every
+// live score while the model trained on the real values, and (because the STOCK
+// segment label is derived from phase) meant stock_opening / stock_midday models
+// could never be selected live.
+function istClock() {
+  const d = new Date();
+  return {
+    date: d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }),
+    time: d.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false }),
+  };
+}
+
+export function applyMlRanking(confidence, models, sigLikeIn) {
+  const clock = sigLikeIn ? istClock() : null;
+  const sigLike = sigLikeIn ? { ...sigLikeIn, date: sigLikeIn.date || clock.date, time: sigLikeIn.time || clock.time } : sigLikeIn;
   const model = models?.featureNames ? models : selectServingModel(models, sigLike);
   if (!model || !sigLike) return { confidence, mlProbability: null, mlAdj: 0, aiBlock: false, explanation: [] };
-  const familyThresholds = sigLike.type === 'STOCK' ? models?.thresholds?.stock : models?.thresholds?.option;
+  const familyThresholds = resolveThresholds(models, sigLike);
   const features = getFeatureVector(sigLike, sigLike.type);
   const vector = vectorize(features, model.featureNames);
   const rawProb = sigmoid(predictScore(model, vector));
@@ -842,7 +1136,11 @@ export function applyMlRanking(confidence, models, sigLike) {
   const walkForwardFactor = clamp((model.walkForward?.accuracy || model.accuracy || 0.5), 0.35, 0.8);
   const trust = 0.18 + (0.28 * sampleFactor) + (0.18 * edgeFactor) + (0.18 * walkForwardFactor);
   let adj = clamp((probability - baseProb) * 100 * trust, -18, 18);
-  adj -= portfolioPenalty(sigLike);
+  // portfolioPenalty (capital load / cluster risk) is intentionally NOT applied
+  // here anymore — it's a position-sizing concern (see getPortfolioAiGuidance),
+  // not a probability-of-winning concern, and capitalLoad/trendAligned are
+  // already model features. Folding it into confidence conflated "how likely
+  // is this to win" with "how much should I risk on it".
   adj -= suppressionPenalty(sigLike, probability, familyThresholds);
 
   const nextConfidence = clamp(Math.round(confidence + adj), 1, 99);
@@ -862,6 +1160,7 @@ export function applyMlRanking(confidence, models, sigLike) {
     mlProbability: Math.round(probability * 100),
     mlAdj: +adj.toFixed(1),
     aiBlock,
+    mlSegment: models?.featureNames ? 'external' : describeServingLabel(models, sigLike),
     explanation,
     servingLabel: model.label,
   };

@@ -127,7 +127,18 @@ export async function fetchQ(keys, token, onTokenExpired) {
   );
   const raw = d?.data || {};
   const out = {};
-  for (const [k, v] of Object.entries(raw)) out[k.replace(/:/g, '|')] = v;
+  for (const [k, v] of Object.entries(raw)) {
+    out[k.replace(/:/g, '|')] = v;
+    // Upstox keys equity quotes by "EXCHANGE:SYMBOL" (NSE_EQ:RELIANCE), but
+    // stocks.json carries ISIN-based instrument keys (NSE_EQ|INE002A01018) — so a
+    // lookup by the key the caller actually requested missed, silently dropping
+    // the stock (e.g. from the F&O options universe, which ranks by REST volume).
+    // Index keys happened to match because they're name-based. Also index each
+    // quote by the instrument_token it carries so lookups by the requested key
+    // always resolve; a no-op where the two already agree.
+    const tok = typeof v?.instrument_token === 'string' ? v.instrument_token.replace(/:/g, '|') : '';
+    if (tok && out[tok] === undefined) out[tok] = v;
+  }
   return out;
 }
 

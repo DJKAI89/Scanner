@@ -3,17 +3,23 @@
 // All calculation, scoring, and API-call logic for the Lookup tab lives here.
 
 import { fetchQ, fetchCandles, fetchIntraday, fetchOptions, fetchOptionContracts } from './api';
+import { scanStockOptions, effectiveOptionCfg } from './optionScan';
 import {
   calcRSI, calcEMACrossover, calcATR, calcBBSqueeze, calcSR, calcVWAP, calcVWAPBands,
   detectPatterns, calcRisk, calcPotential, calcConfidence, countIndicatorsEx,
   getRec, autoSLTarget, calcEntryTrigger, detectReversal, calcMACD,
   isNearSupport, calcRSIDivergence, getSignalStrength,
-  calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain,
-  applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX, computeVixPercentile,
+  calcOIWalls, computeCtxFromCandles,
+  applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX, computeVixPercentile, vixRegimeShiftScore,
 } from './technical';
 import { applyMlRanking } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
 import { interpVIXSc, interpPCR, getDeliveryPct } from './stockScan';
+
+// PCR / IV trend are measured against the previous scan of the same symbol; the Options
+// page keeps these caches across scans, so the Analyse Stock page keeps them across lookups.
+const _lookupPcrCache = { current: {} };
+const _lookupIvCache  = { current: {} };
 
 export function getChgPct(q) {
   if (!q) return 0;
@@ -60,10 +66,16 @@ export async function lookupInstrument(ctx, callbacks) {
   // vixSc/pcrSc regardless of actual market regime, causing Lookup's rec to diverge
   // from Stocks/Options on days where real VIX/PCR meaningfully shift the picture.
   let vixSc = 50, marketPcr = null, vixVal = 0;
+  let niftyBull = true; // same definition as the Options page: NIFTY not down more than 0.3%
   try {
-    const vQ = await fetchQ('NSE_INDEX|India VIX', token, onTokenExpired);
-    vixVal = vQ['NSE_INDEX|India VIX']?.last_price || 0;
+    const mQ = await fetchQ('NSE_INDEX|India VIX,NSE_INDEX|Nifty 50', token, onTokenExpired);
+    vixVal = mQ['NSE_INDEX|India VIX']?.last_price || 0;
     if (vixVal > 0) vixSc = interpVIXSc(vixVal).sc;
+    const nQ = mQ['NSE_INDEX|Nifty 50'];
+    if (nQ?.last_price) {
+      const nNet = nQ.net_change ?? (nQ.ohlc?.close ? nQ.last_price - nQ.ohlc.close : 0);
+      niftyBull = ((nNet / nQ.last_price) * 100) > -0.3;
+    }
   } catch (e) {}
   try {
     const expRes = await fetch(
@@ -117,6 +129,7 @@ export async function lookupInstrument(ctx, callbacks) {
       let conf = calcConfidence(null, vixSc, pcrSc, chgPct > 0, 0, q.volume || 0, volObj?.avgVol || 1, pats, preRec, numInds);
       conf=applyCalibration(conf, confCalibration||null);
       const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(chgPct) / 1.0), vixVal, computeVixPercentile(vixHistorySeries, vixVal));
+      const volRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
       conf=applyRegimeAdjustment(conf, stockRegime, cfg);
       // Confluence — same 6-module framework as stockScan.js (parity); no peer
       // group here for a real sector score, so marketContext relies on NIFTY PCR only.
@@ -132,7 +145,7 @@ export async function lookupInstrument(ctx, callbacks) {
       };
       const confluence = computeConfluence(confluenceModules, 1);
       const risk = calcRisk(ltp, sl, target, atr, 0);
-      const pot = calcPotential(ltp, target, sl, numInds, rec);
+      const pot = calcPotential(ltp, target, sl, numInds, rec, mlModels?.thresholds?.stock?.wrByRec);
       const reversal = detectReversal(ltp, rsi, pats, sr, 0, 1.0, chgPct > 0, chgPct, atr, q.ohlc?.high || ltp, q.ohlc?.low || ltp);
       const vwap = calcVWAP(candles);
       const aboveVWAP = vwap > 0 ? ltp >= vwap : null;
@@ -172,12 +185,12 @@ export async function lookupInstrument(ctx, callbacks) {
         fiiAgainst: !!(fiiInterp && ((fiiInterp.bias>0) !== isBuyLean) && fiiInterp.bias!==0),
       };
       conf = applyAdaptWeights(conf, adaptWeights?.stock || null, _indSnap);
-      const mlRank = applyMlRanking(conf, mlModels || null, { type:'STOCK', confidence: conf, numInds, risk, pot, rec: preRec, reversal, vix: vixVal, _indSnap });
+      const mlRank = applyMlRanking(conf, mlModels || null, { type:'STOCK', confidence: conf, numInds, risk, pot, rec: preRec, reversal, vix: vixVal, regime: stockRegime, volRegimeShift, _indSnap });
       conf = mlRank.confidence;
       const finalRec = getRec(conf, pot.base, risk, pot.rr);
       const strength = getSignalStrength(numInds, conf, reversal);
       const entry = calcEntryTrigger(ltp, q.ohlc?.high || ltp, sr, atr, finalRec, vwap, chgPct);
-      tech = { rsi, ema, macd, bb, atr, adx, sr, pats, rsiDiv, a50, a200, volOk, nearS, numInds, rec: finalRec, conf, sl, target, targets, pot, risk, strength, vwap, entry, reversal, avgVol: volObj?.avgVol || 0, volRatio: volObj?.ratio || 1, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj, regime: stockRegime, confluence };
+      tech = { rsi, ema, macd, bb, atr, adx, sr, pats, rsiDiv, a50, a200, volOk, nearS, numInds, rec: finalRec, conf, sl, target, targets, pot, risk, strength, vwap, entry, reversal, avgVol: volObj?.avgVol || 0, volRatio: volObj?.ratio || 1, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj, mlSegment: mlRank.mlSegment, regime: stockRegime, volRegimeShift, confluence };
     }
   } catch (e) {
     lg('Daily candles: ' + e.message, 'w');
@@ -233,6 +246,35 @@ export async function lookupInstrument(ctx, callbacks) {
     }
   } catch (e) { lg('Intraday fetch: ' + e.message, 'w'); }
 
+  // ── Multi-timeframe agreement ── previously tf30/tf5 were fetched and
+  // shown in the "Multi-Timeframe Analysis" card but never fed back into the
+  // decision — daily set conf/rec entirely on its own, 30-min/5-min were
+  // pure display. A daily BUY with both lower timeframes actively rolling
+  // over is a structurally weaker setup than one where all three agree, and
+  // that distinction was invisible in the single conf number. Only runs when
+  // daily bias is constructive to begin with (nothing to agree/conflict with
+  // on an already-AVOID/WATCH call).
+  if (tech && (tf30.trend || tf5.trend != null)) {
+    const dailyBullish = tech.rec === 'STRONG BUY' || tech.rec === 'BUY' || tech.rec === 'MODERATE';
+    if (dailyBullish) {
+      const votes = [tf30.trend === 'UP', tf5.emaBull ?? (tf5.trend === 'UP' ? true : tf5.trend === 'DOWN' ? false : null)]
+        .filter((v) => v !== null && v !== undefined);
+      if (votes.length) {
+        const agreeCount = votes.filter((v) => v === true).length;
+        const conflictCount = votes.length - agreeCount;
+        const tfAdj = conflictCount === 0 ? 3 : conflictCount === votes.length ? -12 : -5;
+        tech.conf = Math.min(99, Math.max(1, Math.round(tech.conf + tfAdj)));
+        tech.timeframeConflict = conflictCount >= 1;
+        tech.timeframeAgreement = +(agreeCount / votes.length).toFixed(2);
+        // Recompute rec from the adjusted conf — a daily BUY that both lower
+        // timeframes contradict can now actually drop out of BUY territory,
+        // instead of the conflict being silently absorbed into a number with
+        // no visible effect on the call itself.
+        tech.rec = getRec(tech.conf, tech.pot?.base ?? 0, tech.risk ?? 50, tech.pot?.rr ?? 0);
+      }
+    }
+  }
+
   setProgress('Checking option contracts...');
   let foData = { unsupported: true, picks: [] };
   try {
@@ -241,73 +283,23 @@ export async function lookupInstrument(ctx, callbacks) {
     if (expiries.length) {
       const lotFromApi = contracts.find((c) => c.lot_size)?.lot_size || contracts[0]?.lot_size || inst.lot || 1;
       inst = { ...inst, fo: true, lot: lotFromApi };
-      const expiry = expiries[0];
-      const nextExp = expiries[1] || '';
       setProgress('Loading options chain...');
-      await sleep(400);
-      const chain = await fetchOptions(inst.key, expiry, token, onTokenExpired);
-
-      if (!chain.length) {
-        foData = { empty: true, expiry, picks: [] };
+      // The very same per-stock scan the F&O Options page runs (optionScan.scanStockOptions):
+      // NIFTY market bias, real VIX, daily-or-5-min context, every expiry this month, the learned
+      // delta/IV gates, and the shared confluence + confidence gate. Previously this page ran its
+      // own copy with the stock's own day-change as bias, VIX=0 and the first expiry only, so the
+      // same stock showed different (or no) options on each page.
+      const r = await scanStockOptions({
+        inst, spot: ltp, spotChg: chgPct, expiries,
+        deps: { accessToken: token, cfg: effectiveOptionCfg(cfg, mlModels), fiiInterp, adaptWeights, mlModels, confCalibration, onTokenExpired, lg, vixHistorySeries },
+        env: { niftyBull, vixVal: vixVal > 0 ? vixVal : 15, ctxMap: {}, prevPCRCache: _lookupPcrCache, prevAvgIVCache: _lookupIvCache },
+      });
+      if (!r.ok) {
+        foData = r.reason === 'empty-chain' ? { empty: true, expiry: r.expiry, picks: [] } : { error: 'No option expiries returned', picks: [] };
       } else {
-        const maxPain = calcMaxPain(chain);
+        const { chain, expiry, atm, maxPain, pcr } = r;
         const oiWalls = calcOIWalls(chain);
-        const ceOI = chain.reduce((sum, x) => sum + (x.call_options?.market_data?.oi || 0), 0);
-        const peOI = chain.reduce((sum, x) => sum + (x.put_options?.market_data?.oi || 0), 0);
-        const pcr = ceOI > 0 ? +(peOI / ceOI).toFixed(2) : 1.0;
-        const step = inst.step || (ltp < 200 ? 5 : ltp < 500 ? 10 : ltp < 2000 ? 20 : ltp < 5000 ? 50 : 100);
-        const atm = Math.round(ltp / step) * step;
-        const ctxForChain = marketCtx || computeCtxFromCandles([], ltp, chgPct, 0, null);
-        const optRegime = classifyMarketRegime(Math.abs(ctxForChain?.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
-        const picks = scanChain(chain, atm, ltp, s, expiry, inst.lot, chgPct > 0, 0, maxPain, pcr, ctxForChain, cfg);
-        const filteredPicks = picks
-          .map((p) => {
-            const actionDir = p.type === 'CE' ? 1 : -1;
-            const confluenceModules = {
-              trend: Math.sign((p.emaTrendBull===true?1:p.emaTrendBull===false?-1:0) + (p.emaCross==='bullish_cross'?1:p.emaCross==='bearish_cross'?-1:0)),
-              momentum: p.momentumFresh ? Math.sign(p.compositeScore || 0) : 0,
-              volume: (p.volRatio >= 1.5) ? Math.sign(p.compositeScore || 0) : 0,
-              priceAction: (p.priceZone==='PDH_BREAK'||p.priceZone==='NEAR_PDH') ? 1 : (p.priceZone==='PDL_BREAK'||p.priceZone==='NEAR_PDL') ? -1 : 0,
-              institutional: p.oiBuildType==='CE_BUILD' ? 1 : p.oiBuildType==='PE_BUILD' ? -1 : 0,
-              marketContext: p.stockPCR != null ? (p.stockPCR > 1.2 ? 1 : p.stockPCR < 0.8 ? -1 : 0) : 0,
-            };
-            const confluence = computeConfluence(confluenceModules, actionDir);
-            const isBuyLean = p.action === 'BUY';
-            // fiiInterp comes from ctx (already interpreted upstream in LookupPane) —
-            // do NOT re-derive it here, this file never receives raw fiiData.
-            // FII-bias and confluence-tier are boolean flags fed into
-            // applyAdaptWeights (learned), not fixed-formula adjustments —
-            // same pattern as the stock lookup path above.
-            const _indSnap = {
-              trendAligned: p.trendAligned||false, emaBull: p.emaTrendBull===true, emaBearish: p.emaTrendBull===false,
-              freshCross: p.emaCross==='bullish_cross'||p.emaCross==='bearish_cross', momentumFresh: p.momentumFresh||false,
-              volSpike: (p.volRatio??0)>=1.5, lowVol: (p.volRatio??1)<0.7, nearPDH: p.priceZone==='PDH_BREAK'||p.priceZone==='NEAR_PDH',
-              nearPDL: p.priceZone==='PDL_BREAK'||p.priceZone==='NEAR_PDL', oiBuildUp: p.oiBuildType==='CE_BUILD'||p.oiBuildType==='PE_BUILD',
-              compositeHigh: Math.abs(p.compositeScore??0)>=2, compositeMed: Math.abs(p.compositeScore??0)>=1, atm: p.atm||false,
-              vixVeryLow: (p.vix??0)>0 && (p.vix??0)<14, vixHighFear: (p.vix??0)>20,
-              confluenceStrong: confluence.total>0 && confluence.ratio>=0.65 && confluence.agree>=4,
-              confluenceWeak: confluence.total>0 && confluence.ratio<0.5,
-              confluenceConflict: confluence.conflicting>=2,
-              fiiAligned: !!(fiiInterp && ((fiiInterp.bias>0)===isBuyLean) && fiiInterp.bias!==0),
-              fiiAgainst: !!(fiiInterp && ((fiiInterp.bias>0)!==isBuyLean) && fiiInterp.bias!==0),
-            };
-            let c = p.confidence;
-            c = applyCalibration(c, confCalibration || null);
-            c = applyRegimeAdjustment(c, optRegime, cfg);
-            c = applyAdaptWeights(c, adaptWeights?.option || null, _indSnap);
-            const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, _indSnap });
-            return { ...p, regime: optRegime, confluence, confidence: mlRank.confidence, mlProbability: mlRank.mlProbability, mlAdj: mlRank.mlAdj };
-          })
-          .filter((p) => {
-            if (p.confidence < cfg.minOptConf) return false;
-            // Same cap optionScan.js already applies — this path (option
-            // chain lookup for a single symbol) was missing it entirely,
-            // so picks above Settings' Max Capital were never filtered out.
-            const capLimit = mlModels?.thresholds?.option?.maxCapital || cfg.maxOptCapital;
-            if (!capLimit || capLimit <= 0) return true;
-            return p.amtRequired <= capLimit;
-          });
-
+        const nextExp = expiries.find((e) => e > expiry) || '';
         let multiExpiry = null;
         if (nextExp) {
           try {
@@ -315,18 +307,14 @@ export async function lookupInstrument(ctx, callbacks) {
             const nextChain = await fetchOptions(inst.key, nextExp, token, onTokenExpired);
             if (nextChain.length) {
               const findATM = (ch, side) => {
-                const row = ch.find((r) => r.strike_price === atm) || ch.reduce((a, b) => Math.abs(b.strike_price - atm) < Math.abs(a.strike_price - atm) ? b : a, ch[0]);
+                const row = ch.find((r2) => r2.strike_price === atm) || ch.reduce((a2, b2) => Math.abs(b2.strike_price - atm) < Math.abs(a2.strike_price - atm) ? b2 : a2, ch[0]);
                 const opt = side === 'CE' ? row?.call_options : row?.put_options;
                 return { ltp: opt?.market_data?.ltp || 0, iv: opt?.option_greeks?.iv || 0, delta: opt?.option_greeks?.delta || 0, theta: opt?.option_greeks?.theta || 0 };
               };
               const dteCur = Math.max(0, Math.round((new Date(expiry) - new Date()) / 86400000));
               const dteNxt = Math.max(0, Math.round((new Date(nextExp) - new Date()) / 86400000));
               multiExpiry = {
-                expiry,
-                nextExp,
-                dteCur,
-                dteNxt,
-                atm,
+                expiry, nextExp, dteCur, dteNxt, atm,
                 ce: { cur: findATM(chain, 'CE'), nxt: findATM(nextChain, 'CE') },
                 pe: { cur: findATM(chain, 'PE'), nxt: findATM(nextChain, 'PE') },
               };
@@ -335,8 +323,7 @@ export async function lookupInstrument(ctx, callbacks) {
             lg('Multi-expiry: ' + e.message, 'w');
           }
         }
-
-        foData = { chain, picks: filteredPicks, maxPain, oiWalls, pcr, expiry, nextExp, atm, multiExpiry };
+        foData = { chain, picks: r.picks, maxPain, oiWalls, pcr, expiry, nextExp, atm, multiExpiry };
       }
     }
   } catch (e) {

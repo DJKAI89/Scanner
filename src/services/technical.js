@@ -420,6 +420,24 @@ export function computeVixPercentile(series, value) {
   return Math.round((below / series.length) * 100);
 }
 
+// How far today's VIX sits from its own recent (5-session) average, as a
+// 0-1 score. Signals generated right after a volatility regime shift are
+// structurally the least reliable — indicators, SL/target sizing, and the
+// confidence formula are all still calibrated to the OLD regime — but that
+// was previously invisible to the model, which only saw a snapshot `regime`
+// label with no sense of how fresh it is. Reuses vixHistorySeries (already
+// tracked for computeVixPercentile) rather than adding new persisted state.
+export function vixRegimeShiftScore(series, vix) {
+  if (!Array.isArray(series) || series.length < 5 || vix == null) return 0;
+  const recent = series.slice(-5);
+  const avg = recent.reduce((a, b) => a + b, 0) / recent.length;
+  if (avg <= 0) return 0;
+  const pctMove = Math.abs(vix - avg) / avg;
+  // >40% deviation from the 5-session average is a sharp, recent shift; scale
+  // linearly up to that and clamp.
+  return Math.max(0, Math.min(1, pctMove / 0.4));
+}
+
 export function classifyMarketRegime(normTrendStrength, vix, vixPercentile = null) {
   const ts = Math.max(0, Math.min(1, normTrendStrength || 0));
   // When enough rolling VIX history exists, classify off where today's VIX
@@ -469,6 +487,59 @@ export function computeConfluence(modules, actionDir) {
     if (Math.sign(v) === dir) agree++; else conflicting++;
   }
   return { agree, conflicting, total, ratio: total > 0 ? agree / total : 0 };
+}
+
+// ── Shared option confluence + indicator snapshot ─────────────────────────
+// optionScan.js and lookupService.js each hand-wrote their own copy of this,
+// and the two had drifted: lookupService.js compared priceZone/oiBuildType
+// against strings scanChain never emits ('PDH_BREAK', 'NEAR_PDH', 'CE_BUILD',
+// 'PE_BUILD'), so nearPDH/nearPDL/oiBuildUp were always false and the
+// priceAction/institutional confluence modules always voted 0 on the Analyse
+// Stock page. One implementation, used by both.
+//
+// Every confluence module votes in UNDERLYING direction (+1 = underlying up)
+// and is compared to actionDir (CE = +1, PE = -1). scanChain's oiBuildType is
+// already normalised to "favourable for THIS option" (LONG_BUILD on a PE means
+// bearish underlying + rising OI), so it must be flipped back to underlying
+// direction for PE — previously it wasn't, so for every PE a favourable OI
+// build counted as a conflict and an unfavourable one as agreement.
+export function buildOptionConfluence(p) {
+  const actionDir = p.type === 'CE' ? 1 : -1;
+  const oiVote = p.oiBuildType === 'LONG_BUILD' ? 1 : p.oiBuildType === 'SHORT_BUILD' ? -1 : 0;
+  const modules = {
+    trend: Math.sign((p.emaTrendBull === true ? 1 : p.emaTrendBull === false ? -1 : 0) + (p.emaCross === 'bullish_cross' ? 1 : p.emaCross === 'bearish_cross' ? -1 : 0)),
+    momentum: p.momentumFresh ? Math.sign(p.compositeScore || 0) : 0,
+    volume: (p.volRatio >= 1.5) ? Math.sign(p.compositeScore || 0) : 0,
+    priceAction: (p.priceZone === 'abovePDH' || p.priceZone === 'nearPDH') ? 1 : (p.priceZone === 'belowPDL' || p.priceZone === 'nearPDL') ? -1 : 0,
+    institutional: oiVote * actionDir,
+    marketContext: p.stockPCR != null ? (p.stockPCR > 1.2 ? 1 : p.stockPCR < 0.8 ? -1 : 0) : 0,
+  };
+  return computeConfluence(modules, actionDir);
+}
+
+export function buildOptionIndSnap(p, confluence, fiiInterp, isBuyLean) {
+  return {
+    trendAligned: p.trendAligned || false,
+    emaBull: p.emaTrendBull === true,
+    emaBearish: p.emaTrendBull === false,
+    freshCross: p.emaCross === 'bullish_cross' || p.emaCross === 'bearish_cross',
+    momentumFresh: p.momentumFresh || false,
+    volSpike: (p.volRatio ?? 0) >= 1.5,
+    lowVol: (p.volRatio ?? 1) < 0.7,
+    nearPDH: p.priceZone === 'abovePDH' || p.priceZone === 'nearPDH',
+    nearPDL: p.priceZone === 'belowPDL' || p.priceZone === 'nearPDL',
+    oiBuildUp: p.oiBuildType === 'LONG_BUILD' || p.oiBuildType === 'SHORT_COVER',
+    compositeHigh: Math.abs(p.compositeScore ?? 0) >= 2,
+    compositeMed: Math.abs(p.compositeScore ?? 0) >= 1,
+    atm: p.atm || false,
+    vixVeryLow: (p.vix ?? 0) > 0 && (p.vix ?? 0) < 14,
+    vixHighFear: (p.vix ?? 0) > 20,
+    confluenceStrong: !!confluence && confluence.total > 0 && confluence.ratio >= 0.65 && confluence.agree >= 4,
+    confluenceWeak: !!confluence && confluence.total > 0 && confluence.ratio < 0.5,
+    confluenceConflict: !!confluence && confluence.conflicting >= 2,
+    fiiAligned: !!(fiiInterp && ((fiiInterp.bias > 0) === isBuyLean) && fiiInterp.bias !== 0),
+    fiiAgainst: !!(fiiInterp && ((fiiInterp.bias > 0) !== isBuyLean) && fiiInterp.bias !== 0),
+  };
 }
 
 export function applyConfluenceAdjustment(conf, confluence, cfg = {}) {
@@ -769,14 +840,25 @@ export function calcRisk(ltp, sl, target, atr, vix) {
 }
 
 // ── calcPotential — EXACT port from HTML ─────────────────────
-export function calcPotential(ltp, target, sl, numInds, rec) {
+// learnedWR: optional { [rec]: winRatePct } computed from actual closed-signal
+// outcomes (mlRanking.calibrateExpectedWR), only populated once a rec bucket
+// has enough samples to trust. Falls back to the static guess table below
+// when absent — previously that guess table was used unconditionally, so the
+// "expected win rate" the ranker relied on had no connection to reality.
+export function calcPotential(ltp, target, sl, numInds, rec, learnedWR = null) {
   const base = ltp > 0 ? (target - ltp) / ltp * 100 : 0;
   const rr   = Math.min(3.0, ltp > sl && sl > 0 ? (target - ltp) / (ltp - sl) : 1);
-  let wr = rec === 'STRONG BUY' ? 68 : rec === 'BUY' ? 62 : rec === 'MODERATE' ? 57 : rec === 'WATCH' ? 52 : 45;
-  if      (numInds >= 5) wr += 8;
-  else if (numInds >= 4) wr += 5;
-  else if (numInds >= 3) wr += 2;
-  else if (numInds <= 1) wr -= 6;
+  let wr;
+  const learned = learnedWR?.[rec];
+  if (Number.isFinite(learned)) {
+    wr = learned;
+  } else {
+    wr = rec === 'STRONG BUY' ? 68 : rec === 'BUY' ? 62 : rec === 'MODERATE' ? 57 : rec === 'WATCH' ? 52 : 45;
+    if      (numInds >= 5) wr += 8;
+    else if (numInds >= 4) wr += 5;
+    else if (numInds >= 3) wr += 2;
+    else if (numInds <= 1) wr -= 6;
+  }
   wr = Math.min(75, Math.max(35, wr));
   const adj    = base * (wr / 100) * rr;
   const slDist = ltp > 0 && sl > 0 ? Math.abs((ltp - sl) / ltp * 100) : base / 2;
@@ -1256,7 +1338,28 @@ export function getSignalStrength(numInds, conf, reversal) {
 // ── computeCtxFromCandles — EXACT port from HTML ─────────────
 // Builds composite market direction from 5-min intraday candles
 // Used for EVERY index individually and for stock option scanning
-export function computeCtxFromCandles(candles, spot, chgPct, vix, pdhl = null) {
+// Upstox returns candles NEWEST-first (the rest of the codebase reverses them
+// everywhere it needs chronological order — see stockScan.js / lookupService.js),
+// but computeCtxFromCandles below is written for OLDEST-first: "last two
+// candles" is slice(-2), "latest volume" is volumes[n-1], and its EMAs are seeded
+// from the front. Every caller passed the raw API array, so a clean uptrend was
+// read as a downtrend (and vice versa) — the trend/momentum/composite values that
+// choose CE vs PE and set trendAligned for every option signal were computed on
+// reversed data. Order is decided from the candles' own timestamps rather than
+// assumed, so correctly ordered input is untouched.
+export function candleOrder(candles) {
+  if (!Array.isArray(candles) || candles.length < 2) return 'unknown';
+  const first = Date.parse(candles[0]?.[0]);
+  const last  = Date.parse(candles[candles.length - 1]?.[0]);
+  if (!Number.isFinite(first) || !Number.isFinite(last) || first === last) return 'unknown';
+  return first > last ? 'newest-first' : 'oldest-first';
+}
+export function toChronological(candles) {
+  return candleOrder(candles) === 'newest-first' ? [...candles].reverse() : (candles || []);
+}
+
+export function computeCtxFromCandles(candlesIn, spot, chgPct, vix, pdhl = null) {
+  const candles = toChronological(candlesIn);
   const _ema = (closes, period) => {
     if (closes.length < period) return null;
     const k = 2 / (period + 1);
@@ -1647,6 +1750,7 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
         confidence, atm: sp === atm, spot, expiry, und: name,
         lot, amtRequired, amtIsMargin: action === 'SELL', maxLoss, maxProfit,
         trendAligned, trendDir: momentumDir, compositeScore, slTgtMethod,
+        _dte: _optAdj.dte,
         stockPCR: stockPCR || null, vix: vix || 15, priceZone,
         pdh: pdh || null, pdl: pdl || null,
         zoneAdj, dirFlipPenalty, oiBuildType, oiBuildBonus, ivEnv,
