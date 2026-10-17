@@ -164,6 +164,54 @@ function ConfHeatmap({ bands }) {
   );
 }
 
+// ── Generic win-rate band bars (liquidity / regime-shift / model attribution) ──
+function MetricBars({ items, labelKey = 'band', showAvgNet = false, labelWidth = 96 }) {
+  const max = Math.max(...items.map(b => b.t), 1);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {items.map((b, i) => {
+        const c = clr(b.r || 0);
+        return (
+          <div key={b[labelKey] || i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', minWidth: labelWidth }}>{b[labelKey]}</div>
+            <SparkBar value={b.t} max={max} color={c} height={18} />
+            <div style={{ minWidth: showAvgNet ? 96 : 58, textAlign: 'right' }}>
+              <span style={{ fontSize: 10, fontWeight: 800, color: c }}>{pct(b.r)}</span>
+              <span style={{ fontSize: 8, color: '#94a3b8', marginLeft: 4 }}>·{b.t}</span>
+              {showAvgNet && b.avgNet != null && (
+                <span style={{ fontSize: 9, fontWeight: 700, color: b.avgNet >= 0 ? '#10b981' : '#ef4444', marginLeft: 6 }}>
+                  {b.avgNet >= 0 ? '+' : ''}{b.avgNet}%
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── R-multiple histogram ────────────────────────────────────────
+function RHistogram({ buckets }) {
+  const max = Math.max(...buckets.map(b => b.t), 1);
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 90, padding: '4px 2px' }}>
+      {buckets.map(b => {
+        const h = Math.max(3, (b.t / max) * 74);
+        const isLoss = b.label.startsWith('<') || b.label.startsWith('-1');
+        const color = isLoss ? '#ef4444' : b.label.startsWith('0') ? '#f59e0b' : '#10b981';
+        return (
+          <div key={b.label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+            <div style={{ fontSize: 9, fontWeight: 800, color: '#0f172a' }}>{b.t}</div>
+            <div style={{ width: '100%', height: h, borderRadius: 4, background: `linear-gradient(180deg,${color},${color}99)` }} />
+            <div style={{ fontSize: 7, color: '#94a3b8', fontWeight: 700, textAlign: 'center' }}>{b.label}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Underlying leaderboard ────────────────────────────────────
 function Leaderboard({ items }) {
   const best = items[0]?.r || 1;
@@ -705,6 +753,58 @@ export default function AnalysisPane() {
             <Section title="AI Backtest" accent="#0ea5e9">
               <MlBacktestCards backtest={d.mlBacktest} />
             </Section>
+
+            {/* Cost-adjusted net P&L */}
+            {d.netAdjusted && (
+              <Section title="Real Net P&L (after est. costs)" accent="#059669">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
+                  <StatTile label="Raw Avg" value={`${d.netAdjusted.avgRawPct >= 0 ? '+' : ''}${d.netAdjusted.avgRawPct}%`} color="#6366f1" />
+                  <StatTile label="Net Avg" value={`${d.netAdjusted.avgNetPct >= 0 ? '+' : ''}${d.netAdjusted.avgNetPct}%`} color={d.netAdjusted.avgNetPct >= 0 ? '#10b981' : '#ef4444'} />
+                  <StatTile label="Cost Drag" value={`-${d.netAdjusted.costDragPct}%`} sub={`n=${d.netAdjusted.t}`} color="#f59e0b" />
+                </div>
+                <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
+                  Net avg uses liquidity-scaled cost estimate (thinner OI on options = wider assumed spread)
+                </div>
+              </Section>
+            )}
+
+            {/* Liquidity impact */}
+            {d.liquidityBands.length >= 2 && (
+              <Section title="Liquidity Impact (Options, by OI)" accent="#0891b2">
+                <MetricBars items={d.liquidityBands} labelKey="band" showAvgNet />
+              </Section>
+            )}
+
+            {/* Volatility regime-shift impact */}
+            {d.regimeShiftBands.length >= 2 && (
+              <Section title="Volatility Regime-Shift Impact" accent="#d97706">
+                <MetricBars items={d.regimeShiftBands} labelKey="band" labelWidth={130} />
+                <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
+                  Sharp shift = signal fired right after a VIX move away from its 5-day norm
+                </div>
+              </Section>
+            )}
+
+            {/* Which model served each signal */}
+            {d.modelAttribution.length >= 2 && (
+              <Section title="Which Model Served You" accent="#7c3aed">
+                <MetricBars items={d.modelAttribution} labelKey="label" labelWidth={110} />
+                <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
+                  "global" vs a named segment model — fills in as new signals log the field
+                </div>
+              </Section>
+            )}
+
+            {/* Planned vs realized R-multiple */}
+            {d.rrRealized && (
+              <Section title="Planned vs Realized R-Multiple" accent="#be123c">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8, marginBottom: 10 }}>
+                  <StatTile label="Avg Planned RR" value={d.rrRealized.avgPlannedRR ?? '—'} color="#6366f1" />
+                  <StatTile label="Avg Realized R" value={d.rrRealized.avgRealizedR} color={d.rrRealized.avgRealizedR >= 0 ? '#10b981' : '#ef4444'} sub={`n=${d.rrRealized.t}`} />
+                </div>
+                <RHistogram buckets={d.rrRealized.histogram} />
+              </Section>
+            )}
 
             <Section title="AI Feature Drivers" accent="#7c3aed">
               <MlFeatureBoard mlModels={mlModels} />
