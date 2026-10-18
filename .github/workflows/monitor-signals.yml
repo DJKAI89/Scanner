@@ -1,13 +1,27 @@
 name: Monitor Signals
 
 on:
+  # GitHub's own scheduler is best-effort: runs for a short interval like */15 are
+  # routinely delayed or skipped (often leaving only a couple per day). Kept only as
+  # a fallback. The reliable cadence comes from an external scheduler calling the
+  # workflow_dispatch API every 15 minutes — see the setup notes.
   schedule:
-    - cron: '*/15 3-10 * * 1-5'  # loose fallback only — see README, use external trigger for real cadence
+    - cron: '*/15 3-10 * * 1-5'
   workflow_dispatch: {}
+
+# Only one monitor run at a time. If an external trigger fires while a run is still
+# going, the new one waits instead of two runs resolving the same signals at once.
+concurrency:
+  group: monitor-signals
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
+    timeout-minutes: 5   # a normal run takes well under a minute; never let a stuck run pile up
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
