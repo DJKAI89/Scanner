@@ -4,6 +4,7 @@ import { getSignalStrength } from '../services/technical';
 import {
   AccentCard, CardHeader, VerdictRow, LevelsStrip, StatusTag,
   MetricGrid, MetricMini, ProgressStat, TargetTiers, SignalTags, Banner, FooterNote,
+  contextTags,
 } from './cardKit';
 import { ConfidenceBreakdown } from './ConfidenceBreakdown';
 
@@ -69,6 +70,7 @@ export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
   else if (p.intraVolRatio >= 1.5) tags.push({ label: `📊 Vol ${p.intraVolRatio}× 5m`, tone: 'blue' });
   if (typeof p.intraBull === 'boolean') tags.push({ label: p.intraBull ? '⚡ 5m EMA↑' : '⚡ 5m EMA↓', tone: p.intraBull ? 'green' : 'red' });
   if (p.intraAccel) tags.push({ label: '🚀 Accelerating', tone: 'amber' });
+  tags.push(...contextTags(p)); // regime · confluence · AI win-probability (shared with the Options card)
 
   return (
     <AccentCard dir={dir}>

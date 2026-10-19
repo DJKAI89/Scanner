@@ -263,3 +263,30 @@ export function FooterNote({ children }) {
     </div>
   );
 }
+
+// ── Regime / confluence / AI-probability tags ───────────────────────────────
+// The Stocks, Breakout and Options cards each carried (or lacked) their own copy of this, so a
+// stock pick showed none of it while an option pick showed all of it. One builder, used by all.
+// mlProbability is the model's calibrated win-probability for this pick; null/absent before any
+// model exists, in which case no chip is shown rather than a made-up one.
+export function contextTags(p) {
+  const tags = [];
+  const regimeMap = {
+    CHOPPY_HIGH_VOL: { txt: '🌊 CHOPPY + HIGH VIX', tone: 'red' },
+    CHOPPY:          { txt: '🌊 CHOPPY', tone: 'amber' },
+    TRENDING_CALM:   { txt: '📈 CALM TREND', tone: 'green' },
+    TRENDING:        { txt: '📈 TRENDING', tone: 'green' },
+  };
+  if (p?.regime && regimeMap[p.regime]) tags.push({ label: regimeMap[p.regime].txt, tone: regimeMap[p.regime].tone });
+  if (p?.confluence?.total > 0) {
+    const cf = p.confluence;
+    if (cf.conflicting >= 2) tags.push({ label: `🧩 CONFLICTING (${cf.agree}✓ ${cf.conflicting}✗)`, tone: 'red' });
+    else if (cf.ratio >= 0.8 && cf.agree >= 5) tags.push({ label: `🧩 FULL CONFLUENCE ${cf.agree}/${cf.total}`, tone: 'green' });
+    else if (cf.ratio >= 0.65 && cf.agree >= 4) tags.push({ label: `🧩 STRONG CONFLUENCE ${cf.agree}/${cf.total}`, tone: 'green' });
+    else if (cf.ratio < 0.5) tags.push({ label: `🧩 WEAK (${cf.agree}/${cf.total})`, tone: 'amber' });
+  }
+  if (typeof p?.mlProbability === 'number') {
+    tags.push({ label: `🤖 AI win-prob ${p.mlProbability}%`, tone: p.mlProbability >= 60 ? 'green' : p.mlProbability >= 50 ? 'amber' : 'red' });
+  }
+  return tags;
+}
