@@ -8,6 +8,7 @@ import { useMarketFeed } from '../hooks/useMarketFeed';
 import { loadOptionMeta, loadChainForExpiry, mergeLiveIntoRows, selectStrikesAroundATM, summarizeChain } from '../services/optionAnalysisService';
 import { effectiveOptionCfg } from '../services/optionScan';
 import { SnapshotCard, ChainSection, expiryLabel } from '../components/OptionChainParts';
+import ScanProgress from '../components/ScanProgress';
 
 const INDEX_FILTERS = [
   { id: 'NIFTY',     key: 'NSE_INDEX|Nifty 50',  step: 50,  lot: 75, color: '#7c3aed' },
@@ -153,7 +154,9 @@ export default function OptionAnalysisPane() {
       {error && <ErrorBanner title="⚠ Option Analysis Error" message={error} onRetry={load} />}
 
       {loading ? (
-        <Spinner label={`Loading ${filter} option chain...`} progress={progress} sub="OI walls · Max Pain · PCR · Straddle · IV skew" />
+        <ScanProgress title={`Loading ${filter} option chain`} message={progress} accent={idx.color}
+          phases={[{ label: 'Spot & VIX', re: /spot|vix/i }, { label: 'Expiries', re: /expiries/i }, { label: 'Context', re: /intraday/i }, { label: 'Chain', re: /chain/i }]}
+          weights={[0.15, 0.15, 0.30, 0.40]} hint="OI walls · Max Pain · PCR · Straddle · IV skew" />
       ) : !meta ? (
         <EmptyState>Pull to scan or tap ▶ to load the {filter} chain</EmptyState>
       ) : (

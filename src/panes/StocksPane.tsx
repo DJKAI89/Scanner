@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
+import ScanProgress from '../components/ScanProgress';
 import StockCard from '../components/StockCard.jsx';
 import { fmt, interpVIX } from '../utils/formatters';
 import LiveChart from '../components/LiveChart';
-import { AccentCard, CardHeader, LevelsStrip, ProgressStat, SignalTags, WhyBox } from '../components/cardKit';
+import { AccentCard, CardHeader, LevelsStrip, ProgressStat, SignalTags, WhyBox, contextTags } from '../components/cardKit';
 import { getIST } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed.js';
 import { runPicksScan, runBreakoutScan, fetchClosedMarketIndexPrices } from '../services/stockScan';
@@ -421,13 +422,7 @@ function BoCard({ r, rank, onPopup }) {
 
   const tags = [];
   const tag = (label, tone) => tags.push({ label, tone });
-  const regimeMap = {
-    CHOPPY_HIGH_VOL: { txt: '🌊 CHOPPY + HIGH VIX', tone: 'red' },
-    CHOPPY:          { txt: '🌊 CHOPPY', tone: 'amber' },
-    TRENDING_CALM:   { txt: '📈 CALM TREND', tone: 'green' },
-    TRENDING:        { txt: '📈 TRENDING', tone: 'green' },
-  };
-  if (r.regime && regimeMap[r.regime]) tag(regimeMap[r.regime].txt, regimeMap[r.regime].tone);
+  tags.push(...contextTags(r)); // regime · confluence · AI win-probability (shared builder in cardKit)
   if (_bull>0&&_bear>0) tag('⚡ MIXED SIGNALS','amber');
   if (r.ema) {
     if (r.ema.goldenCross)       tag('⭐ GOLDEN CROSS','amber');
@@ -704,7 +699,9 @@ export default function StocksPane() {
         <div>
           {!marketStatus.open&&<MarketClosedBanner msg={marketStatus.msg||'🔔 NSE Market Closed'}/>}
           {picksError&&<ErrorBanner title="⚠ Scan Error" message={picksError} onRetry={runPicks}/>}
-          {picksLoading&&<div style={{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:8,padding:'10px 14px',marginBottom:10}}><div style={{fontSize:11,fontWeight:700,color:'#1d4ed8',marginBottom:4}}>⏳ Scanning... {pickProgress}</div><div style={{height:3,background:'#e2e8f0',borderRadius:3}}><div style={{height:'100%',background:'#3b82f6',borderRadius:3,width:'60%',animation:'pulse 1.5s ease-in-out infinite'}}/></div></div>}
+          {picksLoading && <ScanProgress title="Scanning stocks" message={pickProgress} accent="#3b82f6" accentDark="#1d4ed8"
+            steps={['Market', 'PCR', 'Quotes', 'Candles', 'Scoring']} weights={[0.05, 0.10, 0.20, 0.50, 0.15]}
+            hint="EMA · RSI · MACD · ADX · VWAP · Delivery · Confluence · ML rank" />}
           {!picksLoading||picks.length>0?(
             <div>
               {/* 4 stat cards — live via WebSocket. NIFTY 50 / BANK NIFTY cards
@@ -766,7 +763,9 @@ export default function StocksPane() {
       {mode==='breakout'&&(
         <div>
           {boError&&<ErrorBanner title="⚠ Breakout Error" message={boError} onRetry={runBreakout}/>}
-          {boLoading?<Spinner label="Breakout Scanner..." progress={boProgress} sub="EMA 50/200 · PDH/PDL · Supertrend · Vol · 52Wk · Gap · NR7 · BB · RS · Wick"/>:(
+          {boLoading?<ScanProgress title="Breakout scanner" message={boProgress} accent="#7c3aed" accentDark="#5b21b6"
+            phases={[{ label: 'Quotes', re: /quotes|websocket/i }, { label: 'Candles', re: /candles/i }, { label: 'Signals', re: /computing|signals/i }]}
+            weights={[0.2, 0.6, 0.2]} hint="EMA 50/200 · PDH/PDL · Supertrend · Vol · 52Wk · Gap · NR7 · BB · RS · Wick" />:(
             <div>
               {/* Nifty/BankNifty cards removed — global Ticker header covers
                   those (plus Sensex) on every page now. VIX kept, not duplicated there. */}

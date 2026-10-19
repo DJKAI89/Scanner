@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, StatCard, EmptyState } from '../components/common.jsx';
+import ScanProgress from '../components/ScanProgress';
 import LiveChart from '../components/LiveChart';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import { lookupInstrument } from '../services/lookupService';
@@ -194,6 +195,11 @@ function OptionSuggestionCard({ pick, cfg, showTools = true }) {
             🧩 {pick.confluence.agree}/{pick.confluence.total} modules agree
           </Tag>
         )}
+        {typeof pick.mlProbability === 'number' && (
+          <Tag tone={pick.mlProbability >= 60 ? 'green' : pick.mlProbability >= 50 ? 'amber' : 'red'}>
+            🤖 AI win-prob {pick.mlProbability}%
+          </Tag>
+        )}
       </div>
 
       <LevelsStrip
@@ -353,7 +359,9 @@ export default function LookupPane() {
       </div>
 
       {error && <ErrorBanner title="Lookup Error" message={error} onRetry={() => lookup()} />}
-      {loading && <Spinner label={'Analysing ' + sym + '...'} progress={progress} sub="Quote · Candles · Intraday · Indicators · Options chain" />}
+      {loading && <ScanProgress title={'Analysing ' + sym} message={progress} accent="#16a34a" accentDark="#15803d"
+          phases={[{ label: 'Quote', re: /searching/i }, { label: 'Daily', re: /90-day/i }, { label: '30-min', re: /30-min/i }, { label: 'Intraday', re: /intraday/i }, { label: 'Options', re: /option/i }]}
+          weights={[0.08, 0.20, 0.12, 0.12, 0.48]} hint="Quote · Candles · Intraday · Indicators · Options chain" />}
 
       {r && !loading && (
         <div>

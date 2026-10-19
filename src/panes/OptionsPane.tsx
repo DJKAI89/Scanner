@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
+import ScanProgress from '../components/ScanProgress';
 import { resolveAccessToken } from '../services/api';
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST, getISTDate } from '../utils/marketTime';
 import { isWeeklyExpiryDay } from '../constants/config';
 import { useMarketFeed } from '../hooks/useMarketFeed';
-import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote, Banner } from '../components/cardKit';
+import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote, Banner, contextTags } from '../components/cardKit';
 import Icon from '../components/Icon.jsx';
 import { ConfidenceBreakdown } from '../components/ConfidenceBreakdown';
 import { runOptionsScan, getOptionKey, withLiveOI, calcStructure, VIX_KEY } from '../services/optionScan';
@@ -68,20 +69,7 @@ function OptionCard({ pick, cfg: cardCfg }) {
   if (dte != null && dte <= 3) {
     tags.push({ label: dte <= 0 ? '⏰ EXPIRES TODAY' : dte === 1 ? '⏰ 1 DTE' : `⏰ ${dte} DTE`, tone: dte <= 1 ? 'red' : 'amber' });
   }
-  const regimeMap = {
-    CHOPPY_HIGH_VOL: { txt: '🌊 CHOPPY + HIGH VIX', tone: 'red' },
-    CHOPPY:          { txt: '🌊 CHOPPY', tone: 'amber' },
-    TRENDING_CALM:   { txt: '📈 CALM TREND', tone: 'green' },
-    TRENDING:        { txt: '📈 TRENDING', tone: 'green' },
-  };
-  if (pick.regime && regimeMap[pick.regime]) tags.push({ label: regimeMap[pick.regime].txt, tone: regimeMap[pick.regime].tone });
-  if (pick.confluence?.total > 0) {
-    const cf = pick.confluence;
-    if (cf.conflicting >= 2) tags.push({ label: `🧩 CONFLICTING (${cf.agree}✓ ${cf.conflicting}✗)`, tone: 'red' });
-    else if (cf.ratio >= 0.8 && cf.agree >= 5) tags.push({ label: `🧩 FULL CONFLUENCE ${cf.agree}/${cf.total}`, tone: 'green' });
-    else if (cf.ratio >= 0.65 && cf.agree >= 4) tags.push({ label: `🧩 STRONG CONFLUENCE ${cf.agree}/${cf.total}`, tone: 'green' });
-    else if (cf.ratio < 0.5) tags.push({ label: `🧩 WEAK (${cf.agree}/${cf.total})`, tone: 'amber' });
-  }
+  tags.push(...contextTags(pick)); // regime · confluence · AI win-probability (shared builder in cardKit)
   if (!pick.trendAligned) tags.push({ label: `⚠ AGAINST TREND (${pick.trendDir})`, tone: 'amber' });
   if (pick.atm) tags.push({ label: 'ATM', tone: 'blue' });
   if (pick.emaCross==='bullish_cross'&&pick.type==='CE') tags.push({ label: `📶 EMA CROSS ↑ ${(pick.emaCrossCandles||0)<=1?'FRESH':pick.emaCrossCandles+'c ago'}`, tone:'green' });
@@ -369,8 +357,15 @@ export default function OptionsPane() {
       {!marketStatus.open && <MarketClosedBanner msg={marketStatus.msg || '🔔 NSE Market Closed'} />}
       {error && <ErrorBanner title="⚠ Options Error" message={error} onRetry={() => loadOptions(true)} />}
       {loading ? (
-        <Spinner label="Scanning F&O options..." progress={progress}
-          sub="5-min intraday · EMA 9/21 · Composite Score · PCR trend · IV trend · Max Pain · OI Walls · Smart SL/Target" />
+        <ScanProgress title="Scanning F&O options" message={progress} accent="#f59e0b" accentDark="#b45309"
+          steps={{ 3: ['Market', 'Indices', 'Signals'], 4: ['Market', 'Indices', 'F&O stocks', 'Signals'] }}
+          weights={{ 3: [0.15, 0.55, 0.30], 4: [0.10, 0.30, 0.50, 0.10] }}
+          subRules={[
+            { re: /expiry \d+\/\d+/i, ignore: true },               // step 2: expiry counter is not index progress
+            { re: /Ranking F&O universe/i, from: 0, to: 0.12 },      // step 3, first slice: ranking batches
+            { re: /options \(\d+\/\d+\)/i, from: 0.12, to: 1 },     // step 3, rest: scanning each stock
+          ]}
+          hint="5-min intraday · EMA 9/21 · Composite Score · PCR trend · IV trend · Max Pain · OI Walls · Smart SL/Target" />
       ) : (
         <div>
           {updTime && <LastUpdated time={updTime} />}
