@@ -4,7 +4,7 @@ import { getSignalStrength } from '../services/technical';
 import {
   AccentCard, CardHeader, VerdictRow, LevelsStrip, StatusTag,
   MetricGrid, MetricMini, ProgressStat, TargetTiers, SignalTags, Banner, FooterNote,
-  contextTags,
+  contextTags, KpiStrip, riskFlags,
 } from './cardKit';
 import { ConfidenceBreakdown } from './ConfidenceBreakdown';
 
@@ -70,7 +70,7 @@ export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
   else if (p.intraVolRatio >= 1.5) tags.push({ label: `📊 Vol ${p.intraVolRatio}× 5m`, tone: 'blue' });
   if (typeof p.intraBull === 'boolean') tags.push({ label: p.intraBull ? '⚡ 5m EMA↑' : '⚡ 5m EMA↓', tone: p.intraBull ? 'green' : 'red' });
   if (p.intraAccel) tags.push({ label: '🚀 Accelerating', tone: 'amber' });
-  tags.push(...contextTags(p)); // regime · confluence · AI win-probability (shared with the Options card)
+  tags.push(...riskFlags(p), ...contextTags(p)); // caution notes first, then regime · confluence · AI win-probability
 
   return (
     <AccentCard dir={dir}>
@@ -90,12 +90,13 @@ export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
         onPopup={onPopup}
       />
 
-      <VerdictRow items={[
-        { label: `${str.label} SIGNAL`, color: str.color },
-        { label: `${p.numInds||0}/7 indicators` },
-        { label: `R:R ${p.pot?.rr||0}:1` },
-        { label: `Win ~${p.pot?.wr||0}%` },
-        { label: `Conf ${p.conf||0}%`, color: (p.conf||0)>=minConf ? '#16a34a' : (p.conf||0)>=(minConf-10) ? '#d97706' : '#dc2626' },
+      <KpiStrip items={[
+        { label: 'CONF', value: `${p.conf || 0}%`, color: (p.conf || 0) >= minConf ? '#16a34a' : (p.conf || 0) >= minConf - 15 ? '#d97706' : '#dc2626', sub: `min ${minConf}%` },
+        typeof p.mlProbability === 'number'
+          ? { label: 'AI WIN', value: `${p.mlProbability}%`, color: p.mlProbability >= 60 ? '#16a34a' : p.mlProbability >= 50 ? '#d97706' : '#dc2626', sub: 'model' }
+          : { label: 'EST. WIN', value: `~${p.pot?.wr || 0}%`, sub: 'rule-based' },
+        { label: 'R:R', value: `${p.pot?.rr || 0}:1`, color: (p.pot?.rr || 0) >= 2 ? '#16a34a' : (p.pot?.rr || 0) >= 1.5 ? '#d97706' : '#dc2626' },
+        { label: 'SIGNAL', value: str.label, color: str.color, sub: `${p.numInds || 0}/7 indicators` },
       ]} />
 
       {p.reversal && p.reversal.type !== 'NONE' && (
