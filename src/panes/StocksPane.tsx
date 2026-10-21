@@ -3,9 +3,9 @@ import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
 import ScanProgress from '../components/ScanProgress';
 import StockCard from '../components/StockCard.jsx';
-import { fmt, interpVIX } from '../utils/formatters';
+import { fmt, interpVIX, fmtVol } from '../utils/formatters';
 import LiveChart from '../components/LiveChart';
-import { AccentCard, CardHeader, LevelsStrip, ProgressStat, SignalTags, WhyBox, contextTags } from '../components/cardKit';
+import { AccentCard, CardHeader, LevelsStrip, ProgressStat, SignalTags, WhyBox, contextTags, KpiStrip, riskFlags } from '../components/cardKit';
 import { getIST } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed.js';
 import { runPicksScan, runBreakoutScan, fetchClosedMarketIndexPrices } from '../services/stockScan';
@@ -422,7 +422,7 @@ function BoCard({ r, rank, onPopup }) {
 
   const tags = [];
   const tag = (label, tone) => tags.push({ label, tone });
-  tags.push(...contextTags(r)); // regime · confluence · AI win-probability (shared builder in cardKit)
+  tags.push(...riskFlags(r), ...contextTags(r)); // caution notes first, then regime · confluence · AI win-probability
   if (_bull>0&&_bear>0) tag('⚡ MIXED SIGNALS','amber');
   if (r.ema) {
     if (r.ema.goldenCross)       tag('⭐ GOLDEN CROSS','amber');
@@ -493,7 +493,7 @@ function BoCard({ r, rank, onPopup }) {
   else if (r.pdhl?.nearPDL)      why.push(`Near PDL ₹${fmtV(r.pdhl.pdl)} — watch for breakdown`);
   if (r.st?.crossed) why.push(`Supertrend(7,3) flipped ${r.st.trend==='UP'?'bullish':'bearish'} at ₹${fmtV(r.st.value)} — momentum shift`);
   else if (r.st)     why.push(`Supertrend(7,3) ${r.st.trend==='UP'?'bullish':'bearish'} at ₹${fmtV(r.st.value)} (${r.st.dist>0?'+':''}${r.st.dist||0}% from line)`);
-  if (r.vol?.strong)         why.push(`🔥 Volume surge ${r.vol.ratio}× avg (${((r.vol.todayVol||0)/1e5).toFixed(1)}L today vs ${((r.vol.avgVol||0)/1e5).toFixed(1)}L avg) — institutional activity`);
+  if (r.vol?.strong)         why.push(`🔥 Volume surge ${r.vol.ratio}× avg (${fmtVol(r.vol.todayVol||0)} today vs ${fmtVol(r.vol.avgVol||0)} avg) — institutional activity`);
   else if (r.vol?.confirmed) why.push(`Volume ${r.vol.ratio}× 20-day avg — breakout has conviction`);
   else if (r.vol?.dry)       why.push(`⚠ Low volume (${r.vol.ratio}× avg) — treat with caution`);
   if (r.wk52?.breakHigh)    why.push(`🏆 Breaking 52-week high ₹${fmtV(r.wk52.hi52)} — strong institutional signal`);
@@ -534,6 +534,13 @@ function BoCard({ r, rank, onPopup }) {
         onPopup={onPopup}
       />
 
+      <KpiStrip items={[
+        { label: 'SCORE', value: `${r.score || 0}/10`, color: scoreColor, sub: isBull ? 'bullish' : 'bearish' },
+        { label: 'CONF', value: `${r.conf || 0}%`, color: (r.conf || 0) >= 65 ? '#16a34a' : (r.conf || 0) >= 50 ? '#d97706' : '#dc2626' },
+        typeof r.mlProbability === 'number' ? { label: 'AI WIN', value: `${r.mlProbability}%`, color: r.mlProbability >= 60 ? '#16a34a' : r.mlProbability >= 50 ? '#d97706' : '#dc2626', sub: 'model' } : null,
+        { label: 'R:R', value: `${t.rr || 0}:1`, color: (t.rr || 0) >= 2 ? '#16a34a' : (t.rr || 0) >= 1.5 ? '#d97706' : '#dc2626' },
+      ]} />
+
       <SignalTags tags={tags} />
 
       <LevelsStrip
@@ -545,9 +552,7 @@ function BoCard({ r, rank, onPopup }) {
         entrySub={t.method || null}
       />
 
-      <ProgressStat label="Strength" pct={Math.min(100,(r.score||0)*10)} color={scoreColor} valueLabel={`${r.score||0}/10`} />
-
-      <WhyBox lines={why} />
+      <WhyBox title="WHY THIS SIGNAL" lines={why} collapsible />
     </AccentCard>
   );
 }
@@ -779,8 +784,8 @@ export default function StocksPane() {
               </div>
               {boStats&&<div className="stats-g">
                 <StatCard label="TOTAL SIGNALS" value={boStats.total} sub={`from ${boCards.length} stocks`} valClass="bl"/>
-                <StatCard label="BULLISH 📈" value={boStats.bullCount} sub={`${boStats.goldCross||0}GC · ${boStats.pdhBreak||0}PDH · ${boStats.wk52Hi||0}52wkH`} valClass="up"/>
-                <StatCard label="BEARISH 📉" value={boStats.bearCount} sub={`${boStats.deathCross||0}DC · ${boStats.pdlBreak||0}PDL`} valClass="dn"/>
+                <StatCard label="BULLISH 📈" value={boStats.bullCount} sub={`GC ${boStats.goldCross||0} · PDH ${boStats.pdhBreak||0} · 52wk-H ${boStats.wk52Hi||0}`} valClass="up"/>
+                <StatCard label="BEARISH 📉" value={boStats.bearCount} sub={`DC ${boStats.deathCross||0} · PDL ${boStats.pdlBreak||0}`} valClass="dn"/>
                 <StatCard label="VOL SURGE 🔥" value={boStats.volSurge||0} sub={`${boStats.stCrossed||0} ST crossed`} valClass="am"/>
               </div>}
               <div className="bo-filter-row" style={{marginBottom:12}}>
