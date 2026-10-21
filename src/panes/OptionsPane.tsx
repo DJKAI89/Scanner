@@ -7,7 +7,7 @@ import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST, getISTDate } from '../utils/marketTime';
 import { isWeeklyExpiryDay } from '../constants/config';
 import { useMarketFeed } from '../hooks/useMarketFeed';
-import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote, Banner, contextTags } from '../components/cardKit';
+import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote, Banner, contextTags, KpiStrip } from '../components/cardKit';
 import Icon from '../components/Icon.jsx';
 import { ConfidenceBreakdown } from '../components/ConfidenceBreakdown';
 import { runOptionsScan, getOptionKey, withLiveOI, calcStructure, VIX_KEY } from '../services/optionScan';
@@ -110,12 +110,14 @@ function OptionCard({ pick, cfg: cardCfg }) {
         chgPct={null}
         rec={pick.action}
         dir={dir}
-        rightExtra={
-          <div style={{ fontSize: 10, fontWeight: 700, color: pick.confidence>=minConf?'#16a34a':pick.confidence>=minConf-15?'#d97706':'#dc2626', marginTop: 2 }}>
-            {pick.confidence}% conf
-          </div>
-        }
       />
+
+      <KpiStrip items={[
+        { label: 'CONF', value: `${pick.confidence}%`, color: pick.confidence >= minConf ? '#16a34a' : pick.confidence >= minConf - 15 ? '#d97706' : '#dc2626', sub: `min ${minConf}%` },
+        typeof pick.mlProbability === 'number' ? { label: 'AI WIN', value: `${pick.mlProbability}%`, color: pick.mlProbability >= 60 ? '#16a34a' : pick.mlProbability >= 50 ? '#d97706' : '#dc2626', sub: 'model' } : null,
+        { label: 'R:R', value: `${pick.rr || 0}:1`, color: (pick.rr || 0) >= 2 ? '#16a34a' : (pick.rr || 0) >= 1.5 ? '#d97706' : '#dc2626' },
+        { label: 'EXPIRY', value: dte == null ? '—' : dte === 0 ? 'TODAY' : `${dte}d`, color: dte != null && dte <= 1 ? '#dc2626' : dte != null && dte <= 3 ? '#d97706' : '#0f172a', sub: pick.expiry },
+      ]} />
 
       {/* Capital required */}
       <div style={{background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:9,padding:'8px 10px',marginBottom:9,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
