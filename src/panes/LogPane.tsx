@@ -6,7 +6,8 @@ import {
   getSignalFeedKey, loadSignalLog,
   resolveSignalsAgainstLivePrices, persistResolvedSignals, checkAllOutcomes as checkAllOutcomesService,
 } from '../services/logService';
-import { fmt } from '../utils/formatters';
+import { fmt, fmtWhen, fmtRs0 } from '../utils/formatters';
+import { groupCorrelated } from '../utils/signalGroups';
 import { getIST, getISTDate } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed.js';
 import Icon from '../components/Icon.jsx';
@@ -25,7 +26,7 @@ const EXIT_REASON_LABELS = {
   EXPIRY:     { icon:null,        text:'⌛ Expired' },
 };
 
-function SignalRow({ sig, livePrice }) {
+function SignalRow({ sig, livePrice, marketOpen = true }) {
   const sc = STATUS_COLORS[sig.status] || STATUS_COLORS.OPEN;
   const isBuy  = isBullSignal(sig); // uses shared isBullSignal (handles BUY/SELL/CALL/PUT)
   const isOpt  = sig.type === 'OPTION';
@@ -69,6 +70,10 @@ function SignalRow({ sig, livePrice }) {
     return () => clearTimeout(t);
   }, [ltp]);
 
+  // What the position bets on, independent of BUY/SELL: a bought PUT (or sold CALL) is a bearish view.
+  const isLong   = !/sell/i.test(String(sig.signal || sig.action || 'BUY'));
+  const bullView = (sig.optType === 'CE') === isLong;
+  const live     = !!marketOpen;
   const typeIcon = isOpt
     ? (sig.optType === 'CE' ? 'trendUp' : 'trendDown')
     : 'target';
@@ -84,10 +89,16 @@ function SignalRow({ sig, livePrice }) {
               {sig.strike} {sig.optType} {sig.expiry}
             </span>
           )}
-          {ltp && sig.status==='OPEN' && (
-            <span className="badge-live" style={{ marginLeft:6 }}>
-              ₹{fmt(ltp)}
+          {isOpt && (
+            <span style={{ fontSize:9, fontWeight:800, marginLeft:6, padding:'1px 6px', borderRadius:4,
+              background: bullView ? '#dcfce7' : '#fee2e2', color: bullView ? '#15803d' : '#b91c1c' }}>
+              {bullView ? '▲' : '▼'} {sig.optType === 'CE' ? 'CALL' : 'PUT'} · {bullView ? 'bullish' : 'bearish'} view
             </span>
+          )}
+          {ltp && sig.status==='OPEN' && (
+            live
+              ? <span className="badge-live" style={{ marginLeft:6 }}>₹{fmt(ltp)}</span>
+              : <span style={{ marginLeft:6, fontSize:10, fontWeight:700, color:'#64748b' }}>₹{fmt(ltp)} <span style={{ fontSize:8, fontWeight:600, color:'#94a3b8' }}>last</span></span>
           )}
         </div>
         <div style={{ display:'flex', gap:5, flexWrap:'wrap' }}>
@@ -101,22 +112,21 @@ function SignalRow({ sig, livePrice }) {
       </div>
 
       {/* Metrics */}
-      <div style={{ display:'grid', gridTemplateColumns: isOpt && sig.capitalReq ? 'repeat(5,1fr)' : 'repeat(4,1fr)', gap:4, marginBottom:8 }}>
+      <div style={{ display:'grid', gridTemplateColumns: isOpt && sig.capitalReq ? 'repeat(4,1fr)' : 'repeat(3,1fr)', gap:4, marginBottom:8 }}>
         {[
           { l:'ENTRY',  v: entry ? `₹${fmt(entry)}` : '—' },
           { l: sig.trailSL != null ? '🔒 TRAIL SL' : 'SL', v: effSL ? `₹${fmt(effSL)}` : '—' },
-          { l: `NEXT (${nextTarget.l})`, v: tgtVal ? `₹${fmt(tgtVal)}` : '—' },
           { l:'CONF',   v: `${sig.confidence||0}%`          },
           // Estimated amount, based on entry price — BUY shows actual premium
           // paid (ltp x lot); SELL shows an approximate margin estimate, NOT
           // the premium received, since writing an option needs margin
           // collateral, not a premium outlay. Labeled distinctly so the two
           // aren't read as the same kind of number.
-          ...(isOpt && sig.capitalReq ? [{ l: sig.capitalIsMargin ? 'EST. MARGIN' : 'EST. AMOUNT', v: `₹${fmt(sig.capitalReq)}` }] : []),
+          ...(isOpt && sig.capitalReq ? [{ l: sig.capitalIsMargin ? 'EST. MARGIN' : 'EST. AMOUNT', v: fmtRs0(sig.capitalReq) }] : []),
         ].map(m => (
           <div key={m.l} style={{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:6, padding:'5px 7px' }}>
-            <div style={{ fontSize:7, color:'#94a3b8', marginBottom:2 }}>{m.l}</div>
-            <div style={{ fontSize:12, fontWeight:700 }}>{m.v}</div>
+            <div style={{ fontSize:8, color:'#94a3b8', marginBottom:2, letterSpacing:.3 }}>{m.l}</div>
+            <div style={{ fontSize:13, fontWeight:800 }}>{m.v}</div>
           </div>
         ))}
       </div>
@@ -130,13 +140,14 @@ function SignalRow({ sig, livePrice }) {
             { l:'T3', v: sig.targetT3 || sig.target },
           ].map(t => {
             const hit = hasHit(t.l);
+            const isNext = sig.status === 'OPEN' && t.l === nextTarget.l;
             return (
               <div key={t.l} style={{
                 flex:1, textAlign:'center', borderRadius:6, padding:'4px 3px',
-                background: hit ? '#f0fdf4' : '#f8fafc',
-                border: `1px solid ${hit ? '#86efac' : '#e2e8f0'}`,
+                background: hit ? '#f0fdf4' : isNext ? '#eff6ff' : '#f8fafc',
+                border: isNext ? '2px solid #3b82f6' : `1px solid ${hit ? '#86efac' : '#e2e8f0'}`,
               }}>
-                <div style={{ fontSize:7, fontWeight:800, color: hit ? '#16a34a' : '#94a3b8' }}>{hit && <Icon name="check" size={8} style={{ marginRight:2 }}/>}{t.l}</div>
+                <div style={{ fontSize:7.5, fontWeight:800, color: hit ? '#16a34a' : isNext ? '#1d4ed8' : '#94a3b8' }}>{hit && <Icon name="check" size={8} style={{ marginRight:2 }}/>}{t.l}{isNext ? ' · NEXT' : ''}</div>
                 <div style={{ fontSize:10.5, fontWeight:700, color: hit ? '#16a34a' : '#334155' }}>{t.v ? `₹${fmt(t.v)}` : '—'}</div>
               </div>
             );
@@ -165,11 +176,11 @@ function SignalRow({ sig, livePrice }) {
 
       {/* Live P&L + progress bar (OPEN signals with live price) */}
       {sig.status==='OPEN' && ltp != null && (
-        <div style={{ background:pnlPct!=null&&pnlPct>=0?'#f0fdf4':'#fef2f2', border:`1px solid ${pnlPct!=null&&pnlPct>=0?'#bbf7d0':'#fecaca'}`, borderRadius:8, padding:'9px 11px', marginBottom:8 }}>
+        <div style={{ background:(!live&&(pnlPct==null||pnlPct===0))?'#f8fafc':pnlPct!=null&&pnlPct>=0?'#f0fdf4':'#fef2f2', border:`1px solid ${(!live&&(pnlPct==null||pnlPct===0))?'#e2e8f0':pnlPct!=null&&pnlPct>=0?'#bbf7d0':'#fecaca'}`, borderRadius:8, padding:'9px 11px', marginBottom:8 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
             <div>
-              <div style={{ fontSize:9, fontWeight:700, letterSpacing:.4, color:'#94a3b8' }}>LIVE P&L</div>
-              <div style={{ fontSize:16, fontWeight:800, letterSpacing:-.3, color:pnlPct!=null&&pnlPct>=0?'#16a34a':'#dc2626' }}>
+              <div style={{ fontSize:9, fontWeight:700, letterSpacing:.4, color:'#94a3b8' }}>{live ? 'LIVE P&L' : 'P&L AT LAST PRICE'}</div>
+              <div style={{ fontSize:16, fontWeight:800, letterSpacing:-.3, color:(!live&&(pnlPct==null||pnlPct===0))?'#64748b':pnlPct!=null&&pnlPct>=0?'#16a34a':'#dc2626' }}>
                 {pnlPct!=null ? (pnlPct>=0?'+':'')+pnlPct.toFixed(2)+'%' : '—'}
               </div>
             </div>
@@ -182,13 +193,13 @@ function SignalRow({ sig, livePrice }) {
               </div>
             )}
             <div style={{ textAlign:'right' }}>
-              <div style={{ fontSize:9, fontWeight:700, letterSpacing:.4, color:'#94a3b8' }}>LIVE PRICE</div>
+              <div style={{ fontSize:9, fontWeight:700, letterSpacing:.4, color:'#94a3b8' }}>{live ? 'LIVE PRICE' : 'LAST PRICE'}</div>
               <div style={{ fontSize:13, fontWeight:700 }}>₹{fmt(ltp)}</div>
             </div>
           </div>
 
           {/* Progress bar: entry → target */}
-          {toPct!=null && (
+          {toPct!=null && (live || toPct!==0) && (
             <div>
               <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'#94a3b8', marginBottom:4, fontWeight:700}}>
                 <span>Entry ₹{fmt(entry)}</span>
@@ -209,7 +220,7 @@ function SignalRow({ sig, livePrice }) {
 
       {/* Footer */}
       <div style={{ fontSize:9, color:'#94a3b8', display:'flex', gap:10, flexWrap:'wrap' }}>
-        <span>📅 {sig.date} {(sig.time||'').slice(0,5)}</span>
+        <span>📅 {fmtWhen(sig.date, sig.time)}</span>
         {sig.rr     && <span><Icon name="scale" size={10} style={{ marginRight:2 }}/>R:R {sig.rr}</span>}
         {isOpt && sig.lot && <span><Icon name="box" size={10} style={{ marginRight:2 }}/>{sig.lot} qty</span>}
         {sig.strength && <span>💪 {sig.strength}</span>}
@@ -227,6 +238,63 @@ function SignalRow({ sig, livePrice }) {
 }
 
 // ── Compute day stats for index update ────────────────────────
+// Several option signals on the same underlying, side, expiry and day are really ONE market view
+// taken several times (e.g. two UNIONBANK puts logged in the same scan). Grouping shows the combined
+// exposure at a glance — the thing that actually matters for risk — and keeps a long list scannable.
+function SignalGroup({ members, lastPrices, marketOpen }) {
+  const [open, setOpen] = useState(false);
+  const first = members[0];
+  const name = first.stock || first.name || first.und || first.symbol || '';
+  const isLong = !/sell/i.test(String(first.signal || first.action || 'BUY'));
+  const bullView = (first.optType === 'CE') === isLong;
+  const color = bullView ? '#16a34a' : '#dc2626';
+  const total = members.reduce((a, m) => a + (m.capitalReq || 0), 0);
+  const avgConf = Math.round(members.reduce((a, m) => a + (m.confidence || 0), 0) / members.length);
+  const cnt = (st) => members.filter((m) => m.status === st).length;
+  const pnls = members.map((m) => {
+    if (m.status === 'OPEN') { const lp = lastPrices[getSignalFeedKey(m)]?.ltp; return lp && m.entry ? ((lp - m.entry) / m.entry) * 100 : null; }
+    return m.pnlPct ?? null;
+  }).filter((v) => v != null);
+  const avgPnl = pnls.length ? pnls.reduce((a, b) => a + b, 0) / pnls.length : null;
+  const strikes = members.map((m) => m.strike).filter(Boolean).join(' · ');
+  const chip = (txt, bg, fg) => <span style={{ fontSize: 10, fontWeight: 800, padding: '3px 8px', borderRadius: 6, background: bg, color: fg }}>{txt}</span>;
+  return (
+    <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderLeft: `4px solid ${color}`, borderRadius: 12, marginBottom: 10, boxShadow: 'var(--shadow-raised)' }}>
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer', padding: '11px 12px 6px', fontFamily: 'inherit' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+            <span style={{ fontSize: 15, fontWeight: 900, color: '#0f172a' }}>{name}</span>
+            <span style={{ fontSize: 9, fontWeight: 800, padding: '1px 6px', borderRadius: 4, background: bullView ? '#dcfce7' : '#fee2e2', color: bullView ? '#15803d' : '#b91c1c' }}>
+              {bullView ? '▲' : '▼'} {first.optType === 'CE' ? 'CALL' : 'PUT'} · {bullView ? 'bullish' : 'bearish'} view
+            </span>
+          </div>
+          <span style={{ fontSize: 10, fontWeight: 800, color: '#1d4ed8', whiteSpace: 'nowrap' }}>{members.length} signals {open ? '▾' : '▸'}</span>
+        </div>
+        <div style={{ fontSize: 10, color: '#64748b', fontWeight: 600, marginTop: 3 }}>Strikes {strikes} · Exp {first.expiry}</div>
+      </button>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, padding: '2px 12px 8px' }}>
+        {chip(`Exposure ${fmtRs0(total)}`, '#f1f5f9', '#0f172a')}
+        {chip(`Avg conf ${avgConf}%`, '#f5f3ff', '#6d28d9')}
+        {cnt('OPEN') > 0 && chip(`${cnt('OPEN')} open`, '#fffbeb', '#b45309')}
+        {cnt('TARGET_HIT') > 0 && chip(`${cnt('TARGET_HIT')} target hit`, '#f0fdf4', '#15803d')}
+        {cnt('SL_HIT') > 0 && chip(`${cnt('SL_HIT')} SL hit`, '#fef2f2', '#b91c1c')}
+        {avgPnl != null && !(avgPnl === 0 && !marketOpen) && chip(`Avg P&L ${avgPnl >= 0 ? '+' : ''}${avgPnl.toFixed(2)}%`, avgPnl >= 0 ? '#f0fdf4' : '#fef2f2', avgPnl >= 0 ? '#15803d' : '#b91c1c')}
+      </div>
+      <div style={{ margin: '0 12px 10px', fontSize: 9.5, fontWeight: 700, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '4px 8px' }}>
+        ⚠ {members.length} correlated signals — effectively one market view with {members.length}× the exposure
+      </div>
+      {open && (
+        <div style={{ padding: '0 8px 4px' }}>
+          {members.map((m, i) => (
+            <SignalRow key={m.id || i} sig={m} marketOpen={marketOpen}
+              livePrice={m.status === 'OPEN' ? (lastPrices[getSignalFeedKey(m)]?.ltp ?? null) : null} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function LogPane() {
   const { gh, token, cfg, onTokenExpired, updateBadge, lg, marketStatus, openSignalCount, runSignalMonitor } = useApp();
 
@@ -324,6 +392,29 @@ export default function LogPane() {
   const stocksOpen  = openSignals.filter(s=>s.type==='STOCK').length;
   const optionsOpen = openSignals.filter(s=>s.type==='OPTION').length;
 
+  // ── one honest monitoring banner (replaces two near-identical "live" banners that kept saying
+  //    "live" after the close and disagreed on the count: one counted this view, the other all open) ──
+  const marketOpen = !!marketStatus.open;
+  const totalOpen = Math.max(openSignalCount || 0, openSignals.length);
+  const plural = (n, w) => `${n} ${w}${n !== 1 ? 's' : ''}`;
+  const scopeNote = totalOpen > openSignals.length ? ` ${openSignals.length} in this view · ${totalOpen} open in total.` : '';
+  let bannerTone, bannerText;
+  if (!openSignals.length) { bannerTone = 'info'; bannerText = `${plural(totalOpen, 'open signal')} outside this date range ${marketOpen ? 'are being tracked' : 'will be tracked once the market opens'} — widen the date filter to see them.`; }
+  else if (!marketOpen)    { bannerTone = 'closed'; bannerText = `🌙 Market closed — ${plural(openSignals.length, 'open signal')} paused; tracking resumes at 9:15 AM IST.${scopeNote}`; }
+  else if (wsConnected)    { bannerTone = 'live'; bannerText = `⚡ Live — tracking ${plural(stocksOpen, 'stock')} + ${plural(optionsOpen, 'option')}; SL & Target resolve instantly (also re-checked every 60s).${scopeNote}`; }
+  else                     { bannerTone = 'wait'; bannerText = `Connecting live feed for ${plural(openKeys.length, 'open signal')}…${scopeNote}`; }
+  const BANNER = {
+    live:   { bg: '#f0fdf4', bd: '#86efac', fg: '#15803d', dot: '#16a34a' },
+    closed: { bg: '#f8fafc', bd: '#e2e8f0', fg: '#475569', dot: '#94a3b8' },
+    wait:   { bg: '#f8fafc', bd: '#e2e8f0', fg: '#64748b', dot: '#94a3b8' },
+    info:   { bg: '#eff6ff', bd: '#bfdbfe', fg: '#1d4ed8', dot: '#3b82f6' },
+  }[bannerTone];
+  const nStock = filtered.filter((x) => x.type === 'STOCK').length;
+  const nOpt = filtered.length - nStock;
+
+  // Group correlated option signals; stocks and lone option signals stay single (utils/signalGroups.js)
+  const rows = groupCorrelated(filtered);
+
   return (
     <div>
       {!gh.token && (
@@ -333,17 +424,13 @@ export default function LogPane() {
       )}
       {error && <ErrorBanner title="⚠ Log Error" message={error} onRetry={load} />}
 
-      {/* WebSocket status — shows stocks AND options monitoring */}
-      {openKeys.length > 0 && (
-        <div style={{ background:wsConnected?'#f0fdf4':'#f8fafc', border:`1px solid ${wsConnected?'#86efac':'#e2e8f0'}`, borderRadius:8, padding:'7px 12px', marginBottom:10, display:'flex', alignItems:'center', gap:8, fontSize:10, flexWrap:'wrap' }}>
-          <div style={{ width:7, height:7, borderRadius:'50%', background:wsConnected?'#16a34a':'#94a3b8', flexShrink:0 }} />
-          <span style={{ fontWeight:600, color:wsConnected?'#15803d':'#64748b' }}>
-            {wsConnected
-              ? `⚡ Live monitoring ${stocksOpen} stock${stocksOpen!==1?'s':''} + ${optionsOpen} option${optionsOpen!==1?'s':''} — SL & Target resolve instantly`
-              : `WebSocket connecting for ${openKeys.length} open signal${openKeys.length!==1?'s':''}...`}
-          </span>
+      {/* Monitoring status — one banner, honest about market state and scope */}
+      {(openKeys.length > 0 || totalOpen > 0) && (
+        <div style={{ background: BANNER.bg, border: `1px solid ${BANNER.bd}`, borderRadius: 8, padding: '8px 12px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8, fontSize: 10.5 }}>
+          <div style={{ width: 7, height: 7, borderRadius: '50%', background: BANNER.dot, flexShrink: 0 }} />
+          <span style={{ fontWeight: 600, color: BANNER.fg, lineHeight: 1.45 }}>{bannerText}</span>
           {wsResolved > 0 && (
-            <span style={{ marginLeft:'auto', background:'#dcfce7', color:'#15803d', fontSize:9, fontWeight:800, padding:'2px 7px', borderRadius:10 }}>
+            <span style={{ marginLeft: 'auto', background: '#dcfce7', color: '#15803d', fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 10, whiteSpace: 'nowrap' }}>
               ⚡ {wsResolved} resolved this session
             </span>
           )}
@@ -371,39 +458,33 @@ export default function LogPane() {
         <button className="btn btn-g" onClick={load} disabled={loading} style={{ padding:'7px 14px', fontSize:11 }}>
           {loading?'⏳':'🔄 Refresh'}
         </button>
-        <button className="btn btn-g" onClick={() => runSignalMonitor()} disabled={checking} title="Check all OPEN signals against live prices now" style={{ padding:'7px 14px', fontSize:11, background:'#f0fdf4', border:'1px solid #86efac', color:'#166534' }}>
+        <button className="btn btn-g" onClick={() => runSignalMonitor()} disabled={checking} title="Check every open signal (all dates, not just this view) against current prices now" style={{ padding:'7px 14px', fontSize:11, background:'#f0fdf4', border:'1px solid #86efac', color:'#166534' }}>
           {checking ? '⏳ Checking…' : `✅ Check Now${openSignalCount > 0 ? ' (' + openSignalCount + ')' : ''}`}
         </button>
       </div>
 
       {loading ? <Spinner label="Loading signal log..." sub="Reading from GitHub..." /> : (
         <div>
-          {openSignalCount > 0 && (
-            <div style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 11px', background:'#f0fdf4', border:'1px solid #bbf7d0', borderRadius:8, marginBottom:10, fontSize:10 }}>
-              <div style={{ width:7, height:7, borderRadius:'50%', background:'#16a34a', flexShrink:0 }} />
-              <span style={{ color:'#15803d', fontWeight:700 }}>
-                🔍 Monitoring {openSignalCount} open signal{openSignalCount !== 1 ? 's' : ''} live — auto-checking every 60s
-              </span>
-            </div>
-          )}
           {stats && (
             <div className="stats-g" style={{ marginBottom:12 }}>
-              <StatCard label="TOTAL"    value={stats.total}   valClass="bl" />
-              <StatCard label="OPEN ⚡"  value={stats.open}    valClass="am" />
+              <StatCard label="TOTAL"    value={stats.total}   sub={`${nStock} stock${nStock!==1?'s':''} · ${nOpt} option${nOpt!==1?'s':''}`} valClass="bl" />
+              <StatCard label="OPEN ⚡"  value={stats.open}    sub={marketOpen ? 'tracking live' : 'paused · market closed'} valClass="am" />
               <StatCard label="WIN RATE" value={stats.winRate!=null?stats.winRate+'%':'—'} sub={`${stats.hits}W · ${stats.sls}L`} valClass={(stats.winRate||0)>=50?'up':'dn'} />
-              <StatCard label="AVG CONF" value={stats.avgConf+'%'} valClass="pu" />
+              <StatCard label="AVG CONF" value={stats.avgConf+'%'} sub={`across ${stats.total} signals`} valClass="pu" />
             </div>
           )}
 
           {filtered.length===0
             ?<EmptyState>{gh.token?`No signals for selected filters (${days}d)`:'Configure GitHub in ⚙ Settings to start logging'}</EmptyState>
-            :filtered.map((sig,i) => (
-              <SignalRow
-                key={sig.id||i}
-                sig={sig}
-                livePrice={sig.status === 'OPEN' ? (lastPrices[getSignalFeedKey(sig)]?.ltp ?? null) : null}
-              />
-            ))
+            :rows.map((r, i) => r.kind === 'group'
+              ? <SignalGroup key={r.key} members={r.members} lastPrices={lastPrices} marketOpen={marketOpen} />
+              : <SignalRow
+                  key={r.key ?? i}
+                  sig={r.sig}
+                  marketOpen={marketOpen}
+                  livePrice={r.sig.status === 'OPEN' ? (lastPrices[getSignalFeedKey(r.sig)]?.ltp ?? null) : null}
+                />
+            )
           }
         </div>
       )}
