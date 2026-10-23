@@ -39,11 +39,22 @@ const signed = (n, d = 1) => (n >= 0 ? '+' : '') + n.toFixed(d);
 
 // "Favourable" = the build-up direction helps this option's holder (matches the scan's OI_BONUS)
 const BUILD_TAG = {
-  LONG_BUILD:  { t: 'Long build',  c: GREEN, bg: '#f0fdf4' },
-  SHORT_COVER: { t: 'Short cover', c: GREEN, bg: '#f0fdf4' },
-  SHORT_BUILD: { t: 'Short build', c: RED,   bg: '#fef2f2' },
-  LONG_UNWIND: { t: 'Long unwind', c: RED,   bg: '#fef2f2' },
+  LONG_BUILD:  { t: 'Long Build-Up',  c: GREEN, bg: '#f0fdf4', a: '↗' },
+  SHORT_COVER: { t: 'Short Covering', c: GREEN, bg: '#f0fdf4', a: '↗' },
+  SHORT_BUILD: { t: 'Short Build-Up', c: RED,   bg: '#fef2f2', a: '↘' },
+  LONG_UNWIND: { t: 'Long Unwinding', c: RED,   bg: '#fef2f2', a: '↘' },
 };
+
+// Buildup from the option's OWN price change + OI change (price↑OI↑ long build, price↓OI↑ short build,
+// price↑OI↓ short cover, price↓OI↓ long unwind). Small OI moves (<0.5%) are treated as no signal.
+function ownBuildType(priceChgPct, oiChgPct) {
+  if (!priceChgPct || Math.abs(oiChgPct) < 0.5) return null;
+  const up = priceChgPct > 0, oiUp = oiChgPct > 0;
+  if (up && oiUp) return 'LONG_BUILD';
+  if (!up && oiUp) return 'SHORT_BUILD';
+  if (up && !oiUp) return 'SHORT_COVER';
+  return 'LONG_UNWIND';
+}
 
 // ── Expiry pill label: "20 Mar · 3d" ────────────────────────────────────────
 export function expiryLabel(e) {
@@ -182,13 +193,18 @@ function SideCell({ cell, align, maxOi, itm }) {
   const rows = open ? buildConfidenceRows(cell, 'option') : [];
   const oiPct = maxOi > 0 ? Math.min(100, ((cell.oi || 0) / maxOi) * 100) : 0;
   const oiChg = cell.prevOI > 0 ? ((cell.oi - cell.prevOI) / cell.prevOI) * 100 : 0;
-  const tag = BUILD_TAG[cell.oiBuildType];
+  const tag = BUILD_TAG[ownBuildType(cell.ltpChgPct, oiChg) as keyof typeof BUILD_TAG];
   const justify = isLeft ? 'flex-start' : 'flex-end';
   return (
     <div style={{ flex: 1, position: 'relative', padding: '8px 9px', textAlign: align, background: itm ? 'rgba(245,158,11,.07)' : 'transparent', minWidth: 0 }}>
       <div style={{ position: 'absolute', top: 0, bottom: 0, [isLeft ? 'right' : 'left']: 0, width: oiPct + '%',
         background: isLeft ? 'rgba(220,38,38,.10)' : 'rgba(22,163,74,.10)', pointerEvents: 'none' }} />
       <div style={{ position: 'relative' }}>
+        {tag ? (
+          <div style={{ fontSize: 9.5, fontWeight: 800, color: tag.c, background: tag.bg, borderRadius: 5, padding: '2px 6px', marginBottom: 4, display: 'inline-block' }}>{tag.a} {tag.t}</div>
+        ) : (
+          <div style={{ fontSize: 9.5, fontWeight: 700, color: '#94a3b8', marginBottom: 4 }}>No buildup</div>
+        )}
         <div style={{ fontSize: 14, fontWeight: 800, color: ltpColor, display: 'flex', alignItems: 'baseline', gap: 4, justifyContent: justify }}>
           {fmt(cell.ltp)}{cell.isLive && <span style={{ fontSize: 6, color: GREEN }}>⚡</span>}
           <span style={{ fontSize: 9.5, fontWeight: 700 }}>{cell.ltpChgPct >= 0 ? '+' : ''}{cell.ltpChgPct}%</span>
@@ -204,7 +220,6 @@ function SideCell({ cell, align, maxOi, itm }) {
           <button onClick={() => setOpen((v) => !v)} style={{ border: 'none', cursor: 'pointer', background: confBg(cell.confidence), borderRadius: 5, padding: '1.5px 5px' }}>
             <span style={{ fontSize: 9.5, fontWeight: 800, color: confColor(cell.confidence) }}>{cell.confidence}% {open ? '▾' : '▸'}</span>
           </button>
-          {tag && <span style={{ fontSize: 8, fontWeight: 800, color: tag.c, background: tag.bg, borderRadius: 4, padding: '1.5px 4px' }}>{tag.t}</span>}
         </div>
         <div style={{ fontSize: 8.5, color: '#94a3b8', marginTop: 3 }}>{fmtMargin(cell.marginEst)} margin</div>
         {open && rows.length > 0 && (
