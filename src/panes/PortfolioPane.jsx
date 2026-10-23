@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
-import { Spinner, ErrorBanner, StatCard, EmptyState, LastUpdated } from '../components/common.jsx';
+import { Spinner, ErrorBanner, EmptyState } from '../components/common.jsx';
 import { resolveAccessToken } from '../services/api';
 import { fmt, fmtC } from '../utils/formatters';
 import { getIST } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import {
   getInstrumentKey, loadPortfolio, enrichPortfolioRows,
-  computeSectorMap, computeConcentrationWarnings, sortRows, loadPortfolioAiGuidance,
+  sortRows,
 } from '../services/portfolioService';
 
 export default function PortfolioPane() {
@@ -22,7 +22,6 @@ export default function PortfolioPane() {
   const [tab, setTab]             = useState('holdings');
   const [sortCol, setSortCol]     = useState('sym');
   const [sortDir, setSortDir]     = useState('asc');
-  const [aiGuidance, setAiGuidance] = useState(null);
 
   function toggleSort(col) {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -69,15 +68,22 @@ export default function PortfolioPane() {
   const todayPnl   = portfolioRows.reduce((s, i) => s + (i.todayPnl|| 0), 0);
   const totalValue = portfolioRows.reduce((s, i) => s + (i.value   || 0), 0);
 
-  // AI guidance — only refires on raw data reload, not on every WS price tick
-  useEffect(() => {
-    if (!gh?.token || !mlModels || (!positions.length && !holdings.length)) { setAiGuidance(null); return; }
-    loadPortfolioAiGuidance({ gh, mlModels, portfolioRows: [...positions, ...holdings] }).then(setAiGuidance);
-  }, [positions, holdings, gh?.token, gh?.user, gh?.repo, mlModels?.computedAt]); // eslint-disable-line
+  const returnPct = invested > 0 ? (totalPnl / invested) * 100 : 0;
+  const todayPct  = totalValue - todayPnl > 0 ? (todayPnl / (totalValue - todayPnl)) * 100 : 0;
 
-  const sectorMap = useMemo(() => computeSectorMap(enrichedHld.concat(enrichedPos)), [enrichedHld, enrichedPos]);
-
-  const correlationWarnings = useMemo(() => computeConcentrationWarnings(sectorMap, totalValue), [sectorMap, totalValue]);
+  // Allocation: top 5 by value + "Others"
+  const PALETTE = ['#3b82f6', '#8b5cf6', '#06b6d4', '#f59e0b', '#ec4899', '#94a3b8'];
+  const allocation = useMemo(() => {
+    if (!(totalValue > 0)) return [];
+    const rows = [...enrichedHld, ...enrichedPos]
+      .map(i => ({ sym: i.tradingsymbol || i.symbol || '', value: i.value || 0 }))
+      .filter(r => r.value > 0)
+      .sort((x, y) => y.value - x.value);
+    const top = rows.slice(0, 5);
+    const rest = rows.slice(5).reduce((sum, r) => sum + r.value, 0);
+    if (rest > 0) top.push({ sym: 'Others', value: rest });
+    return top.map((r, i) => ({ ...r, pct: r.value / totalValue * 100, color: PALETTE[i] }));
+  }, [enrichedHld, enrichedPos, totalValue]); // eslint-disable-line
 
   const current = tab === 'positions' ? enrichedPos : enrichedHld;
 
@@ -227,61 +233,59 @@ export default function PortfolioPane() {
             </div>
           )}
 
-          {/* Summary stats */}
-          <div className="stats-g" style={{ marginBottom: 12 }}>
-            <StatCard label="INVESTED"  value={`₹${fmt(invested)}`}   valClass="bl" />
-            <StatCard label="VALUE"     value={`₹${fmt(totalValue)}`} valClass="pu" />
-            <StatCard label="TODAY P&L" value={(todayPnl  >= 0 ? '+₹' : '-₹') + fmt(Math.abs(todayPnl))}  valClass={todayPnl  >= 0 ? 'up' : 'dn'} />
-            <StatCard label="TOTAL P&L" value={(totalPnl  >= 0 ? '+₹' : '-₹') + fmt(Math.abs(totalPnl))}  valClass={totalPnl  >= 0 ? 'up' : 'dn'} />
-            <StatCard label="POSITIONS" value={positions.length} valClass="am" />
-            <StatCard label="HOLDINGS"  value={holdings.length}  valClass="pu" />
-          </div>
-
-          {/* Concentration warnings */}
-          {correlationWarnings.length > 0 && (
-            <div style={{ background: '#fef3c7', border: '1px solid #fcd34d', borderRadius: 8, padding: '10px 13px', marginBottom: 10 }}>
-              <div style={{ fontSize: 10, fontWeight: 800, color: '#92400e', marginBottom: 4 }}>⚠ Concentration Risk</div>
-              {correlationWarnings.map((w, i) => <div key={i} style={{ fontSize: 10, color: '#78350f' }}>{w}</div>)}
-            </div>
-          )}
-
-          {/* AI portfolio guidance */}
-          {aiGuidance?.suggestions?.length > 0 && (
-            <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px', marginBottom: 10 }}>
-              <div style={{ fontSize: 11, fontWeight: 800, color: '#0f172a', marginBottom: 8 }}>🤖 AI Guidance — today's candidates vs your exposure (max {aiGuidance.maxConcurrent} concurrent)</div>
-              {aiGuidance.suggestions.map(s => (
-                <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f1f5f9', fontSize: 10 }}>
-                  <div>
-                    <span style={{ fontWeight: 700 }}>{s.symbol}</span>
-                    {s.clusterPenalty > 0 && <span style={{ color: '#d97706', marginLeft: 6 }}>⚠ cluster penalty {s.clusterPenalty}</span>}
-                  </div>
-                  <div style={{ textAlign: 'right', color: '#374151' }}>
-                    risk {s.suggestedRiskPct}% · stop {s.dailyStopPct}%
-                  </div>
+          {/* Hero: value + P&L */}
+          <div style={{
+            background: 'linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%)', borderRadius: 16,
+            padding: '16px 16px 14px', marginBottom: 12, color: '#fff',
+            boxShadow: '0 6px 18px rgba(15,23,42,.25)',
+          }}>
+            <div style={{ fontSize: 10, letterSpacing: 1, opacity: .7, fontWeight: 700 }}>CURRENT VALUE</div>
+            <div style={{ fontSize: 28, fontWeight: 900, letterSpacing: -.5, margin: '2px 0 12px' }}>₹{fmt(totalValue)}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              {[
+                { l: 'TODAY',   v: fmtPnl(todayPnl), p: fmtPct(todayPct),   up: todayPnl >= 0 },
+                { l: 'OVERALL', v: fmtPnl(totalPnl), p: fmtPct(returnPct),  up: totalPnl >= 0 },
+              ].map(x => (
+                <div key={x.l} style={{ background: 'rgba(255,255,255,.1)', borderRadius: 10, padding: '8px 10px' }}>
+                  <div style={{ fontSize: 9, opacity: .7, fontWeight: 700, letterSpacing: .8 }}>{x.l} P&L</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: x.up ? '#4ade80' : '#f87171' }}>{x.v}</div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: x.up ? '#4ade80' : '#f87171' }}>{x.p}</div>
                 </div>
               ))}
             </div>
-          )}
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12, fontSize: 10, opacity: .8 }}>
+              <span>Invested ₹{fmt(invested)}</span>
+              <span>{holdings.length} holdings · {positions.length} positions</span>
+            </div>
+          </div>
 
-          {/* Sector exposure */}
-          {sectorMap.length > 1 && totalValue > 0 && (
-            <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px', marginBottom: 10 }}>
-              <div style={{ fontSize: 11, fontWeight: 800, color: '#0f172a', marginBottom: 10 }}>🏭 Sector Exposure</div>
-              {sectorMap.map(([sec, v]) => {
-                const pct = totalValue > 0 ? (v.value / totalValue * 100) : 0;
-                const col = pct > 40 ? '#dc2626' : pct > 25 ? '#d97706' : '#16a34a';
-                return (
-                  <div key={sec} style={{ marginBottom: 7 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, marginBottom: 2 }}>
-                      <span style={{ color: '#374151', fontWeight: 600 }}>{sec} ({v.count})</span>
-                      <span style={{ fontWeight: 700, color: col }}>{pct.toFixed(0)}% · ₹{fmt(v.value)}</span>
-                    </div>
-                    <div style={{ background: '#f1f5f9', borderRadius: 4, height: 5 }}>
-                      <div style={{ background: col, width: Math.min(100, pct) + '%', height: 5, borderRadius: 4 }} />
-                    </div>
+          {/* Allocation */}
+          {allocation.length > 0 && (
+            <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 14, padding: '12px 14px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 14 }}>
+              <svg width="104" height="104" viewBox="0 0 42 42" style={{ flexShrink: 0, transform: 'rotate(-90deg)' }}>
+                <circle cx="21" cy="21" r="15.9155" fill="none" stroke="#f1f5f9" strokeWidth="5" />
+                {(() => {
+                  let off = 0;
+                  return allocation.map(a => {
+                    const el = (
+                      <circle key={a.sym} cx="21" cy="21" r="15.9155" fill="none" stroke={a.color} strokeWidth="5"
+                        strokeDasharray={`${a.pct} ${100 - a.pct}`} strokeDashoffset={-off} />
+                    );
+                    off += a.pct;
+                    return el;
+                  });
+                })()}
+              </svg>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 11, fontWeight: 800, color: '#0f172a', marginBottom: 6 }}>Allocation</div>
+                {allocation.map(a => (
+                  <div key={a.sym} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, marginBottom: 3 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 2, background: a.color, flexShrink: 0 }} />
+                    <span style={{ flex: 1, color: '#374151', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.sym}</span>
+                    <span style={{ fontWeight: 700, color: '#0f172a' }}>{a.pct.toFixed(0)}%</span>
                   </div>
-                );
-              })}
+                ))}
+              </div>
             </div>
           )}
 
