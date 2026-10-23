@@ -290,3 +290,26 @@ export function contextTags(p) {
   }
   return tags;
 }
+
+// Caution chips shown before context tags. Only fires on fields that exist; returns [] otherwise.
+export function riskFlags(p) {
+  const tags = [];
+  if (typeof p?.rsi === 'number') {
+    if (p.rsi >= 75) tags.push({ label: `⚠ RSI ${p.rsi.toFixed(0)} overbought`, tone: 'amber' });
+    else if (p.rsi <= 25) tags.push({ label: `⚠ RSI ${p.rsi.toFixed(0)} oversold`, tone: 'amber' });
+  }
+  if (typeof p?.pot?.rr === "number" && p.pot.rr > 0 && p.pot.rr < 1.5) {
+    tags.push({ label: `⚠ Low R:R ${p.pot.rr.toFixed(1)}`, tone: 'red' });
+  }
+  return tags;
+}
+
+// ── KpiStrip — row of MetricMini tiles; items: [{label,value,color,sub}] (falsy entries skipped) ──
+export function KpiStrip({ items = [] }) {
+  const list = items.filter(Boolean);
+  return (
+    <MetricGrid cols={list.length || 1}>
+      {list.map((it, i) => <MetricMini key={i} {...it} />)}
+    </MetricGrid>
+  );
+}
