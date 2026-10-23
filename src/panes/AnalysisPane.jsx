@@ -436,25 +436,34 @@ function CSArc({ rows }) {
   );
 }
 
-// ── Section wrapper ───────────────────────────────────────────
-function Section({ title, children, accent = '#10b981' }) {
+// ── Section wrapper (collapsible, flat) ───────────────────────
+const ExpandCtx = React.createContext(null);
+function Section({ title, children, accent = '#10b981', summary = '', defaultOpen = false }) {
+  const force = React.useContext(ExpandCtx);
+  const [open, setOpen] = useState(force ?? defaultOpen);
   return (
-    <div style={{
-      background: '#ffffff',
-      border: `1px solid ${accent}44`,
-      borderRadius: 16, overflow: 'hidden', marginBottom: 12,
-      boxShadow: '0 1px 4px #0000000a',
-    }}>
-      <div style={{
-        padding: '10px 14px 8px',
-        borderBottom: `1px solid ${accent}33`,
-        background: `linear-gradient(90deg, ${accent}18, #f8fafc)`,
-        display: 'flex', alignItems: 'center', gap: 8,
+    <div style={{ borderTop: '1px solid #f1f5f9' }}>
+      <button onClick={() => setOpen(o => !o)} aria-expanded={open} style={{
+        display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '11px 14px',
+        background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
       }}>
-        <div style={{ width: 3, height: 14, borderRadius: 2, background: accent }} />
-        <span style={{ fontSize: 11, fontWeight: 800, color: '#0f172a', letterSpacing: 0.3 }}>{title}</span>
+        <div style={{ width: 3, height: 14, borderRadius: 2, background: accent, flexShrink: 0 }} />
+        <span style={{ fontSize: 12, fontWeight: 800, color: '#0f172a', flex: 1 }}>{title}</span>
+        {summary && <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b' }}>{summary}</span>}
+        <span style={{ fontSize: 10, color: '#94a3b8' }}>{open ? '▾' : '▸'}</span>
+      </button>
+      {open && <div style={{ padding: '2px 14px 14px' }}>{children}</div>}
+    </div>
+  );
+}
+
+function Group({ label, children }) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ fontSize: 10, fontWeight: 800, color: '#94a3b8', letterSpacing: 0.8, margin: '4px 2px 6px' }}>{label}</div>
+      <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 14, overflow: 'hidden', boxShadow: '0 1px 4px #0000000a' }}>
+        {children}
       </div>
-      <div style={{ padding: '12px 14px' }}>{children}</div>
     </div>
   );
 }
@@ -593,6 +602,7 @@ export default function AnalysisPane() {
   const [data,    setData]    = useState(null);
   const [days,    setDays]    = useState(30);
   const [dayPopup, setDayPopup] = useState(null);
+  const [expandAll, setExpandAll] = useState(null);
 
   const load = useCallback(async () => {
     if (!gh.token || !gh.user || !gh.repo) { setError('GitHub not configured — go to ⚙ Settings.'); return; }
@@ -611,13 +621,21 @@ export default function AnalysisPane() {
     <div>
       {/* Toolbar */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' }}>
-        <select value={days} onChange={e => setDays(+e.target.value)}
-          style={{ flex: 1, background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 9, padding: '8px 12px', fontSize: 11, fontWeight: 700, color: '#0f172a', cursor: 'pointer' }}>
-          {[7, 14, 30, 60, 90].map(d => <option key={d} value={d}>Last {d} days</option>)}
-        </select>
+        <div style={{ flex: 1, display: 'flex', gap: 6, overflowX: 'auto' }}>
+          {[7, 14, 30, 60, 90].map(d => (
+            <button key={d} onClick={() => setDays(d)} style={{
+              padding: '6px 12px', fontSize: 11, fontWeight: 700, borderRadius: 16, border: 'none', cursor: 'pointer', flexShrink: 0,
+              background: days === d ? '#0f172a' : '#f1f5f9', color: days === d ? '#fff' : '#64748b',
+            }}>{d}d</button>
+          ))}
+        </div>
         <button onClick={load} disabled={loading}
           style={{ padding: '8px 18px', fontSize: 11, fontWeight: 800, borderRadius: 9, border: 'none', background: loading ? '#e2e8f0' : 'linear-gradient(135deg,#10b981,#0d9488)', color: loading ? '#94a3b8' : '#fff', cursor: loading ? 'default' : 'pointer' }}>
           {loading ? '⏳' : '↻ Refresh'}
+        </button>
+        <button onClick={() => setExpandAll(v => v === true ? false : true)}
+          style={{ padding: '8px 12px', fontSize: 11, fontWeight: 800, borderRadius: 9, border: '1px solid #e2e8f0', background: '#fff', color: '#0f172a', cursor: 'pointer' }}>
+          {expandAll === true ? 'Collapse' : 'Expand'}
         </button>
       </div>
 
@@ -633,7 +651,8 @@ export default function AnalysisPane() {
         const pnlColor = v => v === null ? '#94a3b8' : v >= 0 ? '#10b981' : '#ef4444';
 
         return (
-          <div>
+          <ExpandCtx.Provider value={expandAll}>
+          <div key={String(expandAll)}>
             {/* Alerts */}
             {d.alerts.length > 0 && (
               <div style={{ marginBottom: 14 }}>
@@ -685,9 +704,35 @@ export default function AnalysisPane() {
               <StatTile label="Open Watching"  value={d.open.length}  sub={`${d.expired.length} expired`} color="#f59e0b" />
             </div>
 
+            <Group label="PERFORMANCE">
+            {/* Cost-adjusted net P&L */}
+            {d.netAdjusted && (
+              <Section title="Real Net P&L (after est. costs)" summary={`Net ${d.netAdjusted.avgNetPct >= 0 ? '+' : ''}${d.netAdjusted.avgNetPct}%`} defaultOpen accent="#059669">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
+                  <StatTile label="Raw Avg" value={`${d.netAdjusted.avgRawPct >= 0 ? '+' : ''}${d.netAdjusted.avgRawPct}%`} color="#6366f1" />
+                  <StatTile label="Net Avg" value={`${d.netAdjusted.avgNetPct >= 0 ? '+' : ''}${d.netAdjusted.avgNetPct}%`} color={d.netAdjusted.avgNetPct >= 0 ? '#10b981' : '#ef4444'} />
+                  <StatTile label="Cost Drag" value={`-${d.netAdjusted.costDragPct}%`} sub={`n=${d.netAdjusted.t}`} color="#f59e0b" />
+                </div>
+                <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
+                  Net avg uses liquidity-scaled cost estimate (thinner OI on options = wider assumed spread)
+                </div>
+              </Section>
+            )}
+
+            {/* Planned vs realized R-multiple */}
+            {d.rrRealized && (
+              <Section title="Planned vs Realized R-Multiple" summary={`${d.rrRealized.avgPlannedRR ?? '—'} → ${d.rrRealized.avgRealizedR}`} defaultOpen accent="#be123c">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8, marginBottom: 10 }}>
+                  <StatTile label="Avg Planned RR" value={d.rrRealized.avgPlannedRR ?? '—'} color="#6366f1" />
+                  <StatTile label="Avg Realized R" value={d.rrRealized.avgRealizedR} color={d.rrRealized.avgRealizedR >= 0 ? '#10b981' : '#ef4444'} sub={`n=${d.rrRealized.t}`} />
+                </div>
+                <RHistogram buckets={d.rrRealized.histogram} />
+              </Section>
+            )}
+
             {/* CE vs PE */}
             {d.ceWR?.t >= 3 && d.peWR?.t >= 3 && (
-              <Section title="CE vs PE Battle" accent="#6366f1">
+              <Section title="CE vs PE Battle" summary={`CE ${pct(d.ceWR.r)} · PE ${pct(d.peWR.r)}`} defaultOpen accent="#6366f1">
                 <CEPEFlow ceWR={d.ceWR} peWR={d.peWR} ceSignals={d.ceSignals} peSignals={d.peSignals} />
                 {d.sigTypes.length > 0 && (
                   <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -705,9 +750,25 @@ export default function AnalysisPane() {
               </Section>
             )}
 
+            {/* Daily timeline */}
+            {d.dailyRows.length >= 1 && (
+              <Section title="Daily Performance" summary={`${d.dailyRows.length} days`} defaultOpen accent="#10b981">
+                <DailyTimeline
+                  rows={d.dailyRows}
+                  onDayClick={date => {
+                    const entry = d.dailyRows.find(([d]) => d === date);
+                    setDayPopup(entry ? { date, signals: entry[1].signals || [] } : null);
+                  }}
+                />
+              </Section>
+            )}
+
+            </Group>
+
+            <Group label="WHEN AND WHAT WORKS">
             {/* Time clock */}
             {d.timeBreak.length >= 3 && (
-              <Section title="Best Time to Trade" accent="#f59e0b">
+              <Section title="Best Time to Trade" summary={''} accent="#f59e0b">
                 <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
                   <TimeClock sessions={d.timeBreak} />
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -728,56 +789,28 @@ export default function AnalysisPane() {
 
             {/* Confidence heatmap */}
             {d.confBands.length >= 3 && (
-              <Section title="Confidence → Win Rate" accent="#22d3ee">
+              <Section title="Confidence → Win Rate" summary={''} accent="#22d3ee">
                 <ConfHeatmap bands={d.confBands} />
               </Section>
             )}
 
             {/* Underlying leaderboard */}
             {d.byUnderlying.length >= 2 && (
-              <Section title="Win Rate by Underlying" accent="#a855f7">
+              <Section title="Win Rate by Underlying" summary={''} accent="#a855f7">
                 <Leaderboard items={d.byUnderlying} />
-              </Section>
-            )}
-
-            {/* CompositeScore */}
-            {d.csRows.length >= 3 && (
-              <Section title="CompositeScore Calibration" accent="#fb923c">
-                <CSArc rows={d.csRows} />
-                <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
-                  Highest win rate bucket → raise that range weight in computeCtxFromCandles()
-                </div>
-              </Section>
-            )}
-
-            <Section title="AI Backtest" accent="#0ea5e9">
-              <MlBacktestCards backtest={d.mlBacktest} />
-            </Section>
-
-            {/* Cost-adjusted net P&L */}
-            {d.netAdjusted && (
-              <Section title="Real Net P&L (after est. costs)" accent="#059669">
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
-                  <StatTile label="Raw Avg" value={`${d.netAdjusted.avgRawPct >= 0 ? '+' : ''}${d.netAdjusted.avgRawPct}%`} color="#6366f1" />
-                  <StatTile label="Net Avg" value={`${d.netAdjusted.avgNetPct >= 0 ? '+' : ''}${d.netAdjusted.avgNetPct}%`} color={d.netAdjusted.avgNetPct >= 0 ? '#10b981' : '#ef4444'} />
-                  <StatTile label="Cost Drag" value={`-${d.netAdjusted.costDragPct}%`} sub={`n=${d.netAdjusted.t}`} color="#f59e0b" />
-                </div>
-                <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
-                  Net avg uses liquidity-scaled cost estimate (thinner OI on options = wider assumed spread)
-                </div>
               </Section>
             )}
 
             {/* Liquidity impact */}
             {d.liquidityBands.length >= 2 && (
-              <Section title="Liquidity Impact (Options, by OI)" accent="#0891b2">
+              <Section title="Liquidity Impact (Options, by OI)" summary={''} accent="#0891b2">
                 <MetricBars items={d.liquidityBands} labelKey="band" showAvgNet />
               </Section>
             )}
 
             {/* Volatility regime-shift impact */}
             {d.regimeShiftBands.length >= 2 && (
-              <Section title="Volatility Regime-Shift Impact" accent="#d97706">
+              <Section title="Volatility Regime-Shift Impact" summary={''} accent="#d97706">
                 <MetricBars items={d.regimeShiftBands} labelKey="band" labelWidth={130} />
                 <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
                   Sharp shift = signal fired right after a VIX move away from its 5-day norm
@@ -785,9 +818,26 @@ export default function AnalysisPane() {
               </Section>
             )}
 
+            </Group>
+
+            <Group label="AI AND MODEL QUALITY">
+            {/* CompositeScore */}
+            {d.csRows.length >= 3 && (
+              <Section title="CompositeScore Calibration" summary={''} accent="#fb923c">
+                <CSArc rows={d.csRows} />
+                <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
+                  Highest win rate bucket → raise that range weight in computeCtxFromCandles()
+                </div>
+              </Section>
+            )}
+
+            <Section title="AI Backtest" summary={''} accent="#0ea5e9">
+              <MlBacktestCards backtest={d.mlBacktest} />
+            </Section>
+
             {/* Which model served each signal */}
             {d.modelAttribution.length >= 2 && (
-              <Section title="Which Model Served You" accent="#7c3aed">
+              <Section title="Which Model Served You" summary={''} accent="#7c3aed">
                 <MetricBars items={d.modelAttribution} labelKey="label" labelWidth={110} />
                 <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
                   "global" vs a named segment model — fills in as new signals log the field
@@ -795,47 +845,18 @@ export default function AnalysisPane() {
               </Section>
             )}
 
-            {/* Planned vs realized R-multiple */}
-            {d.rrRealized && (
-              <Section title="Planned vs Realized R-Multiple" accent="#be123c">
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8, marginBottom: 10 }}>
-                  <StatTile label="Avg Planned RR" value={d.rrRealized.avgPlannedRR ?? '—'} color="#6366f1" />
-                  <StatTile label="Avg Realized R" value={d.rrRealized.avgRealizedR} color={d.rrRealized.avgRealizedR >= 0 ? '#10b981' : '#ef4444'} sub={`n=${d.rrRealized.t}`} />
-                </div>
-                <RHistogram buckets={d.rrRealized.histogram} />
-              </Section>
-            )}
-
-            <Section title="AI Feature Drivers" accent="#7c3aed">
+            <Section title="AI Feature Drivers" summary={''} accent="#7c3aed">
               <MlFeatureBoard mlModels={mlModels} />
             </Section>
 
-            {/* Daily timeline */}
-            {d.dailyRows.length >= 3 && (
-              <Section title="Daily Performance" accent="#10b981">
-                <DailyTimeline
-                  rows={d.dailyRows}
-                  onDayClick={date => {
-                    const entry = d.dailyRows.find(([d]) => d === date);
-                    setDayPopup(entry ? { date, signals: entry[1].signals || [] } : null);
-                  }}
-                />
-              </Section>
-            )}
-
-            <Section title="AI Version History" accent="#1d4ed8">
+            <Section title="AI Version History" summary={''} accent="#1d4ed8">
               <MlHistory mlSnapshots={mlSnapshots} />
             </Section>
-            {dayPopup && (
-              <DayDetailPopup
-                date={dayPopup.date}
-                signals={dayPopup.signals}
-                onClose={() => setDayPopup(null)}
-              />
-            )}
+            </Group>
 
+            <Group label="RECENT CLOSED SIGNALS">
             {/* Recent signals */}
-            <Section title="Recent Closed Signals" accent="#6366f1">
+            <Section title="Recent Closed Signals" summary={`${Math.min(15, d.closed.length)} of ${d.closed.length}`} defaultOpen accent="#6366f1">
               <SignalFeed signals={[...d.closed]
                 .sort((a, b) => {
                   // Sort by exit date+time descending (most recently closed first)
@@ -846,7 +867,18 @@ export default function AnalysisPane() {
                 .slice(0, 15)
               } />
             </Section>
+            </Group>
+
+            {dayPopup && (
+              <DayDetailPopup
+                date={dayPopup.date}
+                signals={dayPopup.signals}
+                onClose={() => setDayPopup(null)}
+              />
+            )}
+
           </div>
+          </ExpandCtx.Provider>
         );
       })()}
     </div>
