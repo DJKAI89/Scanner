@@ -20,7 +20,7 @@ import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNe
 import { evaluateSignalExit } from '../services/tradeManagement';
 import { fetchQ, resolveAccessToken } from '../services/api';
 import { syncUpstoxTokenToGithub } from '../services/githubSecretSync';
-import { trainSignalMlModels, buildModelSnapshot } from '../services/mlRanking';
+import { trainSignalMlModels, buildModelSnapshot, signalWin } from '../services/mlRanking';
 
 const AppContext = createContext(null);
 
@@ -426,7 +426,7 @@ export function AppProvider({ children }) {
         const bucket = Math.floor((s.confidence || 50) / 10) * 10;
         if (!bands[bucket]) bands[bucket] = { hits:0, total:0 };
         bands[bucket].total++;
-        if (s.status === 'TARGET_HIT') bands[bucket].hits++;
+        if (signalWin(s)) bands[bucket].hits++;
       }
       const calibration = {};
       for (const [band, data] of Object.entries(bands)) {
@@ -450,7 +450,7 @@ export function AppProvider({ children }) {
       }
 
       // Baseline win rate across ALL closed signals
-      const baselineWR = closed.filter(s => s.status === 'TARGET_HIT').length / closed.length;
+      const baselineWR = closed.filter(s => signalWin(s)).length / closed.length;
 
       // Per-type analysis: stocks and options separately
       const stockClosed = withInds.filter(s => s.type === 'STOCK');
@@ -484,9 +484,9 @@ export function AppProvider({ children }) {
           const withoutInd = signals.filter(s => s.indicators[ind] === false);
           if (withInd.length < MIN_SAMPLES) continue; // not enough data yet
 
-          const wrWith    = withInd.filter(s => s.status === 'TARGET_HIT').length / withInd.length;
+          const wrWith    = withInd.filter(s => signalWin(s)).length / withInd.length;
           const wrWithout = withoutInd.length >= MIN_SAMPLES
-            ? withoutInd.filter(s => s.status === 'TARGET_HIT').length / withoutInd.length
+            ? withoutInd.filter(s => signalWin(s)).length / withoutInd.length
             : baseWR;
 
           // Lift = how much better/worse this indicator is vs baseline
@@ -510,10 +510,10 @@ export function AppProvider({ children }) {
       }
 
       const stockWR  = stockClosed.length
-        ? stockClosed.filter(s => s.status === 'TARGET_HIT').length / stockClosed.length
+        ? stockClosed.filter(s => signalWin(s)).length / stockClosed.length
         : baselineWR;
       const optWR    = optClosed.length
-        ? optClosed.filter(s => s.status === 'TARGET_HIT').length / optClosed.length
+        ? optClosed.filter(s => signalWin(s)).length / optClosed.length
         : baselineWR;
 
       const stockWeights = computeIndWeights(stockClosed, STOCK_INDICATORS, stockWR);
