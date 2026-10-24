@@ -705,6 +705,30 @@ export default function AnalysisPane() {
             </div>
 
             <Group label="PERFORMANCE">
+              {d.journal && (
+                <Section title="Trade Journal — Paper vs Real" accent="#0ea5e9" defaultOpen
+                  summary={`${d.journal.taken} taken · ${d.journal.skipped} skipped`}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8 }}>
+                    {[
+                      { l: 'TAKEN WIN RATE', v: d.journal.takenWR != null ? `${d.journal.takenWR}%` : '—', s: `${d.journal.takenClosed} closed` },
+                      { l: 'SKIPPED WIN RATE', v: d.journal.skippedWR != null ? `${d.journal.skippedWR}%` : '—', s: `${d.journal.skippedClosed} closed` },
+                      { l: 'PAPER AVG P&L', v: d.journal.paperAvg != null ? `${d.journal.paperAvg}%` : '—', s: `${d.journal.withFills} with fills` },
+                      { l: 'ACTUAL AVG P&L', v: d.journal.realAvg != null ? `${d.journal.realAvg}%` : '—', s: 'from your fills' },
+                      { l: 'ENTRY SLIPPAGE', v: d.journal.entrySlipAvg != null ? `${d.journal.entrySlipAvg}%` : '—', s: '+ = worse price' },
+                      { l: 'EXIT SLIPPAGE', v: d.journal.exitSlipAvg != null ? `${d.journal.exitSlipAvg}%` : '—', s: '+ = worse price' },
+                    ].map(m => (
+                      <div key={m.l} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px' }}>
+                        <div style={{ fontSize: 8, fontWeight: 700, color: '#94a3b8', letterSpacing: 0.5 }}>{m.l}</div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: '#0f172a' }}>{m.v}</div>
+                        <div style={{ fontSize: 9, color: '#94a3b8' }}>{m.s}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 8 }}>
+                    Mark signals Taken/Skipped on the Signal Log page and enter your actual entry/exit prices. If skipped signals win more than taken ones, your selection is costing you; if actual P&L trails paper P&L, slippage is eating the edge.
+                  </div>
+                </Section>
+              )}
             {/* Cost-adjusted net P&L */}
             {d.netAdjusted && (
               <Section title="Real Net P&L (after est. costs)" summary={`Net ${d.netAdjusted.avgNetPct >= 0 ? '+' : ''}${d.netAdjusted.avgNetPct}%`} defaultOpen accent="#059669">
@@ -821,6 +845,38 @@ export default function AnalysisPane() {
             </Group>
 
             <Group label="AI AND MODEL QUALITY">
+              {d.shadow && (
+                <Section title="Filter Check — Rejected Picks" accent="#f59e0b" defaultOpen
+                  summary={d.shadow.closed ? `rejected ${d.shadow.shadowWR}% vs accepted ${d.shadow.acceptedWR}%` : `${d.shadow.logged} tracking`}>
+                  {d.shadow.closed === 0 ? (
+                    <div style={{ fontSize: 10, color: '#94a3b8' }}>{d.shadow.logged} rejected picks are being tracked. Results appear once they hit target, SL or expire.</div>
+                  ) : (
+                    <>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8, marginBottom: 10 }}>
+                        {[
+                          { l: 'ACCEPTED', wr: d.shadow.acceptedWR, net: d.shadow.acceptedNet },
+                          { l: 'REJECTED', wr: d.shadow.shadowWR, net: d.shadow.shadowNet },
+                        ].map(m => (
+                          <div key={m.l} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px' }}>
+                            <div style={{ fontSize: 8, fontWeight: 700, color: '#94a3b8', letterSpacing: 0.5 }}>{m.l}</div>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: '#0f172a' }}>{m.wr}% win</div>
+                            <div style={{ fontSize: 9, color: (m.net ?? 0) >= 0 ? '#16a34a' : '#dc2626' }}>net {m.net ?? '—'}% / trade</div>
+                          </div>
+                        ))}
+                      </div>
+                      {d.shadow.byReason.map(r => (
+                        <div key={r.reason} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, padding: '5px 0', borderTop: '1px solid #f1f5f9' }}>
+                          <span style={{ fontWeight: 700, color: '#0f172a' }}>{r.reason}</span>
+                          <span style={{ color: '#64748b' }}>n={r.n} · {r.wr}% win · net {r.net ?? '—'}%</span>
+                        </div>
+                      ))}
+                      <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 8 }}>
+                        If a rejection reason keeps winning as often as accepted picks (with n of 20+), that filter is costing you good trades — loosen it. If rejected picks lose clearly more, the filter is working.
+                      </div>
+                    </>
+                  )}
+                </Section>
+              )}
             {/* CompositeScore */}
             {d.csRows.length >= 3 && (
               <Section title="CompositeScore Calibration" summary={''} accent="#fb923c">
