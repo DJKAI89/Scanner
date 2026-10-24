@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, EmptyState, StatCard } from '../components/common.jsx';
-import { isBullSignal } from '../services/github';
+import { isBullSignal, ghPatchSignal } from '../services/github';
 import {
   getSignalFeedKey, loadSignalLog,
   resolveSignalsAgainstLivePrices, persistResolvedSignals, checkAllOutcomes as checkAllOutcomesService,
@@ -25,6 +25,56 @@ const EXIT_REASON_LABELS = {
   TIME_STOP:  { icon:'clock',     text:'Time stop' },
   EXPIRY:     { icon:null,        text:'⌛ Expired' },
 };
+
+const JournalCtx = React.createContext<(sig: any, patch: any) => Promise<void>>(async () => {});
+
+// Trade journal: mark a signal Taken/Skipped and record your actual fills, so the
+// Analysis page can show paper-vs-real slippage and taken-vs-skipped results.
+function JournalBar({ sig }: { sig: any }) {
+  const save = React.useContext(JournalCtx);
+  const closed = sig.status === 'TARGET_HIT' || sig.status === 'SL_HIT';
+  const [fe, setFe] = useState(sig.fillEntry != null ? String(sig.fillEntry) : '');
+  const [fx, setFx] = useState(sig.fillExit != null ? String(sig.fillExit) : '');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const run = async (patch: any) => {
+    setBusy(true); setMsg('');
+    try { await save(sig, patch); setMsg('Saved'); setTimeout(() => setMsg(''), 1500); }
+    catch (e: any) { setMsg(e?.message || 'Save failed'); }
+    finally { setBusy(false); }
+  };
+  const num = (v: string) => { const n = parseFloat(v); return Number.isFinite(n) && n > 0 ? n : null; };
+  const btn = (label: string, on: boolean, onClick: () => void, color: string) => (
+    <button disabled={busy} onClick={onClick} style={{
+      padding: '4px 10px', fontSize: 10, fontWeight: 800, borderRadius: 14, cursor: 'pointer',
+      border: `1px solid ${on ? color : '#e2e8f0'}`, background: on ? color : '#fff', color: on ? '#fff' : '#64748b',
+    }}>{label}</button>
+  );
+  const inp = { width: 70, padding: '4px 6px', fontSize: 11, border: '1px solid #e2e8f0', borderRadius: 6 } as const;
+  return (
+    <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed #e2e8f0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 9, fontWeight: 800, color: '#94a3b8', letterSpacing: 0.5 }}>MY TRADE</span>
+        {btn('Taken', sig.taken === true, () => run({ taken: true, takenAt: sig.takenAt || new Date().toISOString() }), '#16a34a')}
+        {btn('Skipped', sig.taken === false, () => run({ taken: false }), '#64748b')}
+        {sig.taken != null && btn('Clear', false, () => run({ taken: null, fillEntry: null, fillExit: null }), '#94a3b8')}
+        {msg && <span style={{ fontSize: 9, color: msg === 'Saved' ? '#16a34a' : '#dc2626' }}>{msg}</span>}
+      </div>
+      {sig.taken === true && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+          <span style={{ fontSize: 9, color: '#64748b' }}>My entry ₹</span>
+          <input type="number" inputMode="decimal" value={fe} onChange={e => setFe(e.target.value)} style={inp} />
+          {closed && <>
+            <span style={{ fontSize: 9, color: '#64748b' }}>My exit ₹</span>
+            <input type="number" inputMode="decimal" value={fx} onChange={e => setFx(e.target.value)} style={inp} />
+          </>}
+          <button disabled={busy} onClick={() => run({ fillEntry: num(fe), fillExit: closed ? num(fx) : (sig.fillExit ?? null) })}
+            style={{ padding: '4px 10px', fontSize: 10, fontWeight: 800, borderRadius: 6, border: 'none', background: '#0f172a', color: '#fff', cursor: 'pointer' }}>Save</button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function SignalRow({ sig, livePrice, marketOpen = true }) {
   const sc = STATUS_COLORS[sig.status] || STATUS_COLORS.OPEN;
@@ -233,6 +283,7 @@ function SignalRow({ sig, livePrice, marketOpen = true }) {
           </span>
         )}
       </div>
+      {!sig.shadow && <JournalBar sig={sig} />}
     </div>
   );
 }
@@ -308,6 +359,10 @@ export default function LogPane() {
   const [typeFilter, setTypeFilter]   = useState('all');
   const [days, setDays]               = useState(1);
   const [wsResolved, setWsResolved]   = useState(0);
+  const updateJournal = useCallback(async (sig: any, patch: any) => {
+    await ghPatchSignal(gh, sig.date, sig.id, patch);
+    setSignals((prev: any[]) => prev.map(x => (x.id === sig.id ? { ...x, ...patch } : x)));
+  }, [gh]);
   const resolvedRef = useRef(new Set());
 
   // Collect ALL open signal instrument keys (stocks + options)
@@ -416,6 +471,7 @@ export default function LogPane() {
   const rows = groupCorrelated(filtered);
 
   return (
+    <JournalCtx.Provider value={updateJournal}>
     <div>
       {!gh.token && (
         <div style={{ background:'#fffbeb', border:'1px solid #fde68a', borderRadius:8, padding:'12px 14px', marginBottom:12, fontSize:11, color:'#b45309', fontWeight:600 }}>
@@ -489,5 +545,6 @@ export default function LogPane() {
         </div>
       )}
     </div>
+    </JournalCtx.Provider>
   );
 }
