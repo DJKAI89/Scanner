@@ -209,6 +209,23 @@ async function readSignalHistory() {
     if (!payload) continue;
     signals.push(...(payload.signals || []));
   }
+  // Optional: also learn from shadow signals (picks the gate rejected) to correct
+  // selection bias. OFF by default — enable with AI_INCLUDE_SHADOW=1 once you
+  // have a meaningful number of resolved shadow outcomes.
+  if (process.env.AI_INCLUDE_SHADOW === '1') {
+    const sf = await ghFetch(`signal-logs/${SCANNER_USER_ID}/shadow`);
+    if (Array.isArray(sf)) {
+      const names = sf.map((i) => i.name).filter((n) => /^\d{4}-\d{2}-\d{2}\.json$/.test(n)).sort().slice(-LOOKBACK_DAYS);
+      let added = 0;
+      for (const n of names) {
+        const f = await ghFetch(`signal-logs/${SCANNER_USER_ID}/shadow/${n}`);
+        const p = f && decodeContent(f.content);
+        const rows = (p?.signals || []).filter((s) => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
+        signals.push(...rows); added += rows.length;
+      }
+      console.log(`  Included ${added} resolved shadow signals in training`);
+    }
+  }
   return signals;
 }
 
