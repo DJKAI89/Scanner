@@ -166,6 +166,40 @@ async function processUser(uid, today, now) {
   }
 }
 
+
+// Shadow signals (picks the gate rejected) — resolved with the exact same exit
+// logic so their outcomes are comparable to real signals. Lives in
+// signal-logs/<uid>/shadow/<date>.json, separate from the real log.
+async function processShadow(uid, today, now) {
+  const folder = await ghGet(`signal-logs/${uid}/shadow`);
+  if (!Array.isArray(folder)) return;
+  const names = folder.map((i) => i.name).filter((n) => /^\d{4}-\d{2}-\d{2}\.json$/.test(n)).sort().slice(-6);
+  for (const name of names) {
+    const path = `signal-logs/${uid}/shadow/${name}`;
+    const file = await ghGet(path);
+    if (!file) continue;
+    let wrapper;
+    try { wrapper = JSON.parse(Buffer.from(file.content, 'base64').toString('utf8')); } catch (e) { continue; }
+    const signals = wrapper.signals || [];
+    const open = signals.filter((s) => s.status === 'OPEN');
+    if (!open.length) continue;
+    const keys = [...new Set(open.map((s) => s.instrKey || s.key).filter(Boolean))];
+    const quotes = await fetchQuotes(keys);
+    let changed = false;
+    const updated = signals.map((s) => {
+      if (s.status !== 'OPEN') return s;
+      const ltp = quotes[s.instrKey || s.key]?.last_price ?? null;
+      if (!ltp && !(s.type === 'OPTION' && s.expiry && today > s.expiry)) return s;
+      const result = evaluateSignalExit(s, ltp ?? s.entry, today, now, {});
+      if (!result) return s;
+      changed = true;
+      console.log(`[${uid}] shadow ${result.status || 'update'}: ${s.stock || s.sym} (${s.shadowReason})`);
+      return { ...s, ...result };
+    });
+    if (changed) await ghPut(path, { ...wrapper, signals: updated, lastUpdated: new Date().toISOString() }, file.sha);
+  }
+}
+
 async function main() {
   const missing = [];
   if (!gh.token) missing.push('GH_TOKEN (AI_GH_TOKEN secret)');
@@ -186,7 +220,7 @@ async function main() {
   const now = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
   const today = todayIST();
   for (const uid of uids) {
-    try { await processUser(uid, today, now); }
+    try { await processUser(uid, today, now); await processShadow(uid, today, now); }
     catch (e) { console.error(`[${uid}] processUser failed: ${e.message} — continuing with other users`); }
   }
 }
