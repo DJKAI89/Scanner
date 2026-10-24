@@ -2,8 +2,8 @@
 // Extracted from AnalysisPane.jsx so the pane only handles UI/state wiring.
 // All calculation and GitHub-read logic for the Analysis tab lives here.
 
-import { ghReadMultipleDays } from './github';
-import { runMlBacktest, estimateCostPct } from './mlRanking';
+import { ghReadMultipleDays, ghReadShadow, isBullSignal } from './github';
+import { runMlBacktest, estimateCostPct, signalWin } from './mlRanking';
 
 // ── Pure helpers (exported for reuse in pane render where needed) ──
 export function wr(arr) {
@@ -218,6 +218,56 @@ export async function loadAnalysisData(ctx) {
   }));
   const rrRealized = rrPoints.length >= 5 ? { avgPlannedRR, avgRealizedR, t: rrPoints.length, histogram: rrHistogram } : null;
 
+  // ── Filter check: did the rejected picks (shadow signals) do better or worse than accepted? ──
+  const netOf = s => (s.pnlPct ?? 0) - estimateCostPct(s, s.type);
+  const mean = arr => arr.length ? +(arr.reduce((x, y) => x + y, 0) / arr.length).toFixed(2) : null;
+  const shadowAll = await ghReadShadow(gh, days).catch(() => []);
+  const shadowClosed = shadowAll.filter(s => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
+  let shadow = null;
+  if (shadowAll.length) {
+    const reasons = {};
+    shadowClosed.forEach(s => { (reasons[s.shadowReason || 'unknown'] ||= []).push(s); });
+    shadow = {
+      logged: shadowAll.length,
+      closed: shadowClosed.length,
+      shadowWR: shadowClosed.length ? Math.round(shadowClosed.filter(signalWin).length / shadowClosed.length * 100) : null,
+      shadowNet: mean(shadowClosed.map(netOf)),
+      acceptedWR: Math.round(closed.filter(signalWin).length / closed.length * 100),
+      acceptedNet: mean(closed.map(netOf)),
+      byReason: Object.entries(reasons).map(([reason, arr]) => ({
+        reason, n: arr.length,
+        wr: Math.round(arr.filter(signalWin).length / arr.length * 100),
+        net: mean(arr.map(netOf)),
+      })).sort((x, y) => y.n - x.n),
+    };
+  }
+
+  // ── Trade journal: taken vs skipped, paper vs actual fills ──
+  const takenSigs = signals.filter(s => s.taken === true);
+  const skippedSigs = signals.filter(s => s.taken === false);
+  let journal = null;
+  if (takenSigs.length || skippedSigs.length) {
+    const doneT = takenSigs.filter(s => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
+    const doneS = skippedSigs.filter(s => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
+    const filled = doneT.filter(s => s.fillEntry > 0 && s.fillExit > 0 && s.entry > 0);
+    const dirOf = s => (isBullSignal(s) ? 1 : -1);
+    const realPct = s => dirOf(s) * (s.fillExit - s.fillEntry) / s.fillEntry * 100;
+    // adverse slippage: positive = you got a worse price than the signal's paper price
+    const entrySlip = s => dirOf(s) * (s.fillEntry - s.entry) / s.entry * 100;
+    const exitSlip = s => (s.exitPrice > 0 ? -dirOf(s) * (s.fillExit - s.exitPrice) / s.exitPrice * 100 : null);
+    journal = {
+      taken: takenSigs.length, skipped: skippedSigs.length,
+      takenClosed: doneT.length, skippedClosed: doneS.length,
+      takenWR: doneT.length ? Math.round(doneT.filter(signalWin).length / doneT.length * 100) : null,
+      skippedWR: doneS.length ? Math.round(doneS.filter(signalWin).length / doneS.length * 100) : null,
+      withFills: filled.length,
+      paperAvg: mean(filled.map(s => s.pnlPct ?? 0)),
+      realAvg: mean(filled.map(realPct)),
+      entrySlipAvg: mean(filled.map(entrySlip)),
+      exitSlipAvg: mean(filled.map(exitSlip).filter(v => v != null)),
+    };
+  }
+
   // Alerts
   const alerts = [];
   if (overall.r < 35) alerts.push({ level: 'danger', msg: `Win rate ${overall.r}% — signals losing systematically. Raise min confidence to 75%+.` });
@@ -238,5 +288,6 @@ export async function loadAnalysisData(ctx) {
     sigTypes, confBands, timeBreak, dailyRows,
     csRows, scoredSignals, alerts, mlBacktest,
     netAdjusted, liquidityBands, regimeShiftBands, modelAttribution, rrRealized,
+    shadow, journal,
   };
 }

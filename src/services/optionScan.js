@@ -7,7 +7,8 @@ import { getIST, sleep } from '../utils/marketTime.js';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config.js';
 import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, buildOptionConfluence, buildOptionIndSnap, candleOrder, interpretFIIDII, computeVixPercentile, vixRegimeShiftScore } from './technical.js';
 import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
-import { logSignals, buildOptionSignal } from './github.js';
+import { pushShadow, drainShadow } from './shadowLog.js';
+import { logSignals, logShadowSignals, buildOptionSignal } from './github.js';
 
 export const VIX_KEY = 'NSE_INDEX|India VIX';
 
@@ -130,10 +131,14 @@ function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, ad
     // subtype threshold resolution, RR floor, and the capital ceiling (which
     // only ever tightens past Settings' Max Capital, never loosens it) all
     // live there now instead of being hand-rewritten per pipeline.
-    evaluateSignalGate({
-      type: 'OPTION', aiBlock: p.aiBlock, conf: p.confidence, rr: p.rr,
-      amtRequired: p.amtRequired, mlModels, cfg, sigForThresholds: p,
-    }).passes
+    {
+      const gate = evaluateSignalGate({
+        type: 'OPTION', aiBlock: p.aiBlock, conf: p.confidence, rr: p.rr,
+        amtRequired: p.amtRequired, mlModels, cfg, sigForThresholds: p,
+      });
+      if (!gate.passes) pushShadow(p, gate.reason, 'OPTION'); // tracked as a shadow signal
+      return gate.passes;
+    }
   );
 }
 
@@ -454,6 +459,7 @@ export async function runOptionsScan(ctx, caches, callbacks) {
   // Don't log WATCH options — no direction conviction, contaminates calibration
   const loggableOpts = allPicks.filter(p => p.action !== 'WATCH');
   if (loggableOpts.length && gh?.token) logSignals(gh, loggableOpts.map(p => buildOptionSignal(p, vixVal)), vixVal, lg);
+  if (gh?.token) logShadowSignals(gh, drainShadow(), vixVal, lg);
   lg(`✅ Options: ${total} signals (${withTrend} with-trend)`, 'o');
 
   return { groups: nextGroups, scanId, vixVal, withTrend, total };

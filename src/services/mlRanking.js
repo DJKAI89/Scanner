@@ -35,6 +35,18 @@ export function estimateCostPct(row, type) {
   return base * 2.5; // near the liquidity floor
 }
 
+
+// A signal "wins" when it made money AFTER estimated costs, not merely when the
+// status flag says TARGET_HIT. With partial exits + break-even/trailing stops,
+// TARGET_HIT can net out tiny and SL_HIT can still be break-even/positive, so a
+// binary status label taught the models the wrong thing. Falls back to status
+// when no realized P&L is recorded.
+export function signalWin(sig) {
+  const p = sig?.pnlPct;
+  if (p == null || !Number.isFinite(+p)) return sig?.status === 'TARGET_HIT';
+  return (+p - estimateCostPct(sig, sig.type)) > 0;
+}
+
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
@@ -419,7 +431,7 @@ function buildBacktestRows(signals, model, type) {
         signal: sig,
         mlProb,
         baseConf: clamp(preMlConfidence(sig) / 100, 0, 1),
-        y: sig.status === 'TARGET_HIT' ? 1 : 0,
+        y: signalWin(sig) ? 1 : 0,
         pnlPct: toNum(sig.pnlPct, 0),
       };
     });
@@ -459,10 +471,10 @@ function calibrateRegimePenalties(closedSignals) {
   const buckets = { CHOPPY_HIGH_VOL: [], CHOPPY: [], TRENDING_CALM: [], TRENDING: [], NEUTRAL: [] };
   for (const s of closedSignals) {
     const r = s.regime;
-    if (r && buckets[r]) buckets[r].push(s.status === 'TARGET_HIT' ? 1 : 0);
+    if (r && buckets[r]) buckets[r].push(signalWin(s) ? 1 : 0);
   }
   const overall = closedSignals.length
-    ? closedSignals.filter((s) => s.status === 'TARGET_HIT').length / closedSignals.length
+    ? closedSignals.filter((s) => signalWin(s)).length / closedSignals.length
     : 0.5;
 
   const out = {};
@@ -486,7 +498,7 @@ function calibrateExpectedWR(closedSignals) {
   for (const s of closedSignals) {
     const rec = s?.rec;
     if (!rec) continue;
-    (buckets[rec] || (buckets[rec] = [])).push(s.status === 'TARGET_HIT' ? 1 : 0);
+    (buckets[rec] || (buckets[rec] = [])).push(signalWin(s) ? 1 : 0);
   }
   const out = {};
   for (const [rec, results] of Object.entries(buckets)) {
@@ -533,7 +545,7 @@ function optimizeThresholds(dataset, model, type) {
         for (const v of candidates) {
           const f = withGreeks.filter((s) => Math.abs(s[field] ?? 0) >= v);
           if (f.length < Math.max(10, withGreeks.length * 0.1)) continue;
-          const wr = f.filter((s) => s.status === 'TARGET_HIT').length / f.length;
+          const wr = f.filter((s) => signalWin(s)).length / f.length;
           if (wr > bestG.score) bestG = { v, score: wr };
         }
         return bestG.v;
@@ -687,7 +699,7 @@ function buildDataset(signals, type, featureNames, label = null) {
       const features = getFeatureVector(sig, type);
       return {
         signal: sig,
-        y: sig.status === 'TARGET_HIT' ? 1 : 0,
+        y: signalWin(sig) ? 1 : 0,
         x: vectorize(features, featureNames),
       };
     });

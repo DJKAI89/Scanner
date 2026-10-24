@@ -4,7 +4,7 @@
 
 import { fetchQ, fetchCandles, fetchOptions } from './api.js';
 import { fetchScanQuotesViaWS } from '../hooks/useMarketFeed.js';
-import { logSignals, buildStockSignal } from './github.js';
+import { logSignals, logShadowSignals, buildStockSignal } from './github.js';
 import {
   calcRSI, calcEMACrossover, calcATR, calcSupertrend, calcBBSqueeze, calcNR7, calcADX,
   detectPDHLBreakout, calc52WkBreakout, calcVolumeSurge, detectGap, calcWickRejection,
@@ -16,6 +16,7 @@ import {
   applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment, computeVixPercentile, vixRegimeShiftScore,
 } from './technical.js';
 import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
+import { pushShadow, drainShadow } from './shadowLog.js';
 import { getIST, getISTDate, sleep } from '../utils/marketTime.js';
 import { fetchIntraday } from './api.js';
 
@@ -381,10 +382,11 @@ export async function runPicksScan(ctx, callbacks) {
     // self-reinforcing lockout; RR/risk/potential floors; aiBlock veto) used
     // to be hand-rewritten at every pipeline and had already drifted apart
     // more than once.
-    const passes = evaluateSignalGate({
+    const gate = evaluateSignalGate({
       type: 'STOCK', aiBlock: mlRank.aiBlock, conf, rr: pot.rr, potBase: pot.base,
       risk, rec, mlModels, cfg,
-    }).passes;
+    });
+    const passes = gate.passes;
 
     const entryTrigger=calcEntryTrigger(ltp,high,sr,t.atr||0,rec,vwap,chgPct);
     const macd=t.macd||{}, macdBull=t.macdBull, bb=t.bb, adx=t.adx, rsiDiv=t.rsiDiv;
@@ -408,6 +410,7 @@ export async function runPicksScan(ctx, callbacks) {
       recentCandles:(t.candles||[]).slice(0,20), closes:t.closes||[],
     };
     allScored.push(scored);
+    if (!passes) pushShadow(scored, gate.reason, 'STOCK'); // tracked as a shadow signal
     if (passes && rec!=='AVOID') results.push(scored);
     secMap[sec].g+=rec==='BUY'||rec==='STRONG BUY'?1:0;
   }
@@ -480,6 +483,7 @@ export async function runPicksScan(ctx, callbacks) {
   // Don't log WATCH/AVOID — they have <15% WR and pollute calibration data
   const loggablePicks = finalPicks.filter(p=>!p._fallback && p.rec!=='WATCH' && p.rec!=='AVOID');
   if (loggablePicks.length&&gh?.token) logSignals(gh,loggablePicks.map(p=>buildStockSignal(p,vixVal)),vixVal,lg);
+  if (gh?.token) logShadowSignals(gh,drainShadow(),vixVal,lg);
   checkPickAlerts(nextPicks, cfg);
 
   // ── Background intraday enrichment for picks ───────
