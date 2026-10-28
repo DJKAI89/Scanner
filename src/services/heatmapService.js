@@ -30,7 +30,9 @@ export async function loadBasePrices(ctx) {
     )
   );
 
-  const count = Object.keys(results).length;
+  // fetchQ indexes every quote under TWO keys (NSE_EQ|SYMBOL and the ISIN-based key),
+  // so counting Object.keys(results) double-counted. Count only the keys we asked for.
+  const count = allKeys.filter(k => results[k]).length;
   updateBadge('heatmap', String(count));
   lg(`Heatmap: ${count} base quotes loaded`, 'o');
   return { results, updTime: 'Updated: ' + getIST(), count };
