@@ -163,3 +163,42 @@ export function evaluateSignalExit(sig, ltp, istDate, istTime, cfgIn = {}) {
   }
   return { ...update, livePrice: +ltp.toFixed(2), livePnlPct: signedPnlPct(sig, ltp) };
 }
+
+
+// ── Fractional Kelly / Risk-Based Position Sizing ──────────────────
+export function calculatePositionSize({
+  accountCapital = 100000,
+  maxRiskPerTradePct = 1.5,
+  entryPrice,
+  stopLossPrice,
+  lotSize = 1,
+  type = 'STOCK',
+}) {
+  if (!entryPrice || !stopLossPrice || entryPrice <= 0 || stopLossPrice <= 0) {
+    return { shares: 0, lots: 0, totalCapitalAllocated: 0, maxLossRupees: 0, riskPct: 0 };
+  }
+  const riskAmount = (accountCapital * maxRiskPerTradePct) / 100;
+  const riskPerShare = Math.abs(entryPrice - stopLossPrice);
+  if (riskPerShare <= 0) return { shares: 0, lots: 0, totalCapitalAllocated: 0, maxLossRupees: 0, riskPct: 0 };
+
+  const rawShares = Math.floor(riskAmount / riskPerShare);
+  if (type === 'OPTION') {
+    const rawLots = Math.floor(rawShares / lotSize);
+    const lots = Math.max(1, rawLots);
+    const shares = lots * lotSize;
+    return {
+      shares,
+      lots,
+      totalCapitalAllocated: +(shares * entryPrice).toFixed(2),
+      maxLossRupees: +(shares * riskPerShare).toFixed(2),
+      riskPct: +((shares * riskPerShare) / accountCapital * 100).toFixed(2),
+    };
+  }
+  return {
+    shares: rawShares,
+    lots: 1,
+    totalCapitalAllocated: +(rawShares * entryPrice).toFixed(2),
+    maxLossRupees: +(rawShares * riskPerShare).toFixed(2),
+    riskPct: +((rawShares * riskPerShare) / accountCapital * 100).toFixed(2),
+  };
+}

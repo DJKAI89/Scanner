@@ -1,3 +1,4 @@
+import { calcEfficiencyRatio } from './technical.js';
 const STOCK_FEATURES = [
   'baseConf', 'rr', 'riskInv', 'numInds', 'potential', 'expectedWR',
   'composite', 'momentum', 'bullish', 'reversal', 'aboveVWAP', 'nearSupport',
@@ -1148,6 +1149,11 @@ export function applyMlRanking(confidence, models, sigLikeIn) {
   const walkForwardFactor = clamp((model.walkForward?.accuracy || model.accuracy || 0.5), 0.35, 0.8);
   const trust = 0.18 + (0.28 * sampleFactor) + (0.18 * edgeFactor) + (0.18 * walkForwardFactor);
   let adj = clamp((probability - baseProb) * 100 * trust, -18, 18);
+  if (sigLike?.candles?.length >= 15) {
+    const { er, isChoppy, isTrending } = calcEfficiencyRatio(sigLike.candles, 14);
+    if (isChoppy) adj -= 10;
+    else if (isTrending) adj += 4;
+  }
   // portfolioPenalty (capital load / cluster risk) is intentionally NOT applied
   // here anymore — it's a position-sizing concern (see getPortfolioAiGuidance),
   // not a probability-of-winning concern, and capitalLoad/trendAligned are

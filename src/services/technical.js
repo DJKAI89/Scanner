@@ -1764,3 +1764,41 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
   }
   return picks.sort((a, b) => b.confidence - a.confidence);
 }
+
+
+// ── Kaufman Efficiency Ratio (ER) ──────────────────────────────
+export function calcEfficiencyRatio(candles, period = 14) {
+  if (!candles || candles.length < period + 1) return { er: 0.5, isChoppy: false, isTrending: false };
+  const recent = candles.slice(-period - 1);
+  const netChange = Math.abs(+recent[recent.length - 1][4] - +recent[0][4]);
+  let sumVolatility = 0;
+  for (let i = 1; i < recent.length; i++) {
+    sumVolatility += Math.abs(+recent[i][4] - +recent[i - 1][4]);
+  }
+  if (sumVolatility === 0) return { er: 0, isChoppy: true, isTrending: false };
+  const er = +(netChange / sumVolatility).toFixed(3);
+  return {
+    er,
+    isChoppy: er < 0.32,
+    isTrending: er >= 0.60,
+  };
+}
+
+// ── Implied Volatility Rank (IVR) ──────────────────────────────
+export function calcIVRank(currentIV, iv52Low = 12, iv52High = 45) {
+  if (!currentIV || currentIV <= 0 || iv52High <= iv52Low) {
+    return { ivr: 50, regime: 'NORMAL', actionableBias: 'SPREADS_OR_DIRECTIONAL' };
+  }
+  const clampedIV = Math.max(iv52Low, Math.min(iv52High, currentIV));
+  const ivr = +(((clampedIV - iv52Low) / (iv52High - iv52Low)) * 100).toFixed(1);
+  let regime = 'NORMAL';
+  let actionableBias = 'SPREADS_OR_DIRECTIONAL';
+  if (ivr <= 35) {
+    regime = 'CHEAP';
+    actionableBias = 'BUY_DEBIT';
+  } else if (ivr >= 65) {
+    regime = 'RICH';
+    actionableBias = 'SELL_CREDIT';
+  }
+  return { ivr, regime, actionableBias };
+}
