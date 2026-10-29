@@ -97,9 +97,21 @@ function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, ad
     const base = p.confidence;
     let c = base;
     let prev = c;
+
+    // IV Rank calculation against historical baseline
+    const ivVal = p.iv || 20;
+    const { ivr, regime: ivRegime, actionableBias } = calcIVRank(ivVal, 12, 45);
+
     c = applyCalibration(c, confCalibration || null);
     const calAdj = c - prev; prev = c;
     c = applyRegimeAdjustment(c, regime, cfg, mlModels?.thresholds?.option?.regimePenalties);
+    
+    // IVR Penalty / Bonus: protect against IV crush on expensive options
+    let ivrAdj = 0;
+    if (p.action === 'BUY' && ivr >= 65) ivrAdj = -18;
+    else if (p.action === 'BUY' && ivr <= 30) ivrAdj = +8;
+    c = Math.min(99, Math.max(1, c + ivrAdj));
+
     const regimeAdj = c - prev; prev = c;
     // Shared with lookupService.js (technical.js buildOptionConfluence) — see there.
     const confluence = buildOptionConfluence(p);
@@ -112,6 +124,8 @@ function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, ad
     return {
       ...p,
       confidence: finalConf,
+      ivr,
+      ivRegime,
       regime,
       volRegimeShift,
       confluence,
@@ -126,30 +140,22 @@ function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, ad
       aiBlock: mlRank.aiBlock,
       aiModel: mlRank.mlSegment,
     };
-  }).filter(p =>
-    // Shared gate (mlRanking.evaluateSignalGate) — aiBlock veto, index-vs-stock
-    // subtype threshold resolution, RR floor, and the capital ceiling (which
-    // only ever tightens past Settings' Max Capital, never loosens it) all
-    // live there now instead of being hand-rewritten per pipeline.
-    {
-      const gate = evaluateSignalGate({
-        type: 'OPTION', aiBlock: p.aiBlock, conf: p.confidence, rr: p.rr,
-        amtRequired: p.amtRequired, mlModels, cfg, sigForThresholds: p,
-      });
-      if (!gate.passes) pushShadow(p, gate.reason, 'OPTION'); // tracked as a shadow signal
-      return gate.passes;
+  }).filter(p => {
+    // Completely block naked long option buying when IVR is extremely high (> 75) to avoid IV crush
+    if (p.action === 'BUY' && (p.ivr ?? 50) >= 75) {
+      pushShadow(p, 'iv_crush_risk_high_ivr', 'OPTION');
+      return false;
     }
-  );
+    const gate = evaluateSignalGate({
+      type: 'OPTION', aiBlock: p.aiBlock, conf: p.confidence, rr: p.rr,
+      amtRequired: p.amtRequired, mlModels, cfg, sigForThresholds: p,
+    });
+    if (!gate.passes) pushShadow(p, gate.reason, 'OPTION');
+    return gate.passes;
+  });
 }
 
-// ── Main scan ────────────────────────────────────────────────────
-// ctx: { accessToken, cfg, stocks, fiiData, adaptWeights, mlModels, gh, onTokenExpired, lg }
-// caches: { prevAvgIVCache, prevPCRCache } — refs persisted across scans for trend deltas
-// callbacks: { setProgress, setMarketCtxMap, setVix }
-// Learned delta/IV gates (mlRanking.optimizeThresholds) override the static
-// defaults once enough logged option signals exist. Shared so every page that
-// scans a stock's option chain applies the same gates.
-export function effectiveOptionCfg(cfgIn, mlModels) {
+function effectiveOptionCfg(cfgIn, mlModels) {
   const g = mlModels?.thresholds?.option;
   return g?.deltaGate != null ? { ...cfgIn, delta: g.deltaGate, iv: g.ivGate } : cfgIn;
 }
