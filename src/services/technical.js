@@ -367,12 +367,22 @@ export function calcVolumeSurge(candles, lookback = 20) {
   const avgVol = past.reduce((s, c) => s + +c[5], 0) / past.length;
   if (!avgVol || avgVol <= 0) return null;
   const ratio = avgVol > 0 ? +(todayVol / avgVol).toFixed(2) : 1;
+
+  // Climax / Exhaustion detection: Huge volume spike (>= 3.5x) with rejection wick
+  const c0 = candles[0];
+  const o = +c0[1], h = +c0[2], l = +c0[3], cl = +c0[4];
+  const range = h - l || 1;
+  const upperWick = h - Math.max(o, cl);
+  const isUpperWickHeavy = upperWick / range > 0.35;
+  const isClimaxVolume = ratio >= 3.5 && isUpperWickHeavy;
+
   return {
     todayVol,
     avgVol: +avgVol.toFixed(0),
     ratio,
-    confirmed: ratio >= 1.5,
-    strong: ratio >= 2.5,
+    confirmed: ratio >= 1.5 && !isClimaxVolume,
+    strong: ratio >= 2.5 && !isClimaxVolume,
+    climaxExhaustion: isClimaxVolume,
     weak: ratio >= 1.0 && ratio < 1.5,
     dry: ratio < 0.8,
   };
@@ -1064,14 +1074,36 @@ export function calcMaxPain(chain) {
 }
 
 export function calcOIWalls(chain) {
-  if (!chain || chain.length < 3) return { callWall: 0, putWall: 0 };
+  if (!chain || chain.length < 3) return { callWall: 0, putWall: 0, callCluster: 0, putCluster: 0 };
   let maxCallOI = 0, maxPutOI = 0, callWall = 0, putWall = 0;
+  
+  // Calculate weighted cluster of top 3 strikes around heavy OI
+  const callEntries = [];
+  const putEntries = [];
+
   for (const row of chain) {
-    const callOI = row.call_options?.market_data?.oi || 0, putOI = row.put_options?.market_data?.oi || 0;
-    if (callOI > maxCallOI) { maxCallOI = callOI; callWall = row.strike_price; }
-    if (putOI  > maxPutOI)  { maxPutOI  = putOI;  putWall  = row.strike_price; }
+    const sp = row.strike_price;
+    const callOI = row.call_options?.market_data?.oi || 0;
+    const putOI = row.put_options?.market_data?.oi || 0;
+    if (callOI > maxCallOI) { maxCallOI = callOI; callWall = sp; }
+    if (putOI  > maxPutOI)  { maxPutOI  = putOI;  putWall  = sp; }
+    if (callOI > 0) callEntries.push({ strike: sp, oi: callOI });
+    if (putOI > 0) putEntries.push({ strike: sp, oi: putOI });
   }
-  return { callWall, putWall, callWallOI: maxCallOI, putWallOI: maxPutOI };
+
+  // Top 3 calls and puts by OI to find weighted center of mass (Cluster)
+  callEntries.sort((a, b) => b.oi - a.oi);
+  putEntries.sort((a, b) => b.oi - a.oi);
+
+  const top3Calls = callEntries.slice(0, 3);
+  const sumCallOI = top3Calls.reduce((s, x) => s + x.oi, 0) || 1;
+  const callCluster = +(top3Calls.reduce((s, x) => s + x.strike * x.oi, 0) / sumCallOI).toFixed(0);
+
+  const top3Puts = putEntries.slice(0, 3);
+  const sumPutOI = top3Puts.reduce((s, x) => s + x.oi, 0) || 1;
+  const putCluster = +(top3Puts.reduce((s, x) => s + x.strike * x.oi, 0) / sumPutOI).toFixed(0);
+
+  return { callWall, putWall, callWallOI: maxCallOI, putWallOI: maxPutOI, callCluster, putCluster };
 }
 
 // ── Option Analysis page — lightweight per-strike scanner ─────

@@ -34,8 +34,13 @@ function signedPnlPct(sig, exitPrice) {
 }
 
 function getTrailUnit(sig, cfg) {
-  if (sig.type === 'OPTION') return sig.riskDist || Math.abs((sig.entry||0) - (sig.sl||0));
-  return sig.atr || Math.abs((sig.entry||0) - (sig.sl||0));
+  if (sig.type === 'OPTION') {
+    const baseDist = sig.riskDist || Math.abs((sig.entry || 0) - (sig.sl || 0));
+    // Greeks-Aware Dynamic Adjustment: Scale trail by option Delta (clamped between 0.35 and 0.90)
+    const deltaWeight = sig.delta != null ? Math.max(0.35, Math.min(0.90, Math.abs(sig.delta))) : 0.50;
+    return baseDist * deltaWeight;
+  }
+  return sig.atr || Math.abs((sig.entry || 0) - (sig.sl || 0));
 }
 
 function daysBetween(dateA, dateB) {

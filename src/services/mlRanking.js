@@ -25,15 +25,31 @@ const BASE_COST_PCT = {
 // ATM contract with 10k+ OI — the EV/threshold math was quietly optimistic
 // on exactly the trades most likely to bleed to spread. Scales the flat
 // baseline by open interest, which is already logged on every option pick.
+/**
+ * Accurate Indian F&O & Cash Statutory Friction Model:
+ * Includes STT, exchange turnover fees, SEBI charges, GST, plus adverse retail slippage.
+ */
 export function estimateCostPct(row, type) {
-  if (type !== 'OPTION') return BASE_COST_PCT.STOCK;
+  if (type !== 'OPTION') {
+    // Delivery / Cash equity transaction friction + 0.15% average slippage
+    return 0.28;
+  }
   const oi = toNum(row?.signal?.oi ?? row?.oi, 0);
-  const base = BASE_COST_PCT.OPTION;
-  if (oi <= 0)     return base * 2.5; // no OI on record — treat conservatively
-  if (oi >= 10000) return base;
-  if (oi >= 3000)  return base * 1.3;
-  if (oi >= 1000)  return base * 1.8;
-  return base * 2.5; // near the liquidity floor
+  const premium = toNum(row?.signal?.entry ?? row?.entry, 100);
+  const lotSize = toNum(row?.signal?.lot ?? row?.lot, 25);
+  const turnover = premium * lotSize;
+
+  // NSE Regulatory and Brokerage Fees breakdown (in % of turnover)
+  // Brokerage ~Rs 20 flat, STT 0.0625% on sell, Exch fee 0.05%, GST 18%, SEBI 0.0001%
+  const statFeePct = turnover > 0 ? (40 / turnover) * 100 + 0.12 : 0.45;
+  
+  // Real-world adverse retail market-order fill slippage scaled by Open Interest
+  let slippagePct = 0.50; // liquid baseline
+  if (oi < 1000) slippagePct = 1.80; // thin liquidity
+  else if (oi < 3000) slippagePct = 1.10;
+  else if (oi < 10000) slippagePct = 0.70;
+
+  return +(statFeePct + slippagePct).toFixed(2);
 }
 
 

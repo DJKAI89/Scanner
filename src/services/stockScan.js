@@ -241,13 +241,16 @@ export async function runPicksScan(ctx, callbacks) {
   }
   lg(`✅ Candle data: ${candleOK}/${top20.length} stocks`,'o');
 
-  // Step 5 — Pre-build secMap from ALL quoted (exact HTML)
+  // Step 5 — Pre-build secMap & Sector Breadth from ALL quoted
   setPickProgress('Step 5/5: Calculating scores...');
   const secMap = {};
   for (const item of byVol) {
     const sec = getSector(item.s);
-    if (!secMap[sec]) secMap[sec]={g:0,c:0};
-    if (getChgPct(item._q)>0) secMap[sec].g++;
+    if (!secMap[sec]) secMap[sec] = { g: 0, c: 0, aboveVWAP: 0 };
+    if (getChgPct(item._q) > 0) secMap[sec].g++;
+    const px = item._q.last_price || 0;
+    const vwapEst = item._q.ohlc?.close || px;
+    if (px >= vwapEst) secMap[sec].aboveVWAP++;
     secMap[sec].c++;
   }
 
@@ -265,7 +268,9 @@ export async function runPicksScan(ctx, callbacks) {
     const nearSupp= isNearSupport(ltp,sr,low);
     const delivPct= getDeliveryPct(q);
     const sec     = getSector(item.s);
-    const secSc   = secMap[sec] ? Math.round(secMap[sec].g/secMap[sec].c*100) : 50;
+    const secData = secMap[sec] || { g: 0, c: 1, aboveVWAP: 1 };
+    const secSc   = secData.c > 0 ? Math.round(secData.g / secData.c * 100) : 50;
+    const sectorBreadthPct = secData.c > 0 ? Math.round((secData.aboveVWAP / secData.c) * 100) : 50;
     const aboveVWAP = vwap>0 ? ltp>=vwap : null;
     const vwapBands = t.vwapBands||null;
     const avgVol20  = t.avgVol20||0;
@@ -375,7 +380,24 @@ export async function runPicksScan(ctx, callbacks) {
       regimeAdj: Math.round(_regimeAdj),
       adaptAdj: Math.round(_adaptAdj), mlAdj: Math.round(mlRank.mlAdj || 0), final: conf,
     };
-    const rec  = getRec(conf,pot.base,risk,pot.rr);
+    // Enhancement: Sector Breadth Gate & Volume Climax Invalidation
+    let finalRec = getRec(conf, pot.base, risk, pot.rr);
+    if (finalRec === 'STRONG BUY' || finalRec === 'BUY') {
+      // If broader sector is dragging (< 35% breadth), downgrade signal
+      if (sectorBreadthPct < 35) {
+        finalRec = 'WATCH';
+        conf = Math.max(1, conf - 15);
+      }
+      // If volume spike is an exhaustion climax with heavy rejection upper wick, downgrade to WATCH
+      if (t.candles?.length >= 6) {
+        const vSurge = calcVolumeSurge(t.candles);
+        if (vSurge?.climaxExhaustion) {
+          finalRec = 'WATCH';
+          conf = Math.max(1, conf - 12);
+        }
+      }
+    }
+    const rec = finalRec;
     // Shared gate (mlRanking.evaluateSignalGate) — see that function for why:
     // this exact sequence (learned-vs-manual confidence floor, since only
     // passing signals get logged so a too-high learned threshold is a
@@ -399,7 +421,7 @@ export async function runPicksScan(ctx, callbacks) {
       macd, macdBull, bb, adx, rsiDiv,
       a50, a200, nearSupp:nearSuppF, patterns,
       vwap, aboveVWAP, vwapType:'daily', vwapBands,
-      vol, avgVol20, high, low, delivPct, regime: stockRegime, volRegimeShift, mlSegment: mlRank.mlSegment, confluence,
+      vol, avgVol20, high, low, delivPct, regime: stockRegime, volRegimeShift, sectorBreadth: sectorBreadthPct, mlSegment: mlRank.mlSegment, confluence,
       _indSnap, confBreakdown,
       mlProbability: mlRank.mlProbability,
       mlAdj: mlRank.mlAdj,
