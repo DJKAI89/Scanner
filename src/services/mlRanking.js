@@ -4,6 +4,7 @@ const STOCK_FEATURES = [
   'composite', 'momentum', 'bullish', 'reversal', 'aboveVWAP', 'nearSupport',
   'deliveryHigh', 'deliveryLow', 'macdBullCross', 'adxBull', 'rsiBullDiv', 'bbSqueeze',
   'weekday', 'phase', 'regime', 'volRegimeShift', 'sectorStrength', 'newsSentiment', 'gapType',
+  'sectorBreadth',
 ];
 
 const OPTION_FEATURES = [
@@ -12,6 +13,7 @@ const OPTION_FEATURES = [
   'deltaAbs', 'iv', 'thetaAbs', 'atm', 'capitalLoad', 'nearPDH', 'nearPDL',
   'weekday', 'phase', 'regime', 'volRegimeShift', 'expiryDay', 'sectorStrength', 'newsSentiment',
   'maxPainDist', 'counterTrend',
+  'ivr',
 ];
 
 const BASE_COST_PCT = {
@@ -203,6 +205,7 @@ function getStockFeatureVector(sig) {
     sectorStrength: getSectorStrength(sig),
     newsSentiment: getNewsSentiment(sig),
     gapType: getGapType(sig),
+    sectorBreadth: clamp(toNum(sig?.sectorBreadth, 50) / 100, 0, 1),
   };
 }
 
@@ -242,6 +245,7 @@ function getOptionFeatureVector(sig) {
     newsSentiment: getNewsSentiment(sig),
     maxPainDist: clamp(maxPainDist * 20, 0, 2),
     counterTrend: asBool(sig?.trendAligned === false),
+    ivr: clamp(toNum(sig?.ivr, 50) / 100, 0, 1),
   };
 }
 

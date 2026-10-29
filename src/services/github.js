@@ -451,6 +451,7 @@ export function buildStockSignal(p, vixVal) {
     // Analysis page's regime-shift / which-model sections have data to read.
     // (Neither field was logged before, so volRegimeShift trained as a constant 0.)
     volRegimeShift: p.volRegimeShift ?? null,
+    sectorBreadth:  p.sectorBreadth ?? null,
     mlSegment:      p.mlSegment ?? null,
     // ── Indicator snapshot — used by adaptWeights to learn which signals predict wins ──
     // p._indSnap is the SAME object already used at scan time (applyAdaptWeights)
@@ -525,6 +526,7 @@ export function buildOptionSignal(p, vixVal) {
     oiChg:          p.oiChg ?? null,
     dte:            p._dte ?? null,
     volRegimeShift: p.volRegimeShift ?? null,
+    sectorBreadth:  p.sectorBreadth ?? null,
     mlSegment:      p.mlSegment ?? null,
     emaCross:       p.emaCross        ?? null,
     priceZone:      p.priceZone       || '',
