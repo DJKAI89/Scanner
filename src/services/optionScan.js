@@ -155,7 +155,7 @@ function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, ad
   });
 }
 
-function effectiveOptionCfg(cfgIn, mlModels) {
+export function effectiveOptionCfg(cfgIn, mlModels) {
   const g = mlModels?.thresholds?.option;
   return g?.deltaGate != null ? { ...cfgIn, delta: g.deltaGate, iv: g.ivGate } : cfgIn;
 }
