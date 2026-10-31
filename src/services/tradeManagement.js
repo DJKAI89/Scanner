@@ -34,13 +34,8 @@ function signedPnlPct(sig, exitPrice) {
 }
 
 function getTrailUnit(sig, cfg) {
-  if (sig.type === 'OPTION') {
-    const baseDist = sig.riskDist || Math.abs((sig.entry || 0) - (sig.sl || 0));
-    // Greeks-Aware Dynamic Adjustment: Scale trail by option Delta (clamped between 0.35 and 0.90)
-    const deltaWeight = sig.delta != null ? Math.max(0.35, Math.min(0.90, Math.abs(sig.delta))) : 0.50;
-    return baseDist * deltaWeight;
-  }
-  return sig.atr || Math.abs((sig.entry || 0) - (sig.sl || 0));
+  if (sig.type === 'OPTION') return sig.riskDist || Math.abs((sig.entry||0) - (sig.sl||0));
+  return sig.atr || Math.abs((sig.entry||0) - (sig.sl||0));
 }
 
 function daysBetween(dateA, dateB) {
@@ -92,6 +87,13 @@ export function evaluateSignalExit(sig, ltp, istDate, istTime, cfgIn = {}) {
   // 1) Option expiry — highest priority, the contract itself stops trading
   if (sig.type === 'OPTION' && sig.expiry && istDate > sig.expiry) {
     return finalizeClose(sig, ltp, istDate, istTime, 'EXPIRY');
+  }
+
+  // 1b) Intraday-only trades (Today's Plan): flat by exitByTime on the day, or at the
+  // first quote of a later session if that was missed. holdDays can't express this
+  // (0 is treated as "no time stop" below).
+  if (sig.intradayOnly && (istDate > sig.date || (sig.exitByTime && istTime >= sig.exitByTime))) {
+    return finalizeClose(sig, ltp, istDate, istTime, 'TIME_STOP');
   }
 
   // 2) Generic time-stop — signal's own holdDays budget exceeded
@@ -170,40 +172,26 @@ export function evaluateSignalExit(sig, ltp, istDate, istTime, cfgIn = {}) {
 }
 
 
-// ── Fractional Kelly / Risk-Based Position Sizing ──────────────────
-export function calculatePositionSize({
-  accountCapital = 100000,
-  maxRiskPerTradePct = 1.5,
-  entryPrice,
-  stopLossPrice,
-  lotSize = 1,
-  type = 'STOCK',
-}) {
-  if (!entryPrice || !stopLossPrice || entryPrice <= 0 || stopLossPrice <= 0) {
-    return { shares: 0, lots: 0, totalCapitalAllocated: 0, maxLossRupees: 0, riskPct: 0 };
-  }
-  const riskAmount = (accountCapital * maxRiskPerTradePct) / 100;
-  const riskPerShare = Math.abs(entryPrice - stopLossPrice);
-  if (riskPerShare <= 0) return { shares: 0, lots: 0, totalCapitalAllocated: 0, maxLossRupees: 0, riskPct: 0 };
-
-  const rawShares = Math.floor(riskAmount / riskPerShare);
-  if (type === 'OPTION') {
-    const rawLots = Math.floor(rawShares / lotSize);
-    const lots = Math.max(1, rawLots);
-    const shares = lots * lotSize;
-    return {
-      shares,
-      lots,
-      totalCapitalAllocated: +(shares * entryPrice).toFixed(2),
-      maxLossRupees: +(shares * riskPerShare).toFixed(2),
-      riskPct: +((shares * riskPerShare) / accountCapital * 100).toFixed(2),
-    };
-  }
+// ── Risk-based position sizing ──────────────────────────────
+// Never forces a trade bigger than the risk budget: if even ONE lot would risk more
+// than maxRiskPerTradePct, lots=0 and riskTooHigh=true (skip it or accept it knowingly).
+export function calculatePositionSize({ accountCapital, maxRiskPerTradePct, entryPrice, stopLossPrice, lotSize = 1, type = 'STOCK' }) {
+  const empty = { shares: 0, lots: 0, totalCapitalAllocated: 0, maxLossRupees: 0, riskPct: 0, riskTooHigh: false };
+  if (!(accountCapital > 0) || !(maxRiskPerTradePct > 0)) return empty;
+  if (!(entryPrice > 0) || !(stopLossPrice > 0)) return empty;
+  const riskPerUnit = Math.abs(entryPrice - stopLossPrice);
+  if (!(riskPerUnit > 0)) return empty;
+  const riskBudget = accountCapital * maxRiskPerTradePct / 100;
+  const units = Math.floor(riskBudget / riskPerUnit);
+  const step = type === 'OPTION' ? Math.max(1, lotSize) : 1;
+  const lots = Math.floor(units / step);
+  const shares = lots * step;
   return {
-    shares: rawShares,
-    lots: 1,
-    totalCapitalAllocated: +(rawShares * entryPrice).toFixed(2),
-    maxLossRupees: +(rawShares * riskPerShare).toFixed(2),
-    riskPct: +((rawShares * riskPerShare) / accountCapital * 100).toFixed(2),
+    shares,
+    lots: type === 'OPTION' ? lots : (shares > 0 ? 1 : 0),
+    totalCapitalAllocated: +(shares * entryPrice).toFixed(2),
+    maxLossRupees: +(shares * riskPerUnit).toFixed(2),
+    riskPct: +((shares * riskPerUnit) / accountCapital * 100).toFixed(2),
+    riskTooHigh: shares === 0,
   };
 }

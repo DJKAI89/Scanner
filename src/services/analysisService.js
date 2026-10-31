@@ -23,7 +23,8 @@ export async function loadAnalysisData(ctx) {
   const { gh, days, mlModels, lg, updateBadge } = ctx;
   if (!gh.token || !gh.user || !gh.repo) throw new Error('GitHub not configured — go to ⚙ Settings.');
 
-  const signals = await ghReadMultipleDays(gh, days);
+  // Today's-Plan trades (planned:true) have their own scorecard; keep them out of scanner stats.
+  const signals = (await ghReadMultipleDays(gh, days)).filter(s => !s.planned);
   if (!signals.length) return { empty: true };
 
   const closed  = signals.filter(s => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');

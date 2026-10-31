@@ -1,10 +1,8 @@
-import { calcEfficiencyRatio } from './technical.js';
 const STOCK_FEATURES = [
   'baseConf', 'rr', 'riskInv', 'numInds', 'potential', 'expectedWR',
   'composite', 'momentum', 'bullish', 'reversal', 'aboveVWAP', 'nearSupport',
   'deliveryHigh', 'deliveryLow', 'macdBullCross', 'adxBull', 'rsiBullDiv', 'bbSqueeze',
   'weekday', 'phase', 'regime', 'volRegimeShift', 'sectorStrength', 'newsSentiment', 'gapType',
-  'sectorBreadth',
 ];
 
 const OPTION_FEATURES = [
@@ -13,11 +11,10 @@ const OPTION_FEATURES = [
   'deltaAbs', 'iv', 'thetaAbs', 'atm', 'capitalLoad', 'nearPDH', 'nearPDL',
   'weekday', 'phase', 'regime', 'volRegimeShift', 'expiryDay', 'sectorStrength', 'newsSentiment',
   'maxPainDist', 'counterTrend',
-  'ivr',
 ];
 
 const BASE_COST_PCT = {
-  STOCK: 0.18,
+  STOCK: 0.28, // statutory friction + ~0.15% slippage
   OPTION: 0.45,
 };
 
@@ -27,31 +24,24 @@ const BASE_COST_PCT = {
 // ATM contract with 10k+ OI — the EV/threshold math was quietly optimistic
 // on exactly the trades most likely to bleed to spread. Scales the flat
 // baseline by open interest, which is already logged on every option pick.
-/**
- * Accurate Indian F&O & Cash Statutory Friction Model:
- * Includes STT, exchange turnover fees, SEBI charges, GST, plus adverse retail slippage.
- */
+// Cost model (percent of turnover, round trip). Options: flat brokerage on BOTH legs
+// (~₹20/order) spread over the real turnover (premium × lot), plus statutory charges
+// (STT on the sell leg, exchange fees, SEBI, GST), plus adverse market-order slippage
+// scaled by open interest. Capped so one tiny-premium contract can't dominate averages.
 export function estimateCostPct(row, type) {
-  if (type !== 'OPTION') {
-    // Delivery / Cash equity transaction friction + 0.15% average slippage
-    return 0.28;
-  }
+  if (type !== 'OPTION') return BASE_COST_PCT.STOCK;
   const oi = toNum(row?.signal?.oi ?? row?.oi, 0);
-  const premium = toNum(row?.signal?.entry ?? row?.entry, 100);
-  const lotSize = toNum(row?.signal?.lot ?? row?.lot, 25);
-  const turnover = premium * lotSize;
-
-  // NSE Regulatory and Brokerage Fees breakdown (in % of turnover)
-  // Brokerage ~Rs 20 flat, STT 0.0625% on sell, Exch fee 0.05%, GST 18%, SEBI 0.0001%
-  const statFeePct = turnover > 0 ? (40 / turnover) * 100 + 0.12 : 0.45;
-  
-  // Real-world adverse retail market-order fill slippage scaled by Open Interest
-  let slippagePct = 0.50; // liquid baseline
-  if (oi < 1000) slippagePct = 1.80; // thin liquidity
+  const premium = toNum(row?.signal?.entry ?? row?.entry, 0);
+  const lot = toNum(row?.signal?.lot ?? row?.lot, 0);
+  const turnover = premium * lot;
+  // Missing premium/lot (older logged signals) → fall back to the flat baseline.
+  const statFeePct = turnover > 0 ? (40 / turnover) * 100 + 0.12 : BASE_COST_PCT.OPTION * 0.5;
+  let slippagePct = 0.50;               // liquid (10k+ OI)
+  if (oi <= 0) slippagePct = 1.80;      // no OI on record — treat conservatively
+  else if (oi < 1000) slippagePct = 1.80;
   else if (oi < 3000) slippagePct = 1.10;
   else if (oi < 10000) slippagePct = 0.70;
-
-  return +(statFeePct + slippagePct).toFixed(2);
+  return +Math.min(4, statFeePct + slippagePct).toFixed(2);
 }
 
 
@@ -205,7 +195,6 @@ function getStockFeatureVector(sig) {
     sectorStrength: getSectorStrength(sig),
     newsSentiment: getNewsSentiment(sig),
     gapType: getGapType(sig),
-    sectorBreadth: clamp(toNum(sig?.sectorBreadth, 50) / 100, 0, 1),
   };
 }
 
@@ -245,7 +234,6 @@ function getOptionFeatureVector(sig) {
     newsSentiment: getNewsSentiment(sig),
     maxPainDist: clamp(maxPainDist * 20, 0, 2),
     counterTrend: asBool(sig?.trendAligned === false),
-    ivr: clamp(toNum(sig?.ivr, 50) / 100, 0, 1),
   };
 }
 
@@ -856,7 +844,7 @@ function trainFamily(signals, type, featureNames) {
 }
 
 export function trainSignalMlModels(closedSignals = []) {
-  const usable = closedSignals.filter((sig) => sig.status === 'TARGET_HIT' || sig.status === 'SL_HIT');
+  const usable = closedSignals.filter((sig) => !sig.planned && (sig.status === 'TARGET_HIT' || sig.status === 'SL_HIT'));
   const stockFamily = trainFamily(usable, 'STOCK', STOCK_FEATURES);
   const optionFamily = trainFamily(usable, 'OPTION', OPTION_FEATURES);
   if (!stockFamily && !optionFamily) return null;
@@ -1169,11 +1157,6 @@ export function applyMlRanking(confidence, models, sigLikeIn) {
   const walkForwardFactor = clamp((model.walkForward?.accuracy || model.accuracy || 0.5), 0.35, 0.8);
   const trust = 0.18 + (0.28 * sampleFactor) + (0.18 * edgeFactor) + (0.18 * walkForwardFactor);
   let adj = clamp((probability - baseProb) * 100 * trust, -18, 18);
-  if (sigLike?.candles?.length >= 15) {
-    const { er, isChoppy, isTrending } = calcEfficiencyRatio(sigLike.candles, 14);
-    if (isChoppy) adj -= 10;
-    else if (isTrending) adj += 4;
-  }
   // portfolioPenalty (capital load / cluster risk) is intentionally NOT applied
   // here anymore — it's a position-sizing concern (see getPortfolioAiGuidance),
   // not a probability-of-winning concern, and capitalLoad/trendAligned are
