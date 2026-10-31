@@ -52,6 +52,7 @@ export const INDEX_OPTS = [
 export const TABS = [
   { id: 'stocks',    icon: '📈', label: 'Stocks',        pageLabel: '📈 Stocks'      },
   { id: 'options',   icon: '⚡', label: 'F&O Options',   pageLabel: '⚡ F&O Options' },
+  { id: 'plan',       icon: '🧭', label: "Today's Plan",  pageLabel: "🧭 Today's Plan" },
   { id: 'optAnalysis', icon: '🧮', label: 'Option Analysis', pageLabel: '🧮 Option Analysis' },
   { id: 'portfolio', icon: '💼', label: 'Portfolio',     pageLabel: '💼 Portfolio'   },
   { id: 'lookup',    icon: '🔍', label: 'Analyse Stock', pageLabel: '🔍 Analyse Stock'     },
