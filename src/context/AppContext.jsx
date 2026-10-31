@@ -347,7 +347,7 @@ export function AppProvider({ children }) {
       try {
         const signals = await ghReadMultipleDays(g, 60); // 60 days for better sample size
         if (!signals?.length) { setMlModels(null); localStorage.removeItem('scanner_ml_models'); return; }
-        const closed = signals.filter(s => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
+        const closed = signals.filter(s => !s.planned && (s.status === 'TARGET_HIT' || s.status === 'SL_HIT'));
         if (closed.length < 10) { setMlModels(null); localStorage.removeItem('scanner_ml_models'); lg(`Calibration: need 10+ closed signals, have ${closed.length}`, 'w'); return; }
         // Browser-safe mode:
         // Use cached/remote AI model and avoid heavy on-page retraining that can freeze UI.
