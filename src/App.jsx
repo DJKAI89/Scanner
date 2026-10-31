@@ -12,6 +12,7 @@ import { LogDrawer, Toast } from './components/common.jsx';
 const StocksPane = lazy(() => import('./panes/StocksPane'));
 const OptionsPane = lazy(() => import('./panes/OptionsPane'));
 const OptionAnalysisPane = lazy(() => import('./panes/OptionAnalysisPane'));
+const PlanPane = lazy(() => import('./panes/PlanPane'));
 const PortfolioPane = lazy(() => import('./panes/PortfolioPane'));
 const LookupPane = lazy(() => import('./panes/LookupPane'));
 const LogPane = lazy(() => import('./panes/LogPane'));
@@ -23,6 +24,7 @@ const SettingsPane = lazy(() => import('./panes/SettingsPane'));
 const PANES = {
   stocks: StocksPane,
   options: OptionsPane,
+  plan: PlanPane,
   optAnalysis: OptionAnalysisPane,
   portfolio: PortfolioPane,
   lookup: LookupPane,
