@@ -845,6 +845,21 @@ export default function AnalysisPane() {
             </Group>
 
             <Group label="AI AND MODEL QUALITY">
+              {d.mlCheck && (
+                <Section title="ML Score Check" accent="#7c3aed" defaultOpen
+                  summary={`${d.mlCheck.ideas} ideas · spread ${d.mlCheck.spread >= 0 ? '+' : ''}${d.mlCheck.spread} pts`}>
+                  {d.mlCheck.buckets.map((b, i) => (
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, padding: '6px 0', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
+                      <span style={{ fontWeight: 700, color: '#0f172a' }}>ML score {b.from}–{b.to}%</span>
+                      <span style={{ color: '#64748b' }}>n={b.n} · {b.wr}% win · net <b style={{ color: (b.net ?? 0) >= 0 ? '#16a34a' : '#dc2626' }}>{b.net ?? '—'}%</b></span>
+                    </div>
+                  ))}
+                  <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 8, lineHeight: 1.5 }}>
+                    Uses the probability logged at signal time, so the model had not seen the result. Near-duplicate signals are collapsed to one idea. If the top bucket does not clearly beat the bottom one, the model is not adding skill.
+                    {' '}Retire-adaptive-weights check: {d.mlCheck.ready ? 'PASSING (150+ ideas, top bucket ahead by 10+ pts with positive net)' : `not yet (needs 150+ ideas, a 10+ pt spread and positive net in the top bucket; now ${d.mlCheck.ideas} ideas, ${d.mlCheck.spread} pt spread)`}.
+                  </div>
+                </Section>
+              )}
               {d.shadow && (
                 <Section title="Filter Check — Rejected Picks" accent="#f59e0b" defaultOpen
                   summary={d.shadow.closed ? `rejected ${d.shadow.shadowWR}% vs accepted ${d.shadow.acceptedWR}%` : `${d.shadow.logged} tracking`}>
