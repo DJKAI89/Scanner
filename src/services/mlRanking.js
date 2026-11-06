@@ -56,6 +56,34 @@ export function signalWin(sig) {
   return (+p - estimateCostPct(sig, sig.type)) > 0;
 }
 
+// Collapse near-identical signals into one "idea". The scanner often logs the same call
+// several times (several strikes of one index, repeat scans) within a few minutes. Each
+// copy has the same outcome, so counting them separately makes the model overconfident
+// and inflates every sample size. Idea key = day + underlying + direction + 30-min block.
+// Real (non-shadow) signals win over shadow ones, then the earliest logged.
+export function ideaKey(s) {
+  const hm = String(s?.time || '').slice(0, 5).split(':');
+  const mins = hm.length === 2 ? (+hm[0]) * 60 + (+hm[1]) : 0;
+  const dir = s?.type === 'OPTION' ? (s.optType || s.signal || '') : (s?.signal || s?.rec || '');
+  return `${s?.date}|${s?.stock}|${s?.type}|${dir}|${Math.floor(mins / 30)}`;
+}
+
+export function dedupeIdeas(signals = []) {
+  const ordered = [...signals].sort((a, b) =>
+    (a.shadow ? 1 : 0) - (b.shadow ? 1 : 0)
+    || String(a.date).localeCompare(String(b.date))
+    || String(a.time).localeCompare(String(b.time)));
+  const seen = new Set();
+  const out = [];
+  for (const s of ordered) {
+    const k = ideaKey(s);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
+
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
@@ -844,7 +872,9 @@ function trainFamily(signals, type, featureNames) {
 }
 
 export function trainSignalMlModels(closedSignals = []) {
-  const usable = closedSignals.filter((sig) => !sig.planned && (sig.status === 'TARGET_HIT' || sig.status === 'SL_HIT'));
+  const closed = closedSignals.filter((sig) => !sig.planned && (sig.status === 'TARGET_HIT' || sig.status === 'SL_HIT'));
+  // One sample per idea, not per logged copy (see dedupeIdeas).
+  const usable = dedupeIdeas(closed);
   const stockFamily = trainFamily(usable, 'STOCK', STOCK_FEATURES);
   const optionFamily = trainFamily(usable, 'OPTION', OPTION_FEATURES);
   if (!stockFamily && !optionFamily) return null;

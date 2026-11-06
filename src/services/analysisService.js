@@ -3,7 +3,7 @@
 // All calculation and GitHub-read logic for the Analysis tab lives here.
 
 import { ghReadMultipleDays, ghReadShadow, isBullSignal } from './github';
-import { runMlBacktest, estimateCostPct, signalWin } from './mlRanking';
+import { runMlBacktest, estimateCostPct, signalWin, dedupeIdeas } from './mlRanking';
 
 // ── Pure helpers (exported for reuse in pane render where needed) ──
 export function wr(arr) {
@@ -269,6 +269,39 @@ export async function loadAnalysisData(ctx) {
     };
   }
 
+  // ── ML score check: does the model's own probability, logged BEFORE the outcome, rank results? ──
+  // This is the honest out-of-sample test: mlProbability was written at signal time, so
+  // it cannot have seen the result. Duplicates are collapsed to ideas first.
+  let mlCheck = null;
+  {
+    const withProb = dedupeIdeas(closed.filter(s => s.mlProbability != null && Number.isFinite(+s.mlProbability)));
+    if (withProb.length >= 20) {
+      const asPct = p => (+p <= 1 ? +p * 100 : +p);
+      const sorted = [...withProb].sort((x, y) => asPct(x.mlProbability) - asPct(y.mlProbability));
+      const k = Math.min(5, Math.floor(sorted.length / 10));
+      const size = Math.ceil(sorted.length / k);
+      const buckets = [];
+      for (let i = 0; i < k; i++) {
+        const part = sorted.slice(i * size, (i + 1) * size);
+        if (!part.length) continue;
+        buckets.push({
+          from: Math.round(asPct(part[0].mlProbability)), to: Math.round(asPct(part[part.length - 1].mlProbability)),
+          n: part.length,
+          wr: Math.round(part.filter(signalWin).length / part.length * 100),
+          net: mean(part.map(netOf)),
+        });
+      }
+      const spread = buckets.length > 1 ? buckets[buckets.length - 1].wr - buckets[0].wr : 0;
+      const top = buckets[buckets.length - 1];
+      mlCheck = {
+        ideas: withProb.length,
+        logged: closed.filter(s => s.mlProbability != null).length,
+        buckets, spread,
+        ready: withProb.length >= 150 && spread >= 10 && (top?.net ?? -1) > 0,
+      };
+    }
+  }
+
   // Alerts
   const alerts = [];
   if (overall.r < 35) alerts.push({ level: 'danger', msg: `Win rate ${overall.r}% — signals losing systematically. Raise min confidence to 75%+.` });
@@ -289,6 +322,6 @@ export async function loadAnalysisData(ctx) {
     sigTypes, confBands, timeBreak, dailyRows,
     csRows, scoredSignals, alerts, mlBacktest,
     netAdjusted, liquidityBands, regimeShiftBands, modelAttribution, rrRealized,
-    shadow, journal,
+    shadow, journal, mlCheck,
   };
 }

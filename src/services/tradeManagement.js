@@ -43,6 +43,27 @@ function daysBetween(dateA, dateB) {
   return Math.round((b - a) / 86400000);
 }
 
+// ── Price-path logging (for model training) ─────────────────
+// mfePct / maePct = best / worst unrealised P&L % reached while the trade was open.
+// Persisted on every monitor poll (the monitor already rewrites open signals), and
+// finalised at close together with R-multiples and hold time. These give the AI more
+// than a win/loss bit: how far a trade ran, how deep it dipped, how long it took.
+function pathExtremes(sig, ltp) {
+  const cur = signedPnlPct(sig, ltp);
+  return {
+    mfe: +Math.max(sig.mfePct ?? 0, cur).toFixed(2),
+    mae: +Math.min(sig.maePct ?? 0, cur).toFixed(2),
+  };
+}
+
+function holdMinutes(sig, istDate, istTime) {
+  try {
+    const t0 = new Date(`${sig.date}T${String(sig.time || '09:15').slice(0, 5)}:00+05:30`).getTime();
+    const t1 = new Date(`${istDate}T${String(istTime || '15:30').slice(0, 5)}:00+05:30`).getTime();
+    return Number.isFinite(t0) && Number.isFinite(t1) && t1 >= t0 ? Math.round((t1 - t0) / 60000) : null;
+  } catch (_) { return null; }
+}
+
 // Builds the final blended-pnl close, backfilling any target levels that were
 // gapped through without being recorded as their own partial tranche.
 function finalizeClose(sig, ltp, istDate, istTime, reason) {
@@ -68,10 +89,18 @@ function finalizeClose(sig, ltp, istDate, istTime, reason) {
   // win/loss STATUS label follows the "any target hit" rule.
   const anyTargetHit = partials.some(p => p.level === 'T1' || p.level === 'T2' || p.level === 'T3');
   const status = reason === 'EXPIRY' ? 'EXPIRED' : (anyTargetHit || blended >= 0 ? 'TARGET_HIT' : 'SL_HIT');
+  // Path summary (partial-exit prices count as visited prices too).
+  let { mfe, mae } = pathExtremes(sig, ltp);
+  partials.forEach(p => { const v = signedPnlPct(sig, p.price); if (v > mfe) mfe = v; if (v < mae) mae = v; });
+  const riskPct = sig.entry > 0 && sig.sl > 0 ? Math.abs(sig.entry - sig.sl) / sig.entry * 100 : null;
+  const inR = (v) => (riskPct > 0 ? +(v / riskPct).toFixed(2) : null);
   return {
     status, exitPrice: +ltp.toFixed(2), exitTime: istTime, exitDate: istDate,
     pnlPct: +blended.toFixed(2), exitReason: reason, partials, remainingPct: 0,
     livePrice: null, livePnlPct: null,
+    mfePct: +mfe.toFixed(2), maePct: +mae.toFixed(2),
+    realizedR: inR(blended), mfeR: inR(mfe), maeR: inR(mae),
+    holdMins: holdMinutes(sig, istDate, istTime),
   };
 }
 
@@ -83,6 +112,7 @@ export function evaluateSignalExit(sig, ltp, istDate, istTime, cfgIn = {}) {
   if (!sig || sig.status !== 'OPEN' || !ltp || !sig.entry) return null;
   const cfg = { ...DEFAULTS, ...cfgIn };
   const isBuy = isBullSignal(sig);
+  const pe = pathExtremes(sig, ltp);
 
   // 1) Option expiry — highest priority, the contract itself stops trading
   if (sig.type === 'OPTION' && sig.expiry && istDate > sig.expiry) {
@@ -166,9 +196,9 @@ export function evaluateSignalExit(sig, ltp, istDate, istTime, cfgIn = {}) {
 
   if (!touched) {
     // No structural change — just refresh the live price/pnl shown in the UI
-    return { livePrice: +ltp.toFixed(2), livePnlPct: signedPnlPct(sig, ltp) };
+    return { livePrice: +ltp.toFixed(2), livePnlPct: signedPnlPct(sig, ltp), mfePct: pe.mfe, maePct: pe.mae };
   }
-  return { ...update, livePrice: +ltp.toFixed(2), livePnlPct: signedPnlPct(sig, ltp) };
+  return { ...update, livePrice: +ltp.toFixed(2), livePnlPct: signedPnlPct(sig, ltp), mfePct: pe.mfe, maePct: pe.mae };
 }
 
 
