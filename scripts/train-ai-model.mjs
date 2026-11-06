@@ -209,21 +209,30 @@ async function readSignalHistory() {
     if (!payload) continue;
     signals.push(...(payload.signals || []));
   }
-  // Optional: also learn from shadow signals (picks the gate rejected) to correct
-  // selection bias. OFF by default — enable with AI_INCLUDE_SHADOW=1 once you
-  // have a meaningful number of resolved shadow outcomes.
-  if (process.env.AI_INCLUDE_SHADOW === '1') {
+  // Shadow signals = picks the gate rejected, tracked to an outcome. Training only on
+  // signals that PASSED the filters teaches the model nothing about what the filters
+  // threw away (selection bias); adding resolved shadow rows fixes that.
+  //   AI_INCLUDE_SHADOW=1     always include
+  //   AI_INCLUDE_SHADOW=0     never include
+  //   AI_INCLUDE_SHADOW=auto  (default) include once >= SHADOW_AUTO_MIN resolved rows exist
+  const shadowMode = process.env.AI_INCLUDE_SHADOW ?? 'auto';
+  const SHADOW_AUTO_MIN = 200;
+  if (shadowMode !== '0') {
     const sf = await ghFetch(`signal-logs/${SCANNER_USER_ID}/shadow`);
     if (Array.isArray(sf)) {
       const names = sf.map((i) => i.name).filter((n) => /^\d{4}-\d{2}-\d{2}\.json$/.test(n)).sort().slice(-LOOKBACK_DAYS);
-      let added = 0;
+      const shadowRows = [];
       for (const n of names) {
         const f = await ghFetch(`signal-logs/${SCANNER_USER_ID}/shadow/${n}`);
         const p = f && decodeContent(f.content);
-        const rows = (p?.signals || []).filter((s) => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
-        signals.push(...rows); added += rows.length;
+        shadowRows.push(...(p?.signals || []).filter((s) => s.status === 'TARGET_HIT' || s.status === 'SL_HIT'));
       }
-      console.log(`  Included ${added} resolved shadow signals in training`);
+      if (shadowMode === '1' || shadowRows.length >= SHADOW_AUTO_MIN) {
+        signals.push(...shadowRows);
+        console.log(`  Included ${shadowRows.length} resolved shadow signals in training (mode=${shadowMode})`);
+      } else {
+        console.log(`  Shadow signals: ${shadowRows.length}/${SHADOW_AUTO_MIN} resolved — not included yet`);
+      }
     }
   }
   return signals;

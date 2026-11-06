@@ -9,6 +9,7 @@
 // signal-logs/ (same pattern as scripts/train-ai-model.mjs) — no per-user
 // secret needed.
 import { evaluateSignalExit } from '../src/services/tradeManagement.js';
+import { snapshotChains } from './snapshotChains.mjs';
 
 const GH_API = 'https://api.github.com';
 const gh = { token: process.env.GH_TOKEN, user: process.env.GH_USER, repo: process.env.GH_REPO };
@@ -223,6 +224,10 @@ async function main() {
     try { await processUser(uid, today, now); await processShadow(uid, today, now); }
     catch (e) { console.error(`[${uid}] processUser failed: ${e.message} — continuing with other users`); }
   }
+  // Record option-chain snapshots (OI / IV / bid-ask) for future model training.
+  // Isolated: a failure here must never affect signal monitoring.
+  try { await snapshotChains({ gh, upstoxToken, today, nowStr: now }); }
+  catch (e) { console.warn('chain snapshot failed (ignored): ' + e.message); }
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
