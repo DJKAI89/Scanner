@@ -6,7 +6,8 @@ on:
   # a fallback. The reliable cadence comes from an external scheduler calling the
   # workflow_dispatch API every 15 minutes — see the setup notes.
   schedule:
-    - cron: '*/15 3-10 * * 1-5'
+    - cron: '*/15 10-14 * * 1-5'
+      timezone: "Asia/Kolkata"
   workflow_dispatch: {}
 
 # Only one monitor run at a time. If an external trigger fires while a run is still
