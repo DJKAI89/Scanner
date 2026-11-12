@@ -24,6 +24,6 @@ jobs:
           GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
           GH_USER: ${{ secrets.AI_GH_USER }}
           GH_REPO: ${{ secrets.AI_GH_REPO }}
-          AI_LOOKBACK_DAYS: ${{ vars.AI_LOOKBACK_DAYS || '90' }}
+          AI_LOOKBACK_DAYS: ${{ vars.AI_LOOKBACK_DAYS || 'all' }}
           NODE_OPTIONS: "--max-old-space-size=2048"
         run: npm run ai:train
