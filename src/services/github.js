@@ -446,6 +446,8 @@ export function buildStockSignal(p, vixVal) {
     compositeScore: p.compositeScore || null,
     momentumScore:  p.momentumScore  ?? null,
     mlProbability:  p.mlProbability ?? null,
+    mtfGrade: p.mtf?.grade ?? null, mtfScore: p.mtf?.score ?? null, mtfDirs: p.mtf?.dirs ?? null,
+    mtfRoomATR: p.mtf?.roomATR ?? null, mtfSupport: p.mtf?.support ?? null, mtfResistance: p.mtf?.resistance ?? null,
     mlAdj:          p.mlAdj ?? null,
     // Persisted so training sees the same values live scoring does, and so the
     // Analysis page's regime-shift / which-model sections have data to read.
@@ -516,6 +518,8 @@ export function buildOptionSignal(p, vixVal) {
     compositeScore: p.compositeScore  ?? null,
     momentumScore:  p.momentumScore   ?? null,
     mlProbability:  p.mlProbability ?? null,
+    mtfGrade: p.mtf?.grade ?? null, mtfScore: p.mtf?.score ?? null, mtfDirs: p.mtf?.dirs ?? null,
+    mtfRoomATR: p.mtf?.roomATR ?? null, mtfSupport: p.mtf?.support ?? null, mtfResistance: p.mtf?.resistance ?? null,
     mlAdj:          p.mlAdj ?? null,
     // oi was on every pick but never logged, so estimateCostPct (mlRanking.js) saw
     // oi=0 for every closed option and charged the thin-liquidity cost to all of

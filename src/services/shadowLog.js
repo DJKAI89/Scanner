@@ -7,7 +7,12 @@ const MAX_BUF = 200;
 
 export function pushShadow(pick, reason, type) {
   if (!pick) return;
-  if (type === 'OPTION' && pick.action === 'WATCH') return;
+  if (type === 'OPTION' && pick.action === 'WATCH') {
+    // A pick the multi-timeframe veto turned into WATCH is kept, with its original action restored
+    // so the monitor can track the outcome it would have had.
+    if (pick.mtf?.veto && pick.mtfVetoedAction) pick = { ...pick, action: pick.mtfVetoedAction };
+    else return;
+  }
   if (type === 'STOCK' && (pick.rec === 'WATCH' || pick.rec === 'AVOID')) return;
   if (_buf.length >= MAX_BUF) _buf.shift();
   _buf.push({ p: pick, reason: reason || 'unknown', type });

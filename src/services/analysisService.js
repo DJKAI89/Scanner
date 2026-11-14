@@ -227,7 +227,8 @@ export async function loadAnalysisData(ctx) {
   let shadow = null;
   if (shadowAll.length) {
     const reasons = {};
-    shadowClosed.forEach(s => { (reasons[s.shadowReason || 'unknown'] ||= []).push(s); });
+    // 'mtf_avoid: <why>' / 'mtf_conf: ...' carry a free-text suffix; group by the label before ':'.
+    shadowClosed.forEach(s => { (reasons[String(s.shadowReason || 'unknown').split(':')[0]] ||= []).push(s); });
     shadow = {
       logged: shadowAll.length,
       closed: shadowClosed.length,
@@ -302,6 +303,25 @@ export async function loadAnalysisData(ctx) {
     }
   }
 
+  // ── Multi-timeframe grade: do A-grade signals really beat B / C / ungraded? ──
+  let mtfCheck = null;
+  {
+    const graded = dedupeIdeas(closed.filter(s => s.mtfGrade));
+    if (graded.length >= 10) {
+      const rows = ['A', 'B', 'C'].map(g => {
+        const part = graded.filter(s => s.mtfGrade === g);
+        return { grade: g, n: part.length,
+          wr: part.length ? Math.round(part.filter(signalWin).length / part.length * 100) : null,
+          net: part.length ? mean(part.map(netOf)) : null };
+      }).filter(r => r.n > 0);
+      const ungraded = dedupeIdeas(closed.filter(s => !s.mtfGrade));
+      mtfCheck = {
+        graded: graded.length, rows,
+        ungraded: { n: ungraded.length, wr: ungraded.length ? Math.round(ungraded.filter(signalWin).length / ungraded.length * 100) : null, net: ungraded.length ? mean(ungraded.map(netOf)) : null },
+      };
+    }
+  }
+
   // Alerts
   const alerts = [];
   if (overall.r < 35) alerts.push({ level: 'danger', msg: `Win rate ${overall.r}% — signals losing systematically. Raise min confidence to 75%+.` });
@@ -322,6 +342,6 @@ export async function loadAnalysisData(ctx) {
     sigTypes, confBands, timeBreak, dailyRows,
     csRows, scoredSignals, alerts, mlBacktest,
     netAdjusted, liquidityBands, regimeShiftBands, modelAttribution, rrRealized,
-    shadow, journal, mlCheck,
+    shadow, journal, mlCheck, mtfCheck,
   };
 }

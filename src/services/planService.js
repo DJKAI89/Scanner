@@ -9,6 +9,7 @@ import { computeCtxFromCandles } from './technical';
 import { INDEX_OPTS } from '../constants/config';
 import { ghReadDay, ghReadMultipleDays, buildOptionSignal, logPlanSignals } from './github';
 import { marketView, intradayState, buildDayPlan, setupScorecard, PLAN_DEFAULTS } from './planEngine';
+import { getMtf } from './mtf';
 
 const PLAN_INDICES = ['NIFTY', 'BANKNIFTY', 'SENSEX'];
 const VIX_KEY = 'NSE_INDEX|India VIX';
@@ -58,6 +59,7 @@ export async function loadPlanInputs({ token, cfg, onTokenExpired, lg = () => {}
         _daily[i.key] = { date, candles };
       }
       const intraday = await fetchIntraday(i.key, '5minute', token, onTokenExpired).catch(() => []);
+      const mtf = await getMtf({ key: i.key, price: spot, token, onTokenExpired, daily: _daily[i.key].candles, m5: intraday, lg }).catch(() => null);
 
       setProgress(`${i.name}: option chain...`);
       let cached = _chain[i.key];
@@ -76,7 +78,7 @@ export async function loadPlanInputs({ token, cfg, onTokenExpired, lg = () => {}
       const dte = Math.max(0, Math.round((new Date(cached.expiry + 'T15:30:00+05:30') - Date.now()) / 86400000));
       perIndex.push({
         name: i.name, key: i.key, lot: i.lot, date, spot, dayChg,
-        daily: _daily[i.key].candles, intradayRaw: intraday,
+        daily: _daily[i.key].candles, intradayRaw: intraday, mtf,
         rows: cached.chain.rows, expiry: cached.expiry, dte, summary,
       });
     } catch (e) { lg(`Plan: ${i.name} failed: ${e.message}`, 'w'); }
@@ -91,7 +93,7 @@ export function assemblePlan(inputs, cfg, tradedToday = []) {
   const limits = planLimitsFromCfg(cfg);
   const perIndex = inputs.perIndex.map((ix) => {
     const intra = intradayState(ix.intradayRaw, min, { ...PLAN_DEFAULTS, ...limits });
-    const view = marketView({ daily: ix.daily, intra, summary: ix.summary, vix, dayChgPct: ix.dayChg, nowMin: min, cfg: { ...PLAN_DEFAULTS, ...limits } });
+    const view = marketView({ daily: ix.daily, intra, summary: ix.summary, vix, dayChgPct: ix.dayChg, nowMin: min, cfg: { ...PLAN_DEFAULTS, ...limits }, mtf: ix.mtf });
     return { ...ix, intra, view };
   });
   const plan = buildDayPlan({ perIndex, cfg, limits, tradedToday });

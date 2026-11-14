@@ -17,6 +17,7 @@ import {
 } from './technical.js';
 import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
 import { pushShadow, drainShadow } from './shadowLog.js';
+import { applyMtfStage } from './mtf.js';
 import { getIST, getISTDate, sleep } from '../utils/marketTime.js';
 import { fetchIntraday } from './api.js';
 
@@ -432,35 +433,15 @@ export async function runPicksScan(ctx, callbacks) {
 
   results.sort((a,b)=>b.conf-a.conf);
 
-  // ── MTF 30-min boost for top 5 picks (exact HTML port) ──
-  const today2=getISTDate();
-  const from7d=new Date(Date.now()-10*864e5).toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
-  const top5=results.slice(0,5);
-  await Promise.allSettled(top5.map(async(p,idx)=>{
-    await sleep(idx*300);
-    try{
-      const c30=await fetchCandles(p.key,from7d,today2,'30minute',token,onTokenExpired);
-      if(c30.length<8) return;
-      const cl30=c30.map(c=>+c[4]).reverse();
-      const macd30=calcMACD(cl30),adx30=calcADX(c30),rsi30=calcRSI(cl30);
-      const trend30=cl30[cl30.length-1]>cl30[Math.max(0,cl30.length-8)]?'UP':'DOWN';
-      let mtfBoost=0;
-      const isBuyRec=p.rec==='BUY'||p.rec==='STRONG BUY';
-      if(isBuyRec){
-        if(trend30==='UP')            mtfBoost+=4;
-        if(macd30?.bullish)           mtfBoost+=3;
-        if(macd30?.bullCross)         mtfBoost+=4;
-        if(adx30?.bullTrend)          mtfBoost+=3;
-        if(rsi30&&rsi30>=45&&rsi30<=72) mtfBoost+=2;
-      }
-      if(mtfBoost>0){
-        p.conf=Math.min(99,p.conf+mtfBoost);
-        p.mtfBoost=mtfBoost;
-        p.mtfNote=`30min:${trend30}${macd30?.bullCross?' MACD✕':''}${adx30?.bullTrend?' ADX':''}`;
-        lg(`MTF ${p.s}: +${mtfBoost}pts (${p.mtfNote})`,'o');
-      }
-    }catch(e){ lg('MTF '+p.s+': '+e.message,'w'); }
-  }));
+  // -- Multi-timeframe check (top-down), replaces the old 30-min-only boost --
+  // Weekly + daily decide direction and room to run, 60-min shows pullback vs rejection,
+  // 15-min times the entry. Higher timeframes outrank the entry timeframe: a BUY against
+  // the daily/weekly trend (or pressed under resistance) is dropped to the shadow log
+  // instead of shown. Missing data never blocks (getMtf returns null -> pick unchanged).
+  await applyMtfStage(results, {
+    token, onTokenExpired, lg, minConf: cfg.minStockConf || 50, topN: 10,
+    setProgress: setPickProgress, onReject: (p, reason) => pushShadow(p, reason, 'STOCK'),
+  });
   // Re-sort after MTF boost may change conf, cap at 12 like HTML
   results.sort((a,b)=>b.conf-a.conf);
   const cappedResults = results.slice(0, 12);

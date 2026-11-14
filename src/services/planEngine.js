@@ -10,6 +10,7 @@
 
 import { toChronological } from './technical.js';
 import { calculatePositionSize } from './tradeManagement.js';
+import { gradeMtf, nearestLevels } from './mtf.js';
 
 export const PLAN_DEFAULTS = {
   maxTrades: 3,
@@ -94,15 +95,27 @@ export function intradayState(candlesIn, nowMin, cfg = PLAN_DEFAULTS) {
 }
 
 // ── 1c. Market view ──────────────────────────────────────────
-export function marketView({ daily, intra, summary, vix, dayChgPct = 0, nowMin, cfg = PLAN_DEFAULTS }) {
+export function marketView({ daily, intra, summary, vix, dayChgPct = 0, nowMin, cfg = PLAN_DEFAULTS, mtf = null }) {
   const reasons = [];
   const blockers = [];
   let score = 0;
 
-  const dt = dailyTrend(daily);
-  reasons.push(...dt.reasons);
-  if (dt.ok) score += dt.dir * 2;
-  else blockers.push(dt.reasons[0]);
+  // Higher-timeframe direction. With the multi-timeframe context (weekly/daily/60-min) it is the
+  // full top-down read; without it, fall back to the daily EMA trend alone.
+  let dt;
+  if (mtf?.tf && (mtf.tf.w.ok || mtf.tf.d.ok)) {
+    const { w, d, h1 } = mtf.tf;
+    const name = (x) => (x > 0 ? 'up' : x < 0 ? 'down' : 'mixed');
+    if (w.ok) { score += w.dir * 1.5; reasons.push(`Weekly trend ${name(w.dir)}`); }
+    if (d.ok) { score += d.dir * 2; reasons.push(`Daily trend ${name(d.dir)}`); }
+    if (h1.ok) { score += h1.dir * 1; reasons.push(`60-min trend ${name(h1.dir)}`); }
+    dt = { ok: true, dir: d.ok ? d.dir : w.dir };
+  } else {
+    dt = dailyTrend(daily);
+    reasons.push(...dt.reasons);
+    if (dt.ok) score += dt.dir * 2;
+    else blockers.push(dt.reasons[0]);
+  }
 
   if (!intra?.ok) blockers.push('Not enough intraday candles yet');
   else {
@@ -137,8 +150,21 @@ export function marketView({ daily, intra, summary, vix, dayChgPct = 0, nowMin, 
       blockers.push('Intraday direction disagrees with the daily trend');
     }
   }
+  // Final top-down check on the chosen direction: higher timeframes outrank everything else here.
+  let mtfGrade = null, mtfLevels = null;
+  if (mtf && bias !== 'NO_TRADE') {
+    const g = gradeMtf(mtf, bias === 'BULLISH' ? 1 : -1);
+    if (g) {
+      mtfGrade = g;
+      if (g.veto) { blockers.push(g.why); bias = 'NO_TRADE'; }
+    }
+  }
+  if (mtf?.levels) {
+    const near = nearestLevels(mtf.levels, mtf.price);
+    mtfLevels = { resistance: near.resistance, support: near.support };
+  }
   return {
-    bias, score: r2(score), reasons, blockers, vix,
+    bias, score: r2(score), reasons, blockers, vix, mtfGrade, mtfLevels,
     levels: summary ? { support: summary.putWall, resistance: summary.callWall, maxPain: summary.maxPain } : {},
   };
 }
@@ -289,6 +315,21 @@ export function buildDayPlan({ perIndex, cfg, limits = {}, tradedToday = [], pla
       const plan = { id: `plan-${ix.date}-${ix.name}-${s.setup}`, und: ix.name, setupLabel: SETUP_LABELS[s.setup], ...s, view: ix.view?.bias };
       if (s.state === 'INVALIDATED' || s.state === 'MISSED') { plan.status = 'DROPPED'; plan.skipReason = s.state === 'MISSED' ? s.triggerText : 'Invalidated before the trigger'; all.push(plan); continue; }
       if (s.state === 'SKIPPED') { plan.status = 'SKIPPED'; all.push(plan); continue; }
+      // Room check: the next higher-timeframe level must leave at least 1R beyond the entry, and
+      // T2 is never planned past it.
+      const opp = s.dir === 1 ? ix.view?.mtfLevels?.resistance : ix.view?.mtfLevels?.support;
+      if (opp?.price) {
+        const room = s.dir * (opp.price - s.entryLevel);
+        if (room < 1.0 * s.riskIdx) {
+          plan.status = 'SKIPPED';
+          plan.skipReason = `Next ${s.dir === 1 ? 'resistance' : 'support'} ${Math.round(opp.price).toLocaleString('en-IN')} (${opp.src}) leaves less than 1R of room`;
+          all.push(plan); continue;
+        }
+        s.t2Level = r2(capByWall(s.dir, s.t2Level, opp.price, s.entryLevel));
+        if (s.dir * (s.t2Level - s.t1Level) <= 0) s.t1Level = r2(s.entryLevel + s.dir * 0.8 * Math.abs(s.t2Level - s.entryLevel));
+        Object.assign(plan, { t1Level: s.t1Level, t2Level: s.t2Level });
+      }
+      plan.mtfGrade = ix.view?.mtfGrade?.grade || null;
       const c = pickContract({ rows: ix.rows, spot: ix.spot, plan: s, lot: ix.lot, cfg, expiry: ix.expiry, dte: ix.dte, planCfg: L });
       plan.contract = c;
       if (!c.ok) { plan.status = 'SKIPPED'; plan.skipReason = c.skipReason; }

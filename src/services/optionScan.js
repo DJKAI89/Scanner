@@ -8,6 +8,7 @@ import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '..
 import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, buildOptionConfluence, buildOptionIndSnap, candleOrder, interpretFIIDII, computeVixPercentile, vixRegimeShiftScore } from './technical.js';
 import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
 import { pushShadow, drainShadow } from './shadowLog.js';
+import { getMtf, gradeMtf } from './mtf.js';
 import { logSignals, logShadowSignals, buildOptionSignal } from './github.js';
 
 export const VIX_KEY = 'NSE_INDEX|India VIX';
@@ -132,6 +133,9 @@ function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, ad
     // only ever tightens past Settings' Max Capital, never loosens it) all
     // live there now instead of being hand-rewritten per pipeline.
     {
+      // Higher timeframes against the trade: no signal. Kept in the shadow log so the
+      // veto's value can be measured (do rejected trades really lose more?).
+      if (p.mtf?.veto) { pushShadow(p, 'mtf_avoid: ' + (p.mtf.why || 'higher timeframes against'), 'OPTION'); return false; }
       const gate = evaluateSignalGate({
         type: 'OPTION', aiBlock: p.aiBlock, conf: p.confidence, rr: p.rr,
         amtRequired: p.amtRequired, mlModels, cfg, sigForThresholds: p,
@@ -191,6 +195,11 @@ export async function scanStockOptions({ inst, spot, spotChg, deps, env, expirie
   stkCtx.spot = spot; stkCtx.dayChange = spotChg;
   stkCtx.bullish = stkCtx.compositeScore > 0;
   stkCtx.neutral = Math.abs(stkCtx.compositeScore || 0) < 0.5;
+  // Multi-timeframe view of the underlying stock (daily candles already fetched above are reused).
+  try {
+    const mtfCtx = await getMtf({ key: inst.key, price: spot, token: accessToken, onTokenExpired, daily: stkDailyCandles, m5: stkCandles, lg });
+    stkCtx.mtf = mtfCtx ? { bull: gradeMtf(mtfCtx, 1), bear: gradeMtf(mtfCtx, -1) } : null;
+  } catch (_) { stkCtx.mtf = null; }
 
   let allExpiries = preExpiries;
   if (!allExpiries) {
@@ -352,6 +361,13 @@ export async function runOptionsScan(ctx, caches, callbacks) {
 
     // Enrich marketCtx with PCR trend + IV trend
     const richCtx = { ...marketCtx, pcr, pcrTrend, ivTrend, avgIV, prevAvgIV };
+    // Multi-timeframe view of the index (weekly/daily/60-min/15-min + today's 5-min). scanChain
+    // uses it to veto trades against the higher timeframes and to grade the rest.
+    try {
+      const mtfCtx = await getMtf({ key: idx.key, price: spot, token: accessToken, onTokenExpired, m5: idxCandles[idx.key], lg });
+      richCtx.mtf = mtfCtx ? { bull: gradeMtf(mtfCtx, 1), bear: gradeMtf(mtfCtx, -1) } : null;
+      if (richCtx.mtf) lg(`MTF ${idx.name}: long ${richCtx.mtf.bull.grade} / short ${richCtx.mtf.bear.grade} (${richCtx.mtf.bull.dirs})`, 'o');
+    } catch (e) { lg(`MTF ${idx.name}: ${e.message}`, 'w'); }
 
     // ATM strike
     const atm  = Math.round(spot / idx.step) * idx.step;

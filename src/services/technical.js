@@ -1737,6 +1737,18 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       else                        { if (absD >= delta_thresh) action = 'BUY'; }
       if (iv >= iv_thresh && oiChg <= -oi_thresh) action = 'SELL';
 
+      // Multi-timeframe gate (marketCtx.mtf is set by the scanner from weekly/daily/60-min/15-min
+      // history of the UNDERLYING). View of the trade on the underlying: BUY CE / SELL PE = bullish,
+      // BUY PE / SELL CE = bearish. Higher timeframes against the view = no trade; otherwise the
+      // grade nudges confidence. No mtf data = behaves exactly as before.
+      let mtfG = null, mtfVetoedAction = null;
+      if (marketCtx?.mtf && action !== 'WATCH') {
+        const view = (action === 'BUY') === isCE ? 1 : -1;
+        mtfG = view > 0 ? marketCtx.mtf.bull : marketCtx.mtf.bear;
+        if (mtfG?.veto) { mtfVetoedAction = action; action = 'WATCH'; }
+        else if (mtfG) confidence = Math.max(1, Math.min(99, confidence + mtfG.adj));
+      }
+
       // SELL: flip SL/Target
       if (action === 'SELL') {
         const riskPct   = entry > 0 ? (entry - sl)  / entry : 0.25;
@@ -1782,6 +1794,8 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
         confidence, atm: sp === atm, spot, expiry, und: name,
         lot, amtRequired, amtIsMargin: action === 'SELL', maxLoss, maxProfit,
         trendAligned, trendDir: momentumDir, compositeScore, slTgtMethod,
+        mtfVetoedAction,
+        mtf: mtfG ? { grade: mtfG.grade, score: mtfG.score, dirs: mtfG.dirs, support: mtfG.support, resistance: mtfG.resistance, roomATR: mtfG.roomATR, veto: mtfG.veto, why: mtfG.why, partial: mtfG.partial } : null,
         _dte: _optAdj.dte,
         stockPCR: stockPCR || null, vix: vix || 15, priceZone,
         pdh: pdh || null, pdl: pdl || null,
