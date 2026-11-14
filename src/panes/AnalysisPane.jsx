@@ -860,6 +860,24 @@ export default function AnalysisPane() {
                   </div>
                 </Section>
               )}
+              {d.mtfCheck && (
+                <Section title="Multi-Timeframe Grade" accent="#0ea5e9" defaultOpen
+                  summary={`${d.mtfCheck.graded} graded ideas`}>
+                  {d.mtfCheck.rows.map((r, i) => (
+                    <div key={r.grade} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, padding: '6px 0', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
+                      <span style={{ fontWeight: 800, color: '#0f172a' }}>Grade {r.grade}</span>
+                      <span style={{ color: '#64748b' }}>n={r.n} · {r.wr}% win · net <b style={{ color: (r.net ?? 0) >= 0 ? '#16a34a' : '#dc2626' }}>{r.net ?? '—'}%</b></span>
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, padding: '6px 0', borderTop: '1px solid #f1f5f9' }}>
+                    <span style={{ fontWeight: 800, color: '#94a3b8' }}>Before grading</span>
+                    <span style={{ color: '#94a3b8' }}>n={d.mtfCheck.ungraded.n} · {d.mtfCheck.ungraded.wr ?? '—'}% win · net {d.mtfCheck.ungraded.net ?? '—'}%</span>
+                  </div>
+                  <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 8, lineHeight: 1.5 }}>
+                    Every signal now carries the grade from weekly, daily, 60-min and 15-min together. A should beat B, and B beat C. Trades graded AVOID are not shown: see "mtf_avoid" in Filter Check for how they would have done.
+                  </div>
+                </Section>
+              )}
               {d.shadow && (
                 <Section title="Filter Check — Rejected Picks" accent="#f59e0b" defaultOpen
                   summary={d.shadow.closed ? `rejected ${d.shadow.shadowWR}% vs accepted ${d.shadow.acceptedWR}%` : `${d.shadow.logged} tracking`}>

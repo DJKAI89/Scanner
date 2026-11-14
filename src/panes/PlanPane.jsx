@@ -55,7 +55,7 @@ function TradeCard({ p }) {
         <div style={{ fontSize: 15, fontWeight: 900, color: '#0f172a' }}>{p.und} {c.strike} {p.side}</div>
         <Pill s={st} />
       </div>
-      <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>Setup: {p.setupLabel}</div>
+      <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>Setup: {p.setupLabel}{p.mtfGrade ? ` · timeframe grade ${p.mtfGrade}` : ''}</div>
       <div style={{ fontSize: 11, color: '#0f172a', marginTop: 8, lineHeight: 1.5 }}>{p.triggerText}</div>
       <KV items={[
         [p.state === 'TRIGGERED' ? 'ENTRY NOW' : 'ENTRY LEVEL', `${p.und} ${lvl(p.entryLevel)}`],
@@ -144,6 +144,13 @@ export default function PlanPane() {
             ['MAX PAIN', head.levels.maxPain ? lvl(head.levels.maxPain) : '—'],
             ['INDIA VIX', data.vix.toFixed(1)],
           ]} />
+          {(head.mtfGrade || head.mtfLevels) && (
+            <div style={{ fontSize: 11, color: '#475569', marginTop: 10, lineHeight: 1.6 }}>
+              {head.mtfGrade && <div><b>Timeframes:</b> grade {head.mtfGrade.grade} ({head.mtfGrade.dirs}){head.mtfGrade.partial ? ' · some timeframes unavailable' : ''}</div>}
+              {head.mtfLevels?.resistance && <div><b>Next resistance:</b> {lvl(head.mtfLevels.resistance.price)} ({head.mtfLevels.resistance.src})</div>}
+              {head.mtfLevels?.support && <div><b>Next support:</b> {lvl(head.mtfLevels.support.price)} ({head.mtfLevels.support.src})</div>}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
             {data.perIndex.map((ix) => {
               const b = BIAS[ix.view.bias] || BIAS.NO_TRADE;
