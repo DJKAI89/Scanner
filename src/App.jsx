@@ -24,7 +24,7 @@ const SettingsPane = lazy(() => import('./panes/SettingsPane'));
 const PANES = {
   stocks: StocksPane,
   options: OptionsPane,
-  //plan: PlanPane,
+  plan: PlanPane,
   optAnalysis: OptionAnalysisPane,
   portfolio: PortfolioPane,
   lookup: LookupPane,
