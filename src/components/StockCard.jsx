@@ -63,7 +63,8 @@ export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
   if (p.aboveVWAP===true && p.vwap>0) tags.push({ label: `▲ VWAP ₹${fmt(p.vwap,0)}`, tone: 'green' });
   if (p.aboveVWAP===false && p.vwap>0) tags.push({ label: `▼ VWAP ₹${fmt(p.vwap,0)}`, tone: 'red' });
   if (p.vwapBands?.nearLowerBand) tags.push({ label: '📊 VWAP Zone', tone: 'amber' });
-  if (p.mtfBoost>0) tags.push({ label: `⚡ MTF +${p.mtfBoost}pts`, tone: 'blue' });
+  if (p.mtf) tags.push({ label: `MTF ${p.mtf.grade} · ${p.mtf.dirs}${p.mtf.roomATR != null ? ` · ${p.mtf.roomATR} ATR room` : ''}`, tone: p.mtf.grade === 'A' ? 'green' : p.mtf.grade === 'B' ? 'blue' : 'amber' });
+  else if (p.mtfBoost>0) tags.push({ label: `⚡ MTF +${p.mtfBoost}pts`, tone: 'blue' });
   // intraday enrichment
   if (p.stockVWAP) tags.push({ label: `${p.stockVWAP.aboveVWAP?'↑':'↓'} 5m VWAP`, tone: p.stockVWAP.aboveVWAP ? 'green' : 'red' });
   if (p.intraVolRatio >= 2) tags.push({ label: `🔥 Vol ${p.intraVolRatio}× intraday`, tone: 'purple' });
