@@ -1,5 +1,6 @@
 // ── GitHub API service ── exact port from HTML ──
 
+import { optionTrigger } from './triggers.js';
 import { splitModelForStorage, mergeModelFromStorage } from './mlRanking.js';
 
 
@@ -447,6 +448,7 @@ export function buildStockSignal(p, vixVal) {
     momentumScore:  p.momentumScore  ?? null,
     mlProbability:  p.mlProbability ?? null,
     mtfGrade: p.mtf?.grade ?? null, mtfScore: p.mtf?.score ?? null, mtfDirs: p.mtf?.dirs ?? null,
+    trigger: p.trigger ?? null, turnoverCr: p.turnoverCr ?? null, ema50: p.ema50 ?? null, ema200: p.ema200 ?? null, hi52: p.hi52 ?? null, lo52: p.lo52 ?? null,
     mtfRoomATR: p.mtf?.roomATR ?? null, mtfSupport: p.mtf?.support ?? null, mtfResistance: p.mtf?.resistance ?? null,
     mlAdj:          p.mlAdj ?? null,
     // Persisted so training sees the same values live scoring does, and so the
@@ -519,6 +521,7 @@ export function buildOptionSignal(p, vixVal) {
     momentumScore:  p.momentumScore   ?? null,
     mlProbability:  p.mlProbability ?? null,
     mtfGrade: p.mtf?.grade ?? null, mtfScore: p.mtf?.score ?? null, mtfDirs: p.mtf?.dirs ?? null,
+    trigger: p.trigger ?? optionTrigger(p), spreadPct: p.spreadPct ?? null, bid: p.bid ?? null, ask: p.ask ?? null,
     mtfRoomATR: p.mtf?.roomATR ?? null, mtfSupport: p.mtf?.support ?? null, mtfResistance: p.mtf?.resistance ?? null,
     mlAdj:          p.mlAdj ?? null,
     // oi was on every pick but never logged, so estimateCostPct (mlRanking.js) saw
@@ -619,7 +622,23 @@ export async function logSignals(gh, newSignals, vixVal, lg = () => {}) {
     const istDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     const { signals, sha } = await ghReadDay(gh, istDate);
     let added = 0, skipped = 0;
+    // One idea at a time: no new signal for an underlying+direction while one is still OPEN, and a
+    // cooldown after a stop-out. Previously several strikes / re-scans of the same view were logged as
+    // separate signals (10 copies of one wrong call = 10 "losses").
+    const nowMin = (() => { const p = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false }).split(':'); return (+p[0]) * 60 + (+p[1]); })();
+    const COOLDOWN_MIN = 45;
+    const view = (s) => (s.type === 'STOCK' ? (s.signal === 'SELL' ? -1 : 1) : (((s.action || s.signal) === 'BUY') === ((s.optType || s.type) === 'CE') ? 1 : -1));
+    let skippedIdea = 0;
     for (const ns of newSignals) {
+      const nv = view(ns);
+      const sameIdea = signals.filter(s => s.date === istDate && !s.shadow && s.stock === ns.stock && s.type === ns.type && view(s) === nv);
+      const hasOpen = sameIdea.some(s => s.status === 'OPEN');
+      const cooling = sameIdea.some(s => {
+        if (s.status !== 'SL_HIT' || !s.exitTime) return false;
+        const p = String(s.exitTime).split(':');
+        return nowMin - ((+p[0]) * 60 + (+p[1])) < COOLDOWN_MIN;
+      });
+      if (hasOpen || cooling) { skippedIdea++; continue; }
       const existing = signals.filter(s =>
         s.date === istDate && s.status === 'OPEN' &&
         (s.type === 'STOCK'
@@ -630,6 +649,7 @@ export async function logSignals(gh, newSignals, vixVal, lg = () => {}) {
       signals.push(ns);
       added++;
     }
+    if (skippedIdea) lg(`Signal log: ${skippedIdea} skipped (same idea already open / cooling down)`, 'o');
     if (!added) { lg(`Signal log: ${skipped} skipped (no change)`, 'o'); return; }
     const newSha = await ghWriteDay(gh, signals, sha, istDate);
     if (newSha) {

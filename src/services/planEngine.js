@@ -269,10 +269,11 @@ export function pickContract({ rows, spot, plan, lot, cfg, expiry, dte, planCfg 
   const minOi = cfg?.minOptOI ?? 500;
   const cands = (rows || [])
     .map((r) => ({ strike: r.strike, cell: r[side] }))
-    .filter((c) => c.cell && c.cell.ltp >= 5 && (c.cell.oi || 0) >= minOi && Math.abs(c.cell.delta || 0) >= 0.3 && Math.abs(c.cell.delta || 0) <= 0.7)
+    .filter((c) => c.cell && c.cell.ltp >= 5 && (c.cell.oi || 0) >= minOi && Math.abs(c.cell.delta || 0) >= 0.3 && Math.abs(c.cell.delta || 0) <= 0.7
+      && !(c.cell.spreadPct != null && c.cell.spreadPct > (cfg?.maxSpreadPct ?? 2.5)))
     .sort((a, b) => Math.abs(Math.abs(a.cell.delta) - 0.5) - Math.abs(Math.abs(b.cell.delta) - 0.5));
   const best = cands[0];
-  if (!best) return { ok: false, skipReason: 'No liquid contract with delta 0.3–0.7' };
+  if (!best) return { ok: false, skipReason: `No liquid contract (delta 0.3–0.7, spread under ${cfg?.maxSpreadPct ?? 2.5}%)` };
   const { cell } = best;
   const d = Math.abs(cell.delta);
   const ltp = cell.ltp;
@@ -292,7 +293,7 @@ export function pickContract({ rows, spot, plan, lot, cfg, expiry, dte, planCfg 
   const budget = (cfg?.portSize || 0) * (cfg?.riskPct || 0) / 100;
   const base = {
     strike: best.strike, optType: side, expiry, dte, instrKey: cell.instrKey, ltp: r2(ltp), delta: r2(cell.delta),
-    iv: r2(cell.iv || 0), theta: r2(cell.theta || 0), oi: cell.oi || 0, lot,
+    iv: r2(cell.iv || 0), theta: r2(cell.theta || 0), oi: cell.oi || 0, spreadPct: cell.spreadPct ?? null, lot,
     stop: r2(stop), t1: r2(t1), t2: r2(t2), rr: r2((t1 - ltp) / risk),
     oneLotRisk: Math.round(risk * lot), riskBudget: Math.round(budget),
     sizing,

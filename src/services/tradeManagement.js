@@ -205,14 +205,15 @@ export function evaluateSignalExit(sig, ltp, istDate, istTime, cfgIn = {}) {
 // ── Risk-based position sizing ──────────────────────────────
 // Never forces a trade bigger than the risk budget: if even ONE lot would risk more
 // than maxRiskPerTradePct, lots=0 and riskTooHigh=true (skip it or accept it knowingly).
-export function calculatePositionSize({ accountCapital, maxRiskPerTradePct, entryPrice, stopLossPrice, lotSize = 1, type = 'STOCK' }) {
+export function calculatePositionSize({ accountCapital, maxRiskPerTradePct, entryPrice, stopLossPrice, lotSize = 1, type = 'STOCK', maxCapital = 0 }) {
   const empty = { shares: 0, lots: 0, totalCapitalAllocated: 0, maxLossRupees: 0, riskPct: 0, riskTooHigh: false };
   if (!(accountCapital > 0) || !(maxRiskPerTradePct > 0)) return empty;
   if (!(entryPrice > 0) || !(stopLossPrice > 0)) return empty;
   const riskPerUnit = Math.abs(entryPrice - stopLossPrice);
   if (!(riskPerUnit > 0)) return empty;
   const riskBudget = accountCapital * maxRiskPerTradePct / 100;
-  const units = Math.floor(riskBudget / riskPerUnit);
+  let units = Math.floor(riskBudget / riskPerUnit);
+  if (maxCapital > 0) units = Math.min(units, Math.floor(maxCapital / entryPrice));   // never deploy more than the cap
   const step = type === 'OPTION' ? Math.max(1, lotSize) : 1;
   const lots = Math.floor(units / step);
   const shares = lots * step;

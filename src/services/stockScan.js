@@ -13,11 +13,11 @@ import {
   countIndicatorsEx, getRec, autoSLTarget, calcEntryTrigger, detectReversal,
   calcMACD, isNearSupport, calcRSIDivergence, getSector, calcConfidence, calcVWAP,
   calcVWAPBands, applyCalibration, applyAdaptWeights, calcEMA, calcIVPercentile,
-  applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment, computeVixPercentile, vixRegimeShiftScore,
-} from './technical.js';
+  applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment, computeVixPercentile, vixRegimeShiftScore, calcRecentCross } from './technical.js';
 import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
 import { pushShadow, drainShadow } from './shadowLog.js';
 import { applyMtfStage } from './mtf.js';
+import { stockTrigger } from './triggers.js';
 import { getIST, getISTDate, sleep } from '../utils/marketTime.js';
 import { fetchIntraday } from './api.js';
 
@@ -192,7 +192,11 @@ export async function runPicksScan(ctx, callbacks) {
   // Step 4 — Candles for TOP 20 only (exact HTML: staggered batches of 3, 220ms apart)
   setPickProgress('Step 4/5: Fetching candle history (staggered)...');
   const today  = getISTDate();
-  const from60 = new Date(Date.now()-65*86400000).toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
+  // ~1 year of daily candles (was 65 days = only ~45 trading days, so EMA50/EMA200, the 52-week range and
+  // golden/death crosses could never be computed for the Picks). Existing indicators keep their old
+  // short window below so their behaviour is unchanged; only the long-term ones use the full history.
+  const from60 = new Date(Date.now()-380*86400000).toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
+  const SHORT_N = 45;
   const top20  = byVol.slice(0, Math.min(20, byVol.length));
   const tech   = {};
   let candleOK = 0;
@@ -210,16 +214,22 @@ export async function runPicksScan(ctx, callbacks) {
       if (res.status!=='fulfilled') { lg('Candle batch error: '+res.reason,'w'); continue; }
       const {inst, candles} = res.value;
       if (candles.length>=5) {
-        const closes   = candles.map(c=>+c[4]).reverse();
-        const rc       = candles.slice(0,20);
+        const candlesLong = candles;                           // newest-first, up to ~1 year
+        const closesLong  = candlesLong.map(c=>+c[4]).reverse(); // oldest-first
+        const candlesS    = candlesLong.slice(0, SHORT_N);      // the window every existing indicator used before
+        const closes      = candlesS.map(c=>+c[4]).reverse();
+        const rc       = candlesS.slice(0,20);
         const avgVol20 = rc.reduce((s,x)=>s+(+x[5]||0),0)/Math.max(1,rc.length);
+        const turnoverCr = rc.length ? rc.reduce((s,x)=>s+(+x[4])*(+x[5]||0),0)/rc.length/1e7 : null;
         const _macd    = calcMACD(closes);
         const _bb      = calcBBSqueeze(closes);
-        const _adx     = calcADX(candles);
-        const _vwapB   = calcVWAPBands(candles);
-        const _rsiDiv  = calcRSIDivergence(candles);   // HTML passes candles, not closes
+        const _adx     = calcADX(candlesS);
+        const _vwapB   = calcVWAPBands(candlesS);
+        const _rsiDiv  = calcRSIDivergence(candlesS);   // HTML passes candles, not closes
         const instLtp = inst._q?.last_price || 0;
         const isAboveMA = (cls, p) => cls.length >= p ? cls[cls.length-1] > cls.slice(-p).reduce((a,b)=>a+b,0)/p : null;
+        const _ema   = calcEMACrossover(closesLong);
+        const _cross = calcRecentCross(closesLong, 5);
         tech[inst.s] = {
           rsi:      calcRSI(closes),
           macdBull: _macd ? _macd.bullish : (closes.length>=35 ? (calcEMA(closes,12)-calcEMA(closes,26))>0 : null),
@@ -228,12 +238,17 @@ export async function runPicksScan(ctx, callbacks) {
           adx:      _adx,
           vwapBands:_vwapB,
           rsiDiv:   _rsiDiv,
-          a50:      isAboveMA(closes, 50),
-          a200:     isAboveMA(closes, 200),
-          atr:      calcATR(candles),
-          patterns: detectPatterns(candles),
-          avgVol20, sr: calcSR(candles), vwap: calcVWAP(candles),
-          candles, closes,
+          a50:      isAboveMA(closesLong, 50),
+          a200:     isAboveMA(closesLong, 200),
+          ema50: _ema?.ema50 || null, ema200: _ema?.ema200 || null,
+          goldenCrossRecent: !!_cross.golden, deathCrossRecent: !!_cross.death,
+          ltUptrend: !!(_ema && closesLong.length>=200 && _ema.e50>_ema.e200 && closesLong[closesLong.length-1]>_ema.e200),
+          ltDowntrend: !!(_ema && closesLong.length>=200 && _ema.e50<_ema.e200 && closesLong[closesLong.length-1]<_ema.e200),
+          turnoverCr: turnoverCr!=null ? +turnoverCr.toFixed(2) : null,
+          atr:      calcATR(candlesS),
+          patterns: detectPatterns(candlesS),
+          avgVol20, sr: calcSR(candlesLong), vwap: calcVWAP(candlesS),   // sr: pivots/support/resistance use only the newest bars; the full history gives a real 52-week high/low
+          candles: candlesS, closes,
         };
         candleOK++;
       }
@@ -337,6 +352,11 @@ export async function runPicksScan(ctx, callbacks) {
       pcrBullishExtreme: pcr>0 && pcr<=0.65,
       near52wLow: !!(sr?.week52L>0 && ltp>0 && Math.abs((ltp-sr.week52L)/ltp*100)<2),
       near52wHigh: !!(sr?.week52H>0 && ltp>0 && Math.abs((ltp-sr.week52H)/ltp*100)<2),
+      // Long-term context from the 1-year history. Like every flag here they carry NO hard-coded
+      // bonus: applyAdaptWeights learns each one's win-rate lift from your closed signals.
+      goldenCrossRecent: t.goldenCrossRecent===true, deathCrossRecent: t.deathCrossRecent===true,
+      ltUptrend: t.ltUptrend===true, ltDowntrend: t.ltDowntrend===true,
+      breakout52w: !!(sr?.week52H>0 && ltp>=sr.week52H*0.995 && volOk===true),
       confluenceStrong: confluence.total>0 && confluence.ratio>=0.65 && confluence.agree>=4,
       confluenceWeak: confluence.total>0 && confluence.ratio<0.5,
       confluenceConflict: confluence.conflicting>=2,
@@ -396,7 +416,12 @@ export async function runPicksScan(ctx, callbacks) {
       type: 'STOCK', aiBlock: mlRank.aiBlock, conf, rr: pot.rr, potBase: pot.base,
       risk, rec, mlModels, cfg,
     });
-    const passes = gate.passes;
+    // Liquidity: skip names with thin average daily turnover (fills and stops don't hold there).
+    const minTurn = cfg.minStockTurnoverCr ?? 5;
+    const lowLiq = t.turnoverCr!=null && t.turnoverCr < minTurn;
+    const passes = gate.passes && !lowLiq;
+    const gateReason = lowLiq ? `liquidity: avg turnover ₹${t.turnoverCr} cr < ₹${minTurn} cr` : gate.reason;
+    const trigger = stockTrigger({ ..._indSnap, volOk: volOk===true, chgPct, nearSupp: !!nearSupp });
 
     const entryTrigger=calcEntryTrigger(ltp,high,sr,t.atr||0,rec,vwap,chgPct);
     const macd=t.macd||{}, macdBull=t.macdBull, bb=t.bb, adx=t.adx, rsiDiv=t.rsiDiv;
@@ -411,6 +436,8 @@ export async function runPicksScan(ctx, callbacks) {
       vwap, aboveVWAP, vwapType:'daily', vwapBands,
       vol, avgVol20, high, low, delivPct, regime: stockRegime, volRegimeShift, mlSegment: mlRank.mlSegment, confluence,
       _indSnap, confBreakdown,
+      trigger, turnoverCr: t.turnoverCr ?? null, ema50: t.ema50 ?? null, ema200: t.ema200 ?? null,
+      hi52: sr?.week52H||null, lo52: sr?.week52L||null,
       mlProbability: mlRank.mlProbability,
       mlAdj: mlRank.mlAdj,
       mlExplain: mlRank.explanation,
@@ -420,7 +447,7 @@ export async function runPicksScan(ctx, callbacks) {
       recentCandles:(t.candles||[]).slice(0,20), closes:t.closes||[],
     };
     allScored.push(scored);
-    if (!passes) pushShadow(scored, gate.reason, 'STOCK'); // tracked as a shadow signal
+    if (!passes) pushShadow(scored, gateReason, 'STOCK'); // tracked as a shadow signal
     if (passes && rec!=='AVOID') results.push(scored);
     secMap[sec].g+=rec==='BUY'||rec==='STRONG BUY'?1:0;
   }

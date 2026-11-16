@@ -41,6 +41,10 @@ export function estimateCostPct(row, type) {
   else if (oi < 1000) slippagePct = 1.80;
   else if (oi < 3000) slippagePct = 1.10;
   else if (oi < 10000) slippagePct = 0.70;
+  // A measured bid-ask spread beats the OI-based guess: crossing the spread costs about one
+  // full spread across entry + exit.
+  const spreadPct = toNum(row?.signal?.spreadPct ?? row?.spreadPct, 0);
+  if (spreadPct > 0) slippagePct = Math.max(0.2, spreadPct);
   return +Math.min(4, statFeePct + slippagePct).toFixed(2);
 }
 

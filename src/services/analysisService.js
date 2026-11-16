@@ -322,6 +322,23 @@ export async function loadAnalysisData(ctx) {
     }
   }
 
+  // ── Win rate per strategy trigger (golden cross, MACD cross, OI long build, level break ...) ──
+  let triggerCheck = null;
+  {
+    const withT = dedupeIdeas(closed.filter(s => s.trigger));
+    if (withT.length >= 10) {
+      const by = {};
+      withT.forEach(s => { (by[s.trigger] ||= []).push(s); });
+      const rows = Object.entries(by).map(([trigger, part]) => ({
+        trigger, n: part.length,
+        wr: Math.round(part.filter(signalWin).length / part.length * 100),
+        net: mean(part.map(netOf)),
+        tooFew: part.length < 20,
+      })).sort((x, y) => y.n - x.n);
+      triggerCheck = { ideas: withT.length, rows };
+    }
+  }
+
   // Alerts
   const alerts = [];
   if (overall.r < 35) alerts.push({ level: 'danger', msg: `Win rate ${overall.r}% — signals losing systematically. Raise min confidence to 75%+.` });
@@ -342,6 +359,6 @@ export async function loadAnalysisData(ctx) {
     sigTypes, confBands, timeBreak, dailyRows,
     csRows, scoredSignals, alerts, mlBacktest,
     netAdjusted, liquidityBands, regimeShiftBands, modelAttribution, rrRealized,
-    shadow, journal, mlCheck, mtfCheck,
+    shadow, journal, mlCheck, mtfCheck, triggerCheck,
   };
 }
