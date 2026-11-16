@@ -44,7 +44,10 @@ function OptionCard({ pick, cfg: cardCfg }) {
   const portSz = cardCfg?.portSize || 500000, riskPct2 = cardCfg?.riskPct || 2;
   const maxRisk = portSz * riskPct2 / 100;
   const lossPerLot = pick.maxLoss || 0;
-  const recLots = lossPerLot > 0 ? Math.max(1, Math.floor(maxRisk / lossPerLot)) : 0;
+  // 0 = even ONE lot would risk more than your per-trade limit (previously forced to at least 1 lot,
+  // which recommended trades that broke the risk rule).
+  const recLots = lossPerLot > 0 ? Math.floor(maxRisk / lossPerLot) : 0;
+  const tooBig = lossPerLot > 0 && recLots < 1;
   const recCapital = recLots > 0 ? recLots * (pick.entry || 0) * (pick.lot || 1) : 0;
   const sizeColor = recLots <= 1 ? '#92400e' : recLots >= 3 ? '#15803d' : '#1d4ed8';
   const sizeBg    = recLots <= 1 ? '#fffbeb' : recLots >= 3 ? '#f0fdf4' : '#eff6ff';
@@ -161,6 +164,13 @@ function OptionCard({ pick, cfg: cardCfg }) {
       </MetricGrid>
 
       {/* Position sizing */}
+      {tooBig && (
+        <div style={{background:'#fef2f2',border:'1px solid #fecaca',borderRadius:9,padding:'8px 10px',marginBottom:9}}>
+          <div style={{fontSize:8,color:'#b91c1c',fontWeight:700,marginBottom:3}}>POSITION SIZING</div>
+          <div style={{fontSize:12,fontWeight:800,color:'#b91c1c'}}>Skip: 1 lot risks {'\u20B9'}{fmt(lossPerLot,0)}</div>
+          <div style={{fontSize:9,color:'#64748b',marginTop:2}}>Your limit is {'\u20B9'}{fmt(maxRisk,0)} per trade ({riskPct2}% of {'\u20B9'}{(portSz/100000).toFixed(1)}L). Take it only if you accept the bigger loss.</div>
+        </div>
+      )}
       {recLots > 0 && (
         <div style={{background:sizeBg,border:'1px solid #e2e8f0',borderRadius:9,padding:'8px 10px',marginBottom:9}}>
           <div style={{fontSize:8,color:'#64748b',fontWeight:700,marginBottom:4}}>💰 POSITION SIZING (₹{(portSz/100000).toFixed(1)}L · {riskPct2}% risk = ₹{fmt(maxRisk,0)} max)</div>

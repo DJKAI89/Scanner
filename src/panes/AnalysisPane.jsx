@@ -790,6 +790,20 @@ export default function AnalysisPane() {
             </Group>
 
             <Group label="WHEN AND WHAT WORKS">
+              {d.triggerCheck && (
+                <Section title="Win Rate by Strategy Trigger" accent="#f97316" defaultOpen
+                  summary={`${d.triggerCheck.ideas} ideas`}>
+                  {d.triggerCheck.rows.map((r, i) => (
+                    <div key={r.trigger} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, padding: '6px 0', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
+                      <span style={{ fontWeight: 800, color: '#0f172a' }}>{r.trigger.replace(/_/g, ' ').toLowerCase().replace(/^\w/, c => c.toUpperCase())}</span>
+                      <span style={{ color: r.tooFew ? '#94a3b8' : '#64748b' }}>n={r.n} · {r.wr}% win · net <b style={{ color: (r.net ?? 0) >= 0 ? '#16a34a' : '#dc2626' }}>{r.net ?? '—'}%</b>{r.tooFew ? ' · too few to judge' : ''}</span>
+                    </div>
+                  ))}
+                  <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 8, lineHeight: 1.5 }}>
+                    Every signal records the single main reason it fired. Judge a trigger only after 20+ ideas. A trigger that stays negative after enough trades should be dropped, not tuned.
+                  </div>
+                </Section>
+              )}
             {/* Time clock */}
             {d.timeBreak.length >= 3 && (
               <Section title="Best Time to Trade" summary={''} accent="#f59e0b">
