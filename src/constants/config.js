@@ -23,6 +23,8 @@ export const DEF = {
   minOptConf:   65,
   minOptOI:     500,
   maxOptCapital: 0,
+  maxSpreadPct: 2.5,        // options: skip contracts whose bid-ask spread is wider than this % of the mid price
+  minStockTurnoverCr: 5,    // stocks: skip names with < this average daily turnover (₹ crore, 20-day)
   portSize:     500000,
   riskPct:      2,
   optStockScanCount: 50,
