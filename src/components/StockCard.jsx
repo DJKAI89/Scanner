@@ -1,6 +1,7 @@
 import React from 'react';
 import { fmt, fmtVol } from '../utils/formatters';
 import { getSignalStrength } from '../services/technical';
+import { calculatePositionSize } from '../services/tradeManagement';
 import {
   AccentCard, CardHeader, VerdictRow, LevelsStrip, StatusTag,
   MetricGrid, MetricMini, ProgressStat, TargetTiers, SignalTags, Banner, FooterNote,
@@ -145,6 +146,22 @@ export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
 
       <SignalTags tags={tags} totalCount={indLbls.length} activeCount={activeCount} />
 
+      {isBuy && p.sl > 0 && ltp > p.sl && (() => {
+        const portSz = cfg.portSize || 500000, riskPct = cfg.riskPct || 2;
+        const pos = calculatePositionSize({ accountCapital: portSz, maxRiskPerTradePct: riskPct, entryPrice: ltp, stopLossPrice: p.sl, type: 'STOCK', maxCapital: portSz });
+        const budget = Math.round(portSz * riskPct / 100);
+        return (
+          <div style={{background: pos.riskTooHigh ? '#fef2f2' : '#eff6ff', border: '1px solid #e2e8f0', borderRadius: 9, padding: '8px 10px', margin: '8px 0'}}>
+            <div style={{fontSize: 8, color: '#64748b', fontWeight: 700, marginBottom: 3}}>POSITION SIZING ({'\u20B9'}{(portSz / 100000).toFixed(1)}L, {riskPct}% risk = {'\u20B9'}{fmt(budget, 0)} max)</div>
+            {pos.riskTooHigh
+              ? <div style={{fontSize: 12, fontWeight: 800, color: '#b91c1c'}}>Skip: stop is {'\u20B9'}{fmt(ltp - p.sl, 2)} away per share</div>
+              : <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                  <div><span style={{fontSize: 17, fontWeight: 800, color: '#1d4ed8'}}>{pos.shares} shares</span><span style={{fontSize: 9, color: '#64748b', marginLeft: 6}}>recommended</span></div>
+                  <div style={{textAlign: 'right', fontSize: 9, color: '#64748b'}}>Capital: {'\u20B9'}{fmt(pos.totalCapitalAllocated, 0)}<br />Max loss: {'\u20B9'}{fmt(pos.maxLossRupees, 0)}</div>
+                </div>}
+          </div>
+        );
+      })()}
       <FooterNote>
         {str.label} signal · {p.numInds||0}/7 indicators · R:R {p.pot?.rr||0}:1 · Win ~{p.pot?.wr||0}%
         {p.reversal?.type!=='NONE' ? ` · ${p.reversal?.type==='BULLISH_REVERSAL'?'🔄 Reversal UP':'🔄 Reversal DOWN'}` : ''}
