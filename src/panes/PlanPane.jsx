@@ -5,6 +5,7 @@ import { resolveAccessToken } from '../services/api';
 import { effectiveOptionCfg } from '../services/optionScan';
 import { loadPlanInputs, assemblePlan, logTriggered, loadPlanHistory } from '../services/planService';
 import { fmtMin } from '../services/planEngine';
+import MtfPanel from '../components/MtfPanel.jsx';
 
 const REFRESH_MS = 60000;
 const inr = (n) => '₹' + Math.round(n || 0).toLocaleString('en-IN');
@@ -159,6 +160,10 @@ export default function PlanPane() {
           </div>
         </Card>
       )}
+
+      {data?.perIndex?.map((ix) => (
+        <MtfPanel key={ix.name} instrumentKey={ix.key} price={ix.spot} title={`${ix.name} Timeframes`} defaultOpen={ix === data.perIndex[0]} />
+      ))}
 
       {meter && (
         <Card>

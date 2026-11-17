@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
+import MtfPanel, { GradePill } from '../components/MtfPanel.jsx';
 import { Spinner, ErrorBanner, StatCard, EmptyState } from '../components/common.jsx';
 import ScanProgress from '../components/ScanProgress';
 import LiveChart from '../components/LiveChart';
@@ -466,8 +467,19 @@ export default function LookupPane() {
             </div>
           </SectionCard>
 
+          {r.tech.mtfVeto && (
+            <Banner tone="red" icon="!" title="Higher timeframes are against this trade" detail={`${r.tech.mtfWhy || ''} The call is held at WATCH: wait for the weekly/daily trend to turn, or for a clean pullback.`} />
+          )}
+          {r.tech.mtf && !r.tech.mtfVeto && (
+            <div style={{ margin: '0 0 8px', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <GradePill label="Timeframes" g={{ grade: r.tech.mtf.grade, veto: false, why: '' }} />
+              <span style={{ fontSize: 10, color: '#64748b' }}>{r.tech.mtf.dirs}{r.tech.mtf.roomATR != null ? ` · ${r.tech.mtf.roomATR} ATR to next level` : ''}{r.tech.mtf.partial ? ' · partial data' : ''}</span>
+            </div>
+          )}
+          <MtfPanel instrumentKey={r.inst.key} price={r.ltp} title="Weekly / Daily / 60-min / 15-min" />
+
           {(r.tf30?.rsi || r.tf5?.rsi) && (
-            <SectionCard title="Multi-Timeframe Analysis" accent="#7c3aed">
+            <SectionCard title="Intraday Detail (30-min / 5-min)" accent="#7c3aed">
               <div className="stats-g" style={{ marginBottom: 0 }}>
                 {r.tech.rsi && <StatCard label="DAILY RSI" value={r.tech.rsi?.toFixed(1)} sub="Daily" valClass={r.tech.rsi < (cfg.rsiOS||35) ? 'up' : r.tech.rsi > (cfg.rsiOB||65) ? 'dn' : 'bl'} />}
                 {r.tf30?.rsi && <StatCard label="30-MIN RSI" value={r.tf30.rsi.toFixed(1)} sub={`30m · ${r.tf30.trend}`} valClass={r.tf30.trend === 'UP' ? 'up' : 'dn'} />}

@@ -7,7 +7,7 @@ import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST, getISTDate } from '../utils/marketTime';
 import { isWeeklyExpiryDay } from '../constants/config';
 import { useMarketFeed } from '../hooks/useMarketFeed';
-import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote, Banner, contextTags, KpiStrip } from '../components/cardKit';
+import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote, Banner, contextTags, KpiStrip, MtfTags } from '../components/cardKit';
 import Icon from '../components/Icon.jsx';
 import { ConfidenceBreakdown } from '../components/ConfidenceBreakdown';
 import { runOptionsScan, getOptionKey, withLiveOI, calcStructure, VIX_KEY } from '../services/optionScan';
@@ -114,6 +114,7 @@ function OptionCard({ pick, cfg: cardCfg }) {
         rec={pick.action}
         dir={dir}
       />
+      <MtfTags mtf={pick.mtf} spreadPct={pick.spreadPct} />
 
       <KpiStrip items={[
         { label: 'CONF', value: `${pick.confidence}%`, color: pick.confidence >= minConf ? '#16a34a' : pick.confidence >= minConf - 15 ? '#d97706' : '#dc2626', sub: `min ${minConf}%` },

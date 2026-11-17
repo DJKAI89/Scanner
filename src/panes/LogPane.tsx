@@ -158,6 +158,13 @@ function SignalRow({ sig, livePrice, marketOpen = true }) {
           <span style={{ fontSize:8, fontWeight:800, padding:'2px 8px', borderRadius:20, background:sc.bg, color:sc.color, border:`1px solid ${sc.border}` }}>
             {sig.status?.replace('_',' ')}
           </span>
+          {sig.mtfGrade && (
+            <span title={`Timeframes ${sig.mtfDirs || ''}${sig.mtfRoomATR != null ? ` · ${sig.mtfRoomATR} ATR room` : ''}`} style={{ fontSize:8, fontWeight:800, padding:'2px 8px', borderRadius:20,
+              background: sig.mtfGrade==='A' ? '#dcfce7' : sig.mtfGrade==='B' ? '#dbeafe' : '#fef3c7',
+              color: sig.mtfGrade==='A' ? '#15803d' : sig.mtfGrade==='B' ? '#1d4ed8' : '#b45309' }}>
+              MTF {sig.mtfGrade}
+            </span>
+          )}
         </div>
       </div>
 

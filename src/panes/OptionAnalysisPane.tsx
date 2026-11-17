@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
+import MtfPanel from '../components/MtfPanel.jsx';
 import { Spinner, ErrorBanner, LastUpdated, EmptyState } from '../components/common.jsx';
 import { resolveAccessToken, fetchOptionGreeks } from '../services/api';
 import { interpVIX } from '../utils/formatters';
@@ -174,6 +175,9 @@ export default function OptionAnalysisPane() {
           />
 
           {updTime && <LastUpdated time={updTime} />}
+
+          {/* Top-down read of the same index: weekly / daily / 60-min / 15-min trend, nearest levels, long & short grade */}
+          <MtfPanel instrumentKey={idx.key} price={liveSpot} title={`${idx.id} Timeframes`} m5={null} />
 
           <div style={{ display: 'flex', gap: 6, marginBottom: 10, overflowX: 'auto', paddingBottom: 2 }}>
             {meta.expiryList.map((e) => {
