@@ -3,6 +3,7 @@ const STOCK_FEATURES = [
   'composite', 'momentum', 'bullish', 'reversal', 'aboveVWAP', 'nearSupport',
   'deliveryHigh', 'deliveryLow', 'macdBullCross', 'adxBull', 'rsiBullDiv', 'bbSqueeze',
   'weekday', 'phase', 'regime', 'volRegimeShift', 'sectorStrength', 'newsSentiment', 'gapType',
+  'mtfScore', 'mtfGrade', 'mtfRoom',
 ];
 
 const OPTION_FEATURES = [
@@ -11,6 +12,7 @@ const OPTION_FEATURES = [
   'deltaAbs', 'iv', 'thetaAbs', 'atm', 'capitalLoad', 'nearPDH', 'nearPDL',
   'weekday', 'phase', 'regime', 'volRegimeShift', 'expiryDay', 'sectorStrength', 'newsSentiment',
   'maxPainDist', 'counterTrend',
+  'mtfScore', 'mtfGrade', 'mtfRoom', 'spread',
 ];
 
 const BASE_COST_PCT = {
@@ -227,6 +229,23 @@ function getStockFeatureVector(sig) {
     sectorStrength: getSectorStrength(sig),
     newsSentiment: getNewsSentiment(sig),
     gapType: getGapType(sig),
+    ...mtfFeatures(sig),
+  };
+}
+
+
+// Multi-timeframe features. Read from the pick at scan time (sig.mtf) or the logged signal (sig.mtfScore /
+// mtfGrade / mtfRoomATR). Unknown (signals logged before this existed, or no data) stays NEUTRAL (0) so the
+// model cannot learn "older data" from a missing value.
+function mtfFeatures(sig) {
+  const m = sig?.mtf || null;
+  const score = toNum(m?.score ?? sig?.mtfScore, NaN);
+  const room = toNum(m?.roomATR ?? sig?.mtfRoomATR, NaN);
+  const grade = m?.grade ?? sig?.mtfGrade;
+  return {
+    mtfScore: Number.isFinite(score) ? clamp(score / 8, -1.5, 1.5) : 0,
+    mtfGrade: grade === 'A' ? 1 : grade === 'B' ? 0.5 : grade === 'C' ? -0.5 : 0,
+    mtfRoom: Number.isFinite(room) ? clamp(room / 5, 0, 1.5) : 0.5,
   };
 }
 
@@ -266,6 +285,8 @@ function getOptionFeatureVector(sig) {
     newsSentiment: getNewsSentiment(sig),
     maxPainDist: clamp(maxPainDist * 20, 0, 2),
     counterTrend: asBool(sig?.trendAligned === false),
+    ...mtfFeatures(sig),
+    spread: Number.isFinite(toNum(sig?.spreadPct, NaN)) ? clamp(toNum(sig?.spreadPct, 0) / 5, 0, 2) : 0,
   };
 }
 

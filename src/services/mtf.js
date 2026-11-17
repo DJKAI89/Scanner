@@ -28,6 +28,24 @@ export const MTF_DEFAULTS = {
   clusterPct: 0.3,
 };
 
+// Never more than MAX_CONC history requests in flight, spaced SPACING_MS apart. A first scan can need
+// 60-140 calls; without this they fire in bursts and trip Upstox's rate limit (HTTP 429).
+const MAX_CONC = 4, SPACING_MS = 120;
+let _active = 0;
+const _queue = [];
+const _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function limited(fn) {
+  return new Promise((resolve, reject) => {
+    const run = async () => {
+      _active++;
+      try { await _sleep(SPACING_MS); resolve(await fn()); }
+      catch (e) { reject(e); }
+      finally { _active--; const next = _queue.shift(); if (next) next(); }
+    };
+    if (_active < MAX_CONC) run(); else _queue.push(run);
+  });
+}
+
 const TTL = { w: 12 * 3600e3, d: 6 * 3600e3, h1: 60 * 60e3, m15: 20 * 60e3, today: 4 * 60e3 };
 const _cache = new Map();
 async function cached(key, ttl, fn) {
@@ -267,33 +285,33 @@ const merge = (a, b) => [...(a || []), ...(b || [])];
 async function fetchWeekly(key, token, onTokenExpired, today) {
   return cached(`w:${key}`, TTL.w, async () => {
     const from = ymd(Date.now() - 3 * 365 * 86400e3);
-    try { const c = await fetchCandlesV3(key, 'weeks', 1, from, today, token, onTokenExpired); if (c.length >= 20) return c; } catch (_) { /* fall back */ }
-    return fetchCandles(key, from, today, 'week', token, onTokenExpired).catch(() => []);
+    try { const c = await limited(() => fetchCandlesV3(key, 'weeks', 1, from, today, token, onTokenExpired)); if (c.length >= 20) return c; } catch (_) { /* fall back */ }
+    return limited(() => fetchCandles(key, from, today, 'week', token, onTokenExpired)).catch(() => []);
   });
 }
 async function fetchDaily(key, token, onTokenExpired, today) {
   return cached(`d:${key}`, TTL.d, async () => {
     const from = ymd(Date.now() - 2 * 365 * 86400e3);
-    try { const c = await fetchCandlesV3(key, 'days', 1, from, today, token, onTokenExpired); if (c.length >= 60) return c; } catch (_) { /* fall back */ }
-    return fetchCandles(key, from, today, 'day', token, onTokenExpired).catch(() => []);
+    try { const c = await limited(() => fetchCandlesV3(key, 'days', 1, from, today, token, onTokenExpired)); if (c.length >= 60) return c; } catch (_) { /* fall back */ }
+    return limited(() => fetchCandles(key, from, today, 'day', token, onTokenExpired)).catch(() => []);
   });
 }
 // 60-min: history (<= 1 quarter per request, stay under it) + today's bars.
 async function fetchH1(key, token, onTokenExpired, today) {
   const hist = await cached(`h1:${key}`, TTL.h1, async () => {
     const from = ymd(Date.now() - 85 * 86400e3);
-    return fetchCandlesV3(key, 'hours', 1, from, today, token, onTokenExpired).catch(() => []);
+    return limited(() => fetchCandlesV3(key, 'hours', 1, from, today, token, onTokenExpired)).catch(() => []);
   });
-  const now = await cached(`h1t:${key}`, TTL.today, () => fetchIntradayV3(key, 'hours', 1, token, onTokenExpired).catch(() => []));
+  const now = await cached(`h1t:${key}`, TTL.today, () => limited(() => fetchIntradayV3(key, 'hours', 1, token, onTokenExpired)).catch(() => []));
   return merge(hist, now);
 }
 // 15-min: history (1-15 min requests are capped at 1 month → use 28 days) + today's bars.
 async function fetchM15(key, token, onTokenExpired, today) {
   const hist = await cached(`m15:${key}`, TTL.m15, async () => {
     const from = ymd(Date.now() - 28 * 86400e3);
-    return fetchCandlesV3(key, 'minutes', 15, from, today, token, onTokenExpired).catch(() => []);
+    return limited(() => fetchCandlesV3(key, 'minutes', 15, from, today, token, onTokenExpired)).catch(() => []);
   });
-  const now = await cached(`m15t:${key}`, TTL.today, () => fetchIntradayV3(key, 'minutes', 15, token, onTokenExpired).catch(() => []));
+  const now = await cached(`m15t:${key}`, TTL.today, () => limited(() => fetchIntradayV3(key, 'minutes', 15, token, onTokenExpired)).catch(() => []));
   return merge(hist, now);
 }
 
@@ -305,8 +323,8 @@ export async function getMtf({ key, price, token, onTokenExpired, daily, weekly,
   const today = ymd(Date.now());
   try {
     const [w, d, h1, m15] = await Promise.all([
-      weekly?.length >= 20 ? weekly : fetchWeekly(key, token, onTokenExpired, today),
-      daily?.length >= 60 ? daily : fetchDaily(key, token, onTokenExpired, today),
+      weekly?.length >= 100 ? weekly : fetchWeekly(key, token, onTokenExpired, today),
+      daily?.length >= 150 ? daily : fetchDaily(key, token, onTokenExpired, today),
       fetchH1(key, token, onTokenExpired, today),
       fetchM15(key, token, onTokenExpired, today),
     ]);
@@ -317,7 +335,9 @@ export async function getMtf({ key, price, token, onTokenExpired, daily, weekly,
       m15: closedOnly(toBars(m15), 15),
       m5: m5?.length ? closedOnly(toBars(m5), 5) : null,
     };
-    return buildMtfContext(bars, price);
+    const ctx = buildMtfContext(bars, price);
+    if (!ctx) lg(`MTF ${key}: no usable weekly/daily history (weekly ${bars.w.length} bars, daily ${bars.d.length} bars)`, 'w');
+    return ctx;
   } catch (e) { lg(`MTF ${key}: ${e.message}`, 'w'); return null; }
 }
 
@@ -334,22 +354,25 @@ export function applyMtfToPick(p, grade) {
   return grade;
 }
 
-// ── Stock Picks stage ────────────────────────────────────────
-// Grades the top candidates, adjusts confidence, and removes trades the higher timeframes
-// are against (or that fall below the minimum confidence after the adjustment). Removed
-// picks go to onReject (the shadow log) instead of vanishing. Mutates `results` in place.
-export async function applyMtfStage(results, { token, onTokenExpired, lg = () => {}, minConf = 50, topN = 10, setProgress = () => {}, onReject = () => {}, batch = 3, staggerMs = 250 }) {
+// ── Scan stage (stock Picks and Breakout scan) ──────────────
+// Grades the top candidates, adjusts confidence, and removes trades the higher timeframes are against
+// (or that fall below the minimum confidence after the adjustment). Removed picks go to onReject (the
+// shadow log) instead of vanishing. Picks whose data could not be loaded are KEPT and marked
+// mtfUnavailable so the card says "MTF n/a" instead of silently looking graded. Mutates `results`.
+//   getInputs(p) -> { daily, weekly, m5 } candles the scan already holds (saves calls)
+export async function applyMtfStage(results, { token, onTokenExpired, lg = () => {}, minConf = 50, topN = 10, setProgress = () => {}, onReject = () => {}, getInputs = null, batch = 3, staggerMs = 250 }) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const cand = results.slice(0, topN);
   for (let b = 0; b < cand.length; b += batch) {
-    setProgress(`Step 5/5: Multi-timeframe ${b + 1}-${Math.min(b + batch, cand.length)}/${cand.length}...`);
+    setProgress(`Multi-timeframe ${b + 1}-${Math.min(b + batch, cand.length)}/${cand.length}...`);
     await Promise.allSettled(cand.slice(b, b + batch).map(async (p, idx) => {
       await sleep(idx * staggerMs);
       const dir = (p.rec === 'BUY' || p.rec === 'STRONG BUY') ? 1 : (p.rec === 'SELL' || p.rec === 'STRONG SELL') ? -1 : 0;
       if (!dir) return;
-      const ctx = await getMtf({ key: p.key, price: p.ltp, token, onTokenExpired, lg });
+      const inp = (getInputs && getInputs(p)) || {};
+      const ctx = await getMtf({ key: p.key, price: p.ltp, token, onTokenExpired, daily: inp.daily, weekly: inp.weekly, m5: inp.m5, lg });
       const g = gradeMtf(ctx, dir);
-      if (!g) return;
+      if (!g) { p.mtf = null; p.mtfUnavailable = true; return; }
       applyMtfToPick(p, g);
       p.mtfBoost = g.adj;
       p.mtfNote = `${g.grade} ${g.dirs}`;
@@ -363,5 +386,75 @@ export async function applyMtfStage(results, { token, onTokenExpired, lg = () =>
     keep.push(p);
   }
   results.splice(0, results.length, ...keep);
+  const n = cand.filter((p) => p.mtfUnavailable).length;
+  if (n) lg(`MTF: ${n} of ${cand.length} candidates had no timeframe data (shown as "MTF n/a", not blocked)`, 'w');
   return results;
+}
+
+// ── For screens ──────────────────────────────────────────────
+const TF_LABEL = { w: 'Weekly', d: 'Daily', h1: '60-min', m15: '15-min', m5: '5-min' };
+const TF_RULE = { w: 'EMA10 / EMA30', d: 'EMA20 / EMA50', h1: 'EMA20 / EMA50', m15: 'EMA20 / EMA50', m5: 'EMA9 / EMA21' };
+
+// Everything a panel needs, from a context.
+export function describeMtf(ctx) {
+  if (!ctx) return null;
+  const rows = ['w', 'd', 'h1', 'm15', 'm5'].map((k) => {
+    const t = ctx.tf[k];
+    return {
+      key: k, label: TF_LABEL[k], rule: TF_RULE[k], ok: !!t.ok,
+      dir: t.ok ? t.dir : null,
+      state: !t.ok ? 'no data' : t.dir > 0 ? 'Uptrend' : t.dir < 0 ? 'Downtrend' : 'Mixed',
+      emaFast: t.ok ? +t.emaFast.toFixed(2) : null, emaSlow: t.ok ? +t.emaSlow.toFixed(2) : null,
+      structure: !t.ok ? null : t.struct > 0 ? 'higher highs / lows' : t.struct < 0 ? 'lower highs / lows' : 'no clear structure',
+    };
+  });
+  const lv = ctx.levels.filter((l) => l.weight >= 1.5);
+  const above = lv.filter((l) => l.price > ctx.price).sort((a, b) => a.price - b.price).slice(0, 3);
+  const below = lv.filter((l) => l.price < ctx.price).sort((a, b) => b.price - a.price).slice(0, 3);
+  const withDist = (l) => ({ price: Math.round(l.price), src: l.src, atr: ctx.atrD > 0 ? +(Math.abs(l.price - ctx.price) / ctx.atrD).toFixed(2) : null });
+  return {
+    rows, price: ctx.price, atrD: ctx.atrD ? +ctx.atrD.toFixed(2) : null, partial: ctx.partial,
+    above: above.map(withDist), below: below.map(withDist),
+    long: gradeMtf(ctx, 1), short: gradeMtf(ctx, -1),
+  };
+}
+
+// Live self-test: fetch each timeframe for one instrument (bypassing the cache) and report what came
+// back. This is the "is multi-timeframe really working with MY token" check on the Settings page.
+export async function mtfDiagnostics({ key, price, token, onTokenExpired }) {
+  const today = ymd(Date.now());
+  const steps = [];
+  const bars = {};
+  const run = async (tf, label, fn, durMin) => {
+    const t0 = Date.now();
+    try {
+      const { candles, source } = await fn();
+      let b = toBars(candles);
+      if (tf === 'd') b = dropToday(b, today);
+      if (durMin) b = closedOnly(b, durMin);
+      bars[tf] = b;
+      steps.push({ tf, label, ok: b.length >= 20, source, bars: b.length,
+        from: b.length ? new Date(b[0].t).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) : null,
+        to: b.length ? new Date(b[b.length - 1].t).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) : null,
+        ms: Date.now() - t0, error: b.length >= 20 ? null : `only ${b.length} bars` });
+    } catch (e) { steps.push({ tf, label, ok: false, source: '-', bars: 0, ms: Date.now() - t0, error: e.message }); }
+  };
+  const v3orV2 = async (v3, v2) => {
+    try { const c = await v3(); if (c.length >= 20) return { candles: c, source: 'V3' }; } catch (_) { /* try v2 */ }
+    return { candles: await v2(), source: 'v2 fallback' };
+  };
+  await run('w', 'Weekly', () => v3orV2(
+    () => fetchCandlesV3(key, 'weeks', 1, ymd(Date.now() - 3 * 365 * 86400e3), today, token, onTokenExpired),
+    () => fetchCandles(key, ymd(Date.now() - 3 * 365 * 86400e3), today, 'week', token, onTokenExpired)));
+  await run('d', 'Daily', () => v3orV2(
+    () => fetchCandlesV3(key, 'days', 1, ymd(Date.now() - 2 * 365 * 86400e3), today, token, onTokenExpired),
+    () => fetchCandles(key, ymd(Date.now() - 2 * 365 * 86400e3), today, 'day', token, onTokenExpired)));
+  await run('h1', '60-min', async () => ({ candles: merge(
+    await fetchCandlesV3(key, 'hours', 1, ymd(Date.now() - 85 * 86400e3), today, token, onTokenExpired),
+    await fetchIntradayV3(key, 'hours', 1, token, onTokenExpired).catch(() => [])), source: 'V3' }), 60);
+  await run('m15', '15-min', async () => ({ candles: merge(
+    await fetchCandlesV3(key, 'minutes', 15, ymd(Date.now() - 28 * 86400e3), today, token, onTokenExpired),
+    await fetchIntradayV3(key, 'minutes', 15, token, onTokenExpired).catch(() => [])), source: 'V3' }), 15);
+  const ctx = buildMtfContext(bars, price);
+  return { steps, ok: steps.every((s) => s.ok), ctx, summary: describeMtf(ctx) };
 }

@@ -110,6 +110,7 @@ export function planToSignal(p, vix) {
     amtRequired: c.sizing.totalCapitalAllocated, instrKey: c.instrKey,
     confidence: 0, slTgtMethod: 'PLAN_INDEX_LEVELS', trendAligned: true,
     trigger: p.setup, spreadPct: c.spreadPct ?? null,
+    mtf: p.mtfSummary || null,
   };
   const s = buildOptionSignal(pick, vix);
   return {

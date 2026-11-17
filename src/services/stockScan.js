@@ -199,6 +199,7 @@ export async function runPicksScan(ctx, callbacks) {
   const SHORT_N = 45;
   const top20  = byVol.slice(0, Math.min(20, byVol.length));
   const tech   = {};
+  const mtfDaily = {};   // 1-year daily candles per instrument, reused by the timeframe stage (saves a call each)
   let candleOK = 0;
   const CANDLE_BATCH = 3;
   for (let b=0; b<top20.length; b+=CANDLE_BATCH) {
@@ -215,6 +216,7 @@ export async function runPicksScan(ctx, callbacks) {
       const {inst, candles} = res.value;
       if (candles.length>=5) {
         const candlesLong = candles;                           // newest-first, up to ~1 year
+        mtfDaily[inst.key] = candles;
         const closesLong  = candlesLong.map(c=>+c[4]).reverse(); // oldest-first
         const candlesS    = candlesLong.slice(0, SHORT_N);      // the window every existing indicator used before
         const closes      = candlesS.map(c=>+c[4]).reverse();
@@ -468,6 +470,7 @@ export async function runPicksScan(ctx, callbacks) {
   await applyMtfStage(results, {
     token, onTokenExpired, lg, minConf: cfg.minStockConf || 50, topN: 10,
     setProgress: setPickProgress, onReject: (p, reason) => pushShadow(p, reason, 'STOCK'),
+    getInputs: (p) => ({ daily: mtfDaily[p.key] }),
   });
   // Re-sort after MTF boost may change conf, cap at 12 like HTML
   results.sort((a,b)=>b.conf-a.conf);
@@ -707,7 +710,7 @@ export async function runBreakoutScan(ctx, callbacks) {
     results.push({
       ...item, ltp, chgPct:getChgPct(q), ema, pdhl, st, vol, score, bullScore, bearScore, dir, wk52, mom, nr7, bb, gap, adx, rs, wMTF, wick,
       trade, atr:t.atr, isBull, phase, sectorScore, sec:item.sec||item.s||'NSE',
-      ivPct, primaryType,
+      ivPct, primaryType, trigger: primaryType || 'BREAKOUT',
       rec: boRec,
       conf: boConf,
       sl:trade.sl, target:trade.target,
@@ -726,6 +729,13 @@ export async function runBreakoutScan(ctx, callbacks) {
     const ap=(a.wk52?.breakHigh||a.wk52?.breakLow?2:0)+(a.ema?.goldenCross||a.ema?.deathCross?2:0);
     const bp=(b.wk52?.breakHigh||b.wk52?.breakLow?2:0)+(b.ema?.goldenCross||b.ema?.deathCross?2:0);
     return bp-ap||b.score-a.score;
+  });
+  // Same top-down check as the Picks scan: weekly + daily + 60-min + 15-min must not be against the breakout.
+  // The scan already holds a year of daily and weekly candles per stock, so those are reused.
+  await applyMtfStage(results, {
+    token, onTokenExpired, lg, minConf: cfg.minStockConf || 50, topN: 10,
+    onReject: (p, reason) => pushShadow(p, reason, 'STOCK'),
+    getInputs: (p) => ({ daily: techB[p.s]?.candles, weekly: techB[p.s]?.weekly }),
   });
   const goldCross =results.filter(r=>r.ema?.goldenCross).length;
   const deathCross=results.filter(r=>r.ema?.deathCross).length;

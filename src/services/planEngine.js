@@ -331,6 +331,8 @@ export function buildDayPlan({ perIndex, cfg, limits = {}, tradedToday = [], pla
         Object.assign(plan, { t1Level: s.t1Level, t2Level: s.t2Level });
       }
       plan.mtfGrade = ix.view?.mtfGrade?.grade || null;
+      const _g = ix.view?.mtfGrade;
+      plan.mtfSummary = _g ? { grade: _g.grade, score: _g.score, dirs: _g.dirs, roomATR: _g.roomATR, support: _g.support, resistance: _g.resistance, veto: _g.veto, why: _g.why, partial: _g.partial } : null;
       const c = pickContract({ rows: ix.rows, spot: ix.spot, plan: s, lot: ix.lot, cfg, expiry: ix.expiry, dte: ix.dte, planCfg: L });
       plan.contract = c;
       if (!c.ok) { plan.status = 'SKIPPED'; plan.skipReason = c.skipReason; }
