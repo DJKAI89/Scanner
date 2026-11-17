@@ -313,3 +313,21 @@ export function KpiStrip({ items = [] }) {
     </MetricGrid>
   );
 }
+
+
+// Multi-timeframe grade + liquidity tags shown under a card header. mtf = pick.mtf (null = data was not
+// available for this pick, shown as "MTF n/a" so it never looks graded when it is not).
+export function MtfTags({ mtf, spreadPct }) {
+  const tone = !mtf ? 'slate' : mtf.grade === 'A' ? 'green' : mtf.grade === 'B' ? 'blue' : 'amber';
+  return (
+    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', margin: '6px 0' }}>
+      {mtf
+        ? <Tag tone={tone} title={mtf.why || ''}>MTF {mtf.grade} · {mtf.dirs}{mtf.partial ? ' · partial' : ''}</Tag>
+        : <Tag tone="slate" title="Weekly/daily/60-min/15-min history could not be loaded for this pick, so no timeframe check was applied">MTF n/a</Tag>}
+      {mtf?.roomATR != null && <Tag tone="slate">{mtf.roomATR} ATR to next level</Tag>}
+      {mtf?.resistance && <Tag tone="red">R {Math.round(mtf.resistance).toLocaleString('en-IN')}</Tag>}
+      {mtf?.support && <Tag tone="green">S {Math.round(mtf.support).toLocaleString('en-IN')}</Tag>}
+      {spreadPct != null && <Tag tone={spreadPct > 1.5 ? 'amber' : 'slate'}>spread {spreadPct}%</Tag>}
+    </div>
+  );
+}
