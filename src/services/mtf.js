@@ -341,56 +341,6 @@ export async function getMtf({ key, price, token, onTokenExpired, daily, weekly,
   } catch (e) { lg(`MTF ${key}: ${e.message}`, 'w'); return null; }
 }
 
-// Apply a grade to a scored pick in place. Returns the grade so callers can veto.
-export function applyMtfToPick(p, grade) {
-  if (!grade) return null;
-  p.mtf = {
-    grade: grade.grade, score: grade.score, dirs: grade.dirs,
-    support: grade.support, resistance: grade.resistance, roomATR: grade.roomATR,
-    veto: grade.veto, why: grade.why, partial: grade.partial,
-  };
-  if (typeof p.conf === 'number') p.conf = Math.max(1, Math.min(99, p.conf + grade.adj));
-  if (typeof p.confidence === 'number') p.confidence = Math.max(1, Math.min(99, p.confidence + grade.adj));
-  return grade;
-}
-
-// ── Scan stage (stock Picks and Breakout scan) ──────────────
-// Grades the top candidates, adjusts confidence, and removes trades the higher timeframes are against
-// (or that fall below the minimum confidence after the adjustment). Removed picks go to onReject (the
-// shadow log) instead of vanishing. Picks whose data could not be loaded are KEPT and marked
-// mtfUnavailable so the card says "MTF n/a" instead of silently looking graded. Mutates `results`.
-//   getInputs(p) -> { daily, weekly, m5 } candles the scan already holds (saves calls)
-export async function applyMtfStage(results, { token, onTokenExpired, lg = () => {}, minConf = 50, topN = 10, setProgress = () => {}, onReject = () => {}, getInputs = null, batch = 3, staggerMs = 250 }) {
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const cand = results.slice(0, topN);
-  for (let b = 0; b < cand.length; b += batch) {
-    setProgress(`Multi-timeframe ${b + 1}-${Math.min(b + batch, cand.length)}/${cand.length}...`);
-    await Promise.allSettled(cand.slice(b, b + batch).map(async (p, idx) => {
-      await sleep(idx * staggerMs);
-      const dir = (p.rec === 'BUY' || p.rec === 'STRONG BUY') ? 1 : (p.rec === 'SELL' || p.rec === 'STRONG SELL') ? -1 : 0;
-      if (!dir) return;
-      const inp = (getInputs && getInputs(p)) || {};
-      const ctx = await getMtf({ key: p.key, price: p.ltp, token, onTokenExpired, daily: inp.daily, weekly: inp.weekly, m5: inp.m5, lg });
-      const g = gradeMtf(ctx, dir);
-      if (!g) { p.mtf = null; p.mtfUnavailable = true; return; }
-      applyMtfToPick(p, g);
-      p.mtfBoost = g.adj;
-      p.mtfNote = `${g.grade} ${g.dirs}`;
-      lg(`MTF ${p.s}: ${g.grade} (${g.dirs}) ${g.adj >= 0 ? '+' : ''}${g.adj}pts${g.why ? ' - ' + g.why : ''}`, g.veto ? 'w' : 'o');
-    }));
-  }
-  const keep = [];
-  for (const p of results) {
-    if (p.mtf?.veto) { p.passes = false; onReject(p, 'mtf_avoid: ' + (p.mtf.why || 'higher timeframes against')); continue; }
-    if (p.mtf && p.conf < minConf) { p.passes = false; onReject(p, `mtf_conf: ${p.conf} < ${minConf} after MTF adjustment`); continue; }
-    keep.push(p);
-  }
-  results.splice(0, results.length, ...keep);
-  const n = cand.filter((p) => p.mtfUnavailable).length;
-  if (n) lg(`MTF: ${n} of ${cand.length} candidates had no timeframe data (shown as "MTF n/a", not blocked)`, 'w');
-  return results;
-}
-
 // ── For screens ──────────────────────────────────────────────
 const TF_LABEL = { w: 'Weekly', d: 'Daily', h1: '60-min', m15: '15-min', m5: '5-min' };
 const TF_RULE = { w: 'EMA10 / EMA30', d: 'EMA20 / EMA50', h1: 'EMA20 / EMA50', m15: 'EMA20 / EMA50', m5: 'EMA9 / EMA21' };

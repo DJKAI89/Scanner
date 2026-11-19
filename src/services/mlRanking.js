@@ -235,17 +235,18 @@ function getStockFeatureVector(sig) {
 
 
 // Multi-timeframe features. Read from the pick at scan time (sig.mtf) or the logged signal (sig.mtfScore /
-// mtfGrade / mtfRoomATR). Unknown (signals logged before this existed, or no data) stays NEUTRAL (0) so the
-// model cannot learn "older data" from a missing value.
+// mtfGrade / mtfRoomATR). Unknown (older signals logged before this existed, or no timeframe data) is encoded
+// as a typical B-grade value, NOT 0 and not C: the trees split on thresholds, and an encoding that sits next
+// to the weak grades would make "no data" look like a weak setup (and old history look weak) to the model.
 function mtfFeatures(sig) {
   const m = sig?.mtf || null;
   const score = toNum(m?.score ?? sig?.mtfScore, NaN);
   const room = toNum(m?.roomATR ?? sig?.mtfRoomATR, NaN);
   const grade = m?.grade ?? sig?.mtfGrade;
   return {
-    mtfScore: Number.isFinite(score) ? clamp(score / 8, -1.5, 1.5) : 0,
-    mtfGrade: grade === 'A' ? 1 : grade === 'B' ? 0.5 : grade === 'C' ? -0.5 : 0,
-    mtfRoom: Number.isFinite(room) ? clamp(room / 5, 0, 1.5) : 0.5,
+    mtfScore: Number.isFinite(score) ? clamp(score / 8, -1.5, 1.5) : 3 / 8,
+    mtfGrade: grade === 'A' ? 1 : grade === 'B' ? 0.5 : grade === 'C' ? -0.5 : 0.5,
+    mtfRoom: Number.isFinite(room) ? clamp(room / 5, 0, 1.5) : 0.4,
   };
 }
 

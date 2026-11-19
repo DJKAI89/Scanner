@@ -16,7 +16,7 @@ import {
   applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment, computeVixPercentile, vixRegimeShiftScore, calcRecentCross } from './technical.js';
 import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
 import { pushShadow, drainShadow } from './shadowLog.js';
-import { applyMtfStage } from './mtf.js';
+import { getMtf, gradeMtf } from './mtf.js';
 import { stockTrigger } from './triggers.js';
 import { getIST, getISTDate, sleep } from '../utils/marketTime.js';
 import { fetchIntraday } from './api.js';
@@ -269,6 +269,17 @@ export async function runPicksScan(ctx, callbacks) {
     secMap[sec].c++;
   }
 
+  // Multi-timeframe context for every candidate that has candle data. Fetched BEFORE scoring so the grade is
+  // part of the confidence the calibration / adaptive / ML layers and the signal gate all work from (it used
+  // to be applied afterwards as a late overlay, which the ML ranker and the gate never saw).
+  setPickProgress('Step 5/5: Multi-timeframe check...');
+  const mtfCtx = {};
+  await Promise.allSettled(byVol.filter(it => tech[it.s]?.candles?.length && it._q?.last_price > 0).map(async (it) => {
+    mtfCtx[it.key] = await getMtf({ key: it.key, price: it._q.last_price, token, onTokenExpired, daily: mtfDaily[it.key], lg });
+  }));
+  const mtfLoaded = Object.values(mtfCtx).filter(Boolean).length;
+  lg(`MTF: ${mtfLoaded} of ${Object.keys(mtfCtx).length} candidates have timeframe data`, mtfLoaded ? 'o' : 'w');
+
   // Score ALL byVol stocks (exact HTML — stocks beyond top20 get empty tech={})
   const allScored=[], results=[];
   for (const item of byVol) {
@@ -372,8 +383,15 @@ export async function runPicksScan(ctx, callbacks) {
     const slTargets={consMethod:useS1?'S1 support':'ATR+VIX',modMethod:'2:1 R:R'};
     const pot  = calcPotential(ltp,tgtMod,sl,numInds,preRec,mlModels?.thresholds?.stock?.wrByRec);
     const risk = calcRisk(ltp,sl,tgtMod,t.atr||0,vixVal);
+    // Stock picks are long ideas, so the timeframes are graded for a long. Same rules as the options scan:
+    // A +6 / B +2 / C -6, and a block when the daily trend plus another higher timeframe are against it.
+    const _mtfG = mtfCtx[item.key] ? gradeMtf(mtfCtx[item.key], 1) : null;
+    const mtfPick = _mtfG ? { grade: _mtfG.grade, score: _mtfG.score, dirs: _mtfG.dirs, support: _mtfG.support, resistance: _mtfG.resistance, roomATR: _mtfG.roomATR, veto: _mtfG.veto, why: _mtfG.why, partial: _mtfG.partial } : null;
+    const _mtfAdj = _mtfG ? _mtfG.adj : 0;
+    if (_mtfAdj) conf = Math.max(1, Math.min(99, conf + _mtfAdj));
     const mlRank = applyMlRanking(conf, mlModels || null, {
       type: 'STOCK',
+      mtf: mtfPick,
       confidence: conf,
       numInds,
       risk,
@@ -396,7 +414,7 @@ export async function runPicksScan(ctx, callbacks) {
     const confBreakdown = {
       base: Math.round(_confBase), calAdj: Math.round(_calAdj),
       regimeAdj: Math.round(_regimeAdj),
-      adaptAdj: Math.round(_adaptAdj), mlAdj: Math.round(mlRank.mlAdj || 0), final: conf,
+      adaptAdj: Math.round(_adaptAdj), mtfAdj: _mtfAdj, mlAdj: Math.round(mlRank.mlAdj || 0), final: conf,
     };
     let rec = getRec(conf, pot.base, risk, pot.rr);
     // Volume-climax invalidation: a >=3.5x volume spike that closes with a heavy upper
@@ -421,8 +439,9 @@ export async function runPicksScan(ctx, callbacks) {
     // Liquidity: skip names with thin average daily turnover (fills and stops don't hold there).
     const minTurn = cfg.minStockTurnoverCr ?? 5;
     const lowLiq = t.turnoverCr!=null && t.turnoverCr < minTurn;
-    const passes = gate.passes && !lowLiq;
-    const gateReason = lowLiq ? `liquidity: avg turnover ₹${t.turnoverCr} cr < ₹${minTurn} cr` : gate.reason;
+    const mtfVeto = !!mtfPick?.veto;
+    const passes = gate.passes && !lowLiq && !mtfVeto;
+    const gateReason = mtfVeto ? 'mtf_avoid: ' + (mtfPick.why || 'higher timeframes against') : lowLiq ? `liquidity: avg turnover ₹${t.turnoverCr} cr < ₹${minTurn} cr` : gate.reason;
     const trigger = stockTrigger({ ..._indSnap, volOk: volOk===true, chgPct, nearSupp: !!nearSupp });
 
     const entryTrigger=calcEntryTrigger(ltp,high,sr,t.atr||0,rec,vwap,chgPct);
@@ -438,6 +457,7 @@ export async function runPicksScan(ctx, callbacks) {
       vwap, aboveVWAP, vwapType:'daily', vwapBands,
       vol, avgVol20, high, low, delivPct, regime: stockRegime, volRegimeShift, mlSegment: mlRank.mlSegment, confluence,
       _indSnap, confBreakdown,
+      mtf: mtfPick, mtfUnavailable: !_mtfG, mtfBoost: _mtfAdj, mtfNote: _mtfG ? `${_mtfG.grade} ${_mtfG.dirs}` : null,
       trigger, turnoverCr: t.turnoverCr ?? null, ema50: t.ema50 ?? null, ema200: t.ema200 ?? null,
       hi52: sr?.week52H||null, lo52: sr?.week52L||null,
       mlProbability: mlRank.mlProbability,
@@ -467,11 +487,7 @@ export async function runPicksScan(ctx, callbacks) {
   // 15-min times the entry. Higher timeframes outrank the entry timeframe: a BUY against
   // the daily/weekly trend (or pressed under resistance) is dropped to the shadow log
   // instead of shown. Missing data never blocks (getMtf returns null -> pick unchanged).
-  await applyMtfStage(results, {
-    token, onTokenExpired, lg, minConf: cfg.minStockConf || 50, topN: 10,
-    setProgress: setPickProgress, onReject: (p, reason) => pushShadow(p, reason, 'STOCK'),
-    getInputs: (p) => ({ daily: mtfDaily[p.key] }),
-  });
+  // (The Picks timeframe check now happens inside the scoring loop above, before the ML ranker and the gate.)
   // Re-sort after MTF boost may change conf, cap at 12 like HTML
   results.sort((a,b)=>b.conf-a.conf);
   const cappedResults = results.slice(0, 12);
@@ -629,6 +645,7 @@ export async function runBreakoutScan(ctx, callbacks) {
   }
   setBoProgress('Computing signals...');
   const phase=getIntradayPhase(), results=[];
+  let mtfBudget = 25;   // timeframe lookups per breakout scan (each ~4 cached calls); beyond it a pick shows "MTF n/a"
   for (const item of byVol) {
     const q=item._q, ltp=q.last_price, t=techB[item.s]; if(!t) continue;
     const ema=t.ema, st=t.st;
@@ -685,8 +702,21 @@ export async function runBreakoutScan(ctx, callbacks) {
       adxBull: !!adx?.bullTrend,
       bbSqueeze: !!bb?.squeeze,
     };
-    const boMlRank = applyMlRanking(boBaseConf, mlModels || null, {
-      type: 'STOCK', confidence: boBaseConf, numInds: score,
+    // Multi-timeframe grade BEFORE the ML ranker and the gate (same order as the Picks and options scans),
+    // only for actionable breakouts, within a per-scan lookup budget.
+    let boMtfG = null;
+    if (boRec !== 'WATCH' && mtfBudget > 0) {
+      mtfBudget--;
+      try {
+        const _ctx = await getMtf({ key: item.key, price: ltp, token, onTokenExpired, daily: t.candles, weekly: t.weekly, lg });
+        boMtfG = _ctx ? gradeMtf(_ctx, isBull ? 1 : -1) : null;
+      } catch (_) { boMtfG = null; }
+    }
+    const boMtfPick = boMtfG ? { grade: boMtfG.grade, score: boMtfG.score, dirs: boMtfG.dirs, support: boMtfG.support, resistance: boMtfG.resistance, roomATR: boMtfG.roomATR, veto: boMtfG.veto, why: boMtfG.why, partial: boMtfG.partial } : null;
+    const boMtfAdj = boMtfG ? boMtfG.adj : 0;
+    const boConfIn = Math.max(1, Math.min(99, boBaseConf + boMtfAdj));
+    const boMlRank = applyMlRanking(boConfIn, mlModels || null, {
+      type: 'STOCK', confidence: boConfIn, numInds: score, mtf: boMtfPick,
       risk: 50, pot: { rr: trade.rr, wr: 0, base: 0, adj: 0, ev: 0 },
       rec: boRec, reversal: false, vix: vixVal,
       regime: marketRegime, volRegimeShift: boVolRegimeShift, _indSnap: boIndSnap,
@@ -706,8 +736,7 @@ export async function runBreakoutScan(ctx, callbacks) {
       type: 'STOCK', aiBlock: boMlRank.aiBlock, conf: boConf, rr: trade.rr,
       potBase: boPotBase, risk: 50, rec: boRec, mlModels, cfg,
     }).passes;
-    if (!boPasses) continue;
-    results.push({
+    const boItem = {
       ...item, ltp, chgPct:getChgPct(q), ema, pdhl, st, vol, score, bullScore, bearScore, dir, wk52, mom, nr7, bb, gap, adx, rs, wMTF, wick,
       trade, atr:t.atr, isBull, phase, sectorScore, sec:item.sec||item.s||'NSE',
       ivPct, primaryType, trigger: primaryType || 'BREAKOUT',
@@ -723,20 +752,19 @@ export async function runBreakoutScan(ctx, callbacks) {
       nearSupp:false, vwap:0, aboveVWAP:null, vwapType:'daily',
       entryTrigger:{trigger:trade.sl,method:isBull?'Break above PDH':'Break below PDL',alreadyTriggered:false},
       reversal:{type:'NONE'}, recentCandles:t.candles.slice(0,20), closes:t.closes,
-    });
+      mtf: boMtfPick, mtfUnavailable: !boMtfG, mtfBoost: boMtfAdj, mtfNote: boMtfG ? `${boMtfG.grade} ${boMtfG.dirs}` : null,
+    };
+    // Blocked by the higher timeframes: keep the outcome in the shadow log (so the veto can be judged), do not show it.
+    if (boMtfPick?.veto) { pushShadow(boItem, 'mtf_avoid: ' + (boMtfPick.why || 'higher timeframes against'), 'STOCK'); continue; }
+    if (!boPasses) continue;
+    results.push(boItem);
   }
   results.sort((a,b)=>{
     const ap=(a.wk52?.breakHigh||a.wk52?.breakLow?2:0)+(a.ema?.goldenCross||a.ema?.deathCross?2:0);
     const bp=(b.wk52?.breakHigh||b.wk52?.breakLow?2:0)+(b.ema?.goldenCross||b.ema?.deathCross?2:0);
     return bp-ap||b.score-a.score;
   });
-  // Same top-down check as the Picks scan: weekly + daily + 60-min + 15-min must not be against the breakout.
-  // The scan already holds a year of daily and weekly candles per stock, so those are reused.
-  await applyMtfStage(results, {
-    token, onTokenExpired, lg, minConf: cfg.minStockConf || 50, topN: 10,
-    onReject: (p, reason) => pushShadow(p, reason, 'STOCK'),
-    getInputs: (p) => ({ daily: techB[p.s]?.candles, weekly: techB[p.s]?.weekly }),
-  });
+  // (The breakout timeframe check happens inside the scoring loop above, before the ML ranker and the gate.)
   const goldCross =results.filter(r=>r.ema?.goldenCross).length;
   const deathCross=results.filter(r=>r.ema?.deathCross).length;
   const pdhBreak  =results.filter(r=>r.pdhl?.bullBreakout).length;
