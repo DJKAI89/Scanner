@@ -762,38 +762,3 @@ export async function ghPatchSignal(gh, date, id, patch) {
   }
   throw new Error('Write conflict — try again');
 }
-
-
-// ══════════════════════════════════════════════════════════
-// Today's Plan trades → the normal day file, so the monitor, journal and
-// Analysis page track them like any other signal. Tagged planned:true so they
-// stay OUT of scanner learning (ML / adaptive weights / scanner stats).
-// Dedupes by id (plan-<date>-<index>-<setup>): one entry per plan per day.
-// ══════════════════════════════════════════════════════════
-export async function logPlanSignals(gh, newSignals, lg = () => {}) {
-  if (!gh?.token || !gh.user || !gh.repo || !newSignals?.length) return 0;
-  try {
-    const istDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const { signals, sha } = await ghReadDay(gh, istDate);
-      const have = new Set(signals.map(s => s.id));
-      const fresh = newSignals.filter(s => !have.has(s.id));
-      if (!fresh.length) return 0;
-      const all = [...signals, ...fresh];
-      const newSha = await ghWriteDay(gh, all, sha, istDate);
-      if (newSha) {
-        const closed = all.filter(s => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
-        const hits = all.filter(s => s.status === 'TARGET_HIT').length;
-        ghUpdateIndex(gh, istDate, {
-          total: all.length, hits, sls: all.filter(s => s.status === 'SL_HIT').length,
-          open: all.filter(s => s.status === 'OPEN').length,
-          winRate: closed.length ? Math.round(hits / closed.length * 100) : null,
-        }).catch(() => {});
-        lg(`Plan: ${fresh.length} trade(s) logged`, 'o');
-        return fresh.length;
-      }
-      await new Promise(res => setTimeout(res, 500 + Math.random() * 500));
-    }
-  } catch (e) { lg('logPlanSignals: ' + e.message, 'w'); }
-  return 0;
-}
