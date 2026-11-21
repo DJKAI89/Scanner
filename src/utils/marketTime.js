@@ -16,6 +16,14 @@ export function getISTDate() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 }
 
+// IST calendar date (YYYY-MM-DD) for any timestamp / "n days ago" — never UTC
+export function istYmd(ms = Date.now()) {
+  return new Date(ms).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+export function istDaysAgo(n) {
+  return istYmd(Date.now() - n * 86400000);
+}
+
 export function localIsOpen() {
   const now = new Date();
   const istStr = now.toLocaleString('en-US', {
