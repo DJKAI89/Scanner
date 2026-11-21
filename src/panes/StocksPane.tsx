@@ -293,7 +293,7 @@ function PickChartPopup({ p, onClose }) {
         {/* Live chart */}
         <div style={{ padding:'0 12px', marginBottom:12 }}>
           <LiveChart
-            instrKey={p.key || ''}
+            instrKey={p.key || p.instrKey || ''}
             candles={p.recentCandles || []}
             closes={p.closes || []}
             entry={et?.trigger || ltp}
