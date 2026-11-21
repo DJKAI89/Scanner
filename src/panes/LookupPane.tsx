@@ -10,7 +10,7 @@ import { fmt, fmtVol } from '../utils/formatters';
 import { getIST } from '../utils/marketTime';
 import { QUICK_STOCKS } from '../constants/config';
 import {
-  AccentCard, Tag, RecPill, LevelsStrip, Banner, FooterNote,
+  AccentCard, Tag, RecPill, LevelsStrip, Banner, FooterNote, MtfTags,
 } from '../components/cardKit';
 
 // ── SectionCard — accent-header card shell, consistent with Analysis/Stocks pages ──
@@ -202,6 +202,8 @@ function OptionSuggestionCard({ pick, cfg, showTools = true }) {
           </Tag>
         )}
       </div>
+
+      <MtfTags mtf={pick.mtf} spreadPct={pick.spreadPct} />
 
       <LevelsStrip
         entry={fmt(pick.entry)}

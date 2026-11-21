@@ -6,6 +6,7 @@ import StockCard from '../components/StockCard.jsx';
 import { fmt, interpVIX, fmtVol } from '../utils/formatters';
 import LiveChart from '../components/LiveChart';
 import { AccentCard, CardHeader, LevelsStrip, ProgressStat, SignalTags, WhyBox, contextTags, KpiStrip, riskFlags } from '../components/cardKit';
+import MtfPanel from '../components/MtfPanel.jsx';
 import { getIST } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed.js';
 import { runPicksScan, runBreakoutScan, fetchClosedMarketIndexPrices } from '../services/stockScan';
@@ -205,6 +206,9 @@ function BoChartPopup({ r, onClose }) {
           </div>
         </div>
 
+        {/* Timeframes */}
+        <div style={{ margin: '0 12px' }}><MtfPanel instrumentKey={r.key} price={r.ltp} title="Timeframes" defaultOpen={false} /></div>
+
         {/* Why */}
         {r._whyLines?.length > 0 && (
           <div style={{ margin: '0 12px', padding: '10px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, marginBottom: 12 }}>
@@ -388,6 +392,9 @@ function PickChartPopup({ p, onClose }) {
           </div>
         )}
 
+        {/* Timeframes */}
+        <div style={{ margin: '0 12px' }}><MtfPanel instrumentKey={p.key} price={p.ltp || p.entry} title="Timeframes" defaultOpen={false} /></div>
+
         {/* Why */}
         <div style={{ margin:'0 12px', padding:'10px 12px', background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:10, marginBottom:12 }}>
           <div style={{ fontSize:9, fontWeight:800, color:'#64748b', marginBottom:6 }}>SIGNAL ANALYSIS</div>
@@ -474,6 +481,8 @@ function BoCard({ r, rank, onPopup }) {
   if (r.stockVWAP?.aboveVWAP && r.stockVWAP?.strong) tag(`📊 ABOVE VWAP ₹${fmtV(r.stockVWAP.vwap)} (+${r.stockVWAP.distPct}%)`,'green');
   else if (!r.stockVWAP?.aboveVWAP && r.stockVWAP?.strong) tag(`📊 BELOW VWAP ₹${fmtV(r.stockVWAP.vwap)} (${r.stockVWAP.distPct}%)`,'red');
   else if (r.stockVWAP?.nearVWAP) tag(`📊 AT VWAP ₹${fmtV(r.stockVWAP.vwap)}`,'slate');
+  if (r.mtf) tag(`MTF ${r.mtf.grade} \u00B7 ${r.mtf.dirs}${r.mtf.roomATR != null ? ` \u00B7 ${r.mtf.roomATR} ATR room` : ''}`, r.mtf.grade === 'A' ? 'green' : r.mtf.grade === 'B' ? 'blue' : 'amber');
+  else if (r.mtfUnavailable) tag('MTF n/a', 'slate');
   if (r.wMTF?.confirms) tag('📅 WEEKLY CONFIRMS','purple');
   if (r.sectorScore>0)  tag(`🏭 ${r.sec||'NSE'} STRONG`,'green');
   else if (r.sectorScore<0) tag(`🏭 ${r.sec||'NSE'} WEAK`,'red');
