@@ -1,6 +1,7 @@
 // ── GitHub API service ── exact port from HTML ──
 
 import { optionTrigger } from './triggers.js';
+import { getISTDate } from '../utils/marketTime.js';
 import { splitModelForStorage, mergeModelFromStorage } from './mlRanking.js';
 
 
@@ -206,7 +207,7 @@ export async function pushVixHistoryToGH(gh, payload) {
 export async function appendAiHistoryToGH(gh, snapshot) {
   if (!gh.token || !gh.user || !gh.repo || !snapshot) return false;
   try {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getISTDate();
     const dayPath = getAiHistoryDayPath(today);
     const dayExisting = await _ghFetch(gh, dayPath);
     const dayR = await _ghPut(gh, dayPath, { date: today, snapshot, upstoxId: _uid() }, dayExisting?.sha || null, `SCANNER AI history · ${_uid()} · ${today}`);

@@ -3,7 +3,7 @@
 // All calculation, scoring, and API-call logic for the Options tab lives here.
 
 import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api.js';
-import { getIST, sleep } from '../utils/marketTime.js';
+import { getIST, sleep, getISTDate, istDaysAgo } from '../utils/marketTime.js';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config.js';
 import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, buildOptionConfluence, buildOptionIndSnap, candleOrder, interpretFIIDII, computeVixPercentile, vixRegimeShiftScore } from './technical.js';
 import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
@@ -19,13 +19,9 @@ export const VIX_KEY = 'NSE_INDEX|India VIX';
 // trading days of the month when only next-month expiries remain).
 export function expiriesInCurrentMonth(allExpiries) {
   const unique = [...new Set(allExpiries)].sort();
-  const now = new Date();
-  const y = now.getFullYear(), m = now.getMonth();
-  const todayStr = now.toISOString().slice(0, 10);
-  const inMonth = unique.filter(e => {
-    const d = new Date(e);
-    return d.getFullYear() === y && d.getMonth() === m && e >= todayStr;
-  });
+  const todayStr = getISTDate();
+  const ym = todayStr.slice(0, 7);
+  const inMonth = unique.filter(e => e.slice(0, 7) === ym && e >= todayStr);
   return inMonth.length ? inMonth : (unique[0] ? [unique[0]] : []);
 }
 
@@ -200,8 +196,8 @@ export async function scanStockOptions({ inst, spot, spotChg, deps, env, expirie
   let stkCandles = [];
   let stkDailyCandles = [];
   try {
-    const today = new Date().toISOString().split('T')[0];
-    const from365 = new Date(Date.now() - 365*86400000).toISOString().split('T')[0];
+    const today = getISTDate();
+    const from365 = istDaysAgo(365);
     [stkCandles, stkDailyCandles] = await Promise.all([
       fetchIntraday(inst.key, '5minute', accessToken, onTokenExpired).catch(() => []),
       fetchCandles(inst.key, from365, today, 'day', accessToken, onTokenExpired).catch(() => []),

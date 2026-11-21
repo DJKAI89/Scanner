@@ -7,6 +7,7 @@
 // at a time, driven by the selected expiry.
 
 import { fetchQ, fetchOptions, fetchOptionContracts, fetchIntraday } from './api';
+import { getISTDate } from '../utils/marketTime';
 import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChainAnalysis } from './technical';
 
 export function getOptionKey(opt) {
@@ -20,7 +21,7 @@ export function getOptionKey(opt) {
 //   show current month's + next month's expiry only.
 export function classifyExpiries(allExpiries) {
   const unique = [...new Set(allExpiries)].filter(Boolean).sort();
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getISTDate();
   const future = unique.filter(e => e >= todayStr);
   if (!future.length) return { mode: 'none', list: [] };
 

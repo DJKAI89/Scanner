@@ -24,7 +24,7 @@ export function istNow() {
   return { date, min: (parseInt(parts[0], 10) % 24) * 60 + parseInt(parts[1], 10) };
 }
 
-function ymd(d) { return d.toISOString().slice(0, 10); }
+function ymd(d) { return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); }
 
 export function planLimitsFromCfg(cfg) {
   const l = {};
