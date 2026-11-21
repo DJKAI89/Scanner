@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { DEF, CFG_VERSION } from '../constants/config';
-import { localIsOpen, getMarketStatusLocal, getIST, getISTDate } from '../utils/marketTime';
+import { localIsOpen, getMarketStatusLocal, getIST, getISTDate, istDaysAgo } from '../utils/marketTime';
 import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken, fetchFIIDIIData, fetchCandles } from '../services/api';
 
 // One-time migration: rename legacy 'friday_*' localStorage keys to 'scanner_*'
@@ -317,8 +317,8 @@ export function AppProvider({ children }) {
       const stored = await pullVixHistoryFromGH(g);
       const closes = Array.isArray(stored?.closes) ? stored.closes : [];
       const lastDate = closes.length ? closes[closes.length - 1].date : null;
-      const from = lastDate || new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10);
-      const to = new Date().toISOString().slice(0, 10);
+      const from = lastDate || istDaysAgo(400);
+      const to = getISTDate();
       const candles = await fetchCandles('NSE_INDEX|India VIX', from, to, 'day', upstoxToken, onTokenExpired);
       const newCloses = (candles || [])
         .map((c) => ({ date: String(c[0]).slice(0, 10), close: c[4] }))
