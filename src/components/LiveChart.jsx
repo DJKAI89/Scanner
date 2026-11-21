@@ -12,11 +12,11 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useApp } from '../context/AppContext';
 import { resolveAccessToken, fetchCandles, fetchCandlesV3, fetchIntradayV3 } from '../services/api';
 import { useMarketFeed } from '../hooks/useMarketFeed';
-import { localIsOpen } from '../utils/marketTime';
+import { localIsOpen, istYmd as _istYmd } from '../utils/marketTime';
 
 // ── Helpers ───────────────────────────────────────────────────
 const IST = { timeZone: 'Asia/Kolkata' };
-const istYmd = (ms = Date.now()) => new Date(ms).toLocaleDateString('en-CA', IST);
+const istYmd = _istYmd;
 const istMidnight = (ms = Date.now()) => Date.parse(istYmd(ms) + 'T00:00:00+05:30');
 const SESSION_OPEN_MS = (9 * 60 + 15) * 60000;
 
@@ -100,6 +100,48 @@ const INTERVALS = [
   { key: '60minute', label: '1H',  days: 85,  isIntra: true,  unit: 'hours',   n: 1,  durMin: 60,   poll: 45000, v2: false },
 ];
 
+// ── Candle cache (module-level: survives closing/reopening the sheet) ──
+const CACHE_FRESH_OPEN   = 30000;   // market open: reuse for 30 s
+const CACHE_FRESH_CLOSED = 600000;  // market closed: data can't change, 10 min
+const CACHE_MAX = 40;
+const _cache    = new Map();        // key -> { at, data }
+const _inflight = new Map();        // key -> Promise (share concurrent requests)
+const cacheKey  = (instrKey, ivl) => `${instrKey}|${ivl}`;
+
+async function loadCandles(instrKey, meta, token) {
+  const today = istYmd();
+  const from  = istYmd(Date.now() - meta.days * 86400000);
+  let hist = [];
+  try { hist = await fetchCandlesV3(instrKey, meta.unit, meta.n, from, today, token); } catch (_) {}
+  if (!hist.length && meta.v2) {
+    try { hist = await fetchCandles(instrKey, from, today, meta.key, token); } catch (_) {}
+  }
+  let intra = [];
+  if (localIsOpen()) {
+    try { intra = await fetchIntradayV3(instrKey, meta.unit, meta.n, token); } catch (_) {}
+  }
+  return normalize([...hist, ...intra]);
+}
+
+function getCandles(instrKey, meta, token, force) {
+  const k = cacheKey(instrKey, meta.key);
+  const hit = _cache.get(k);
+  if (!force && hit && Date.now() - hit.at < (localIsOpen() ? CACHE_FRESH_OPEN : CACHE_FRESH_CLOSED)) return Promise.resolve(hit.data);
+  if (_inflight.has(k)) return _inflight.get(k);
+  const p = loadCandles(instrKey, meta, token)
+    .then(data => {
+      if (data.length) {
+        _cache.delete(k);
+        _cache.set(k, { at: Date.now(), data });
+        while (_cache.size > CACHE_MAX) _cache.delete(_cache.keys().next().value);
+      }
+      return data;
+    })
+    .finally(() => _inflight.delete(k));
+  _inflight.set(k, p);
+  return p;
+}
+
 // ── Main component ────────────────────────────────────────────
 export default function LiveChart({
   instrKey = '',
@@ -142,42 +184,40 @@ export default function LiveChart({
     return () => obs.disconnect();
   }, []);
 
-  // ── Fetch candles (history + today's intraday, merged) ───────
+  // ── Fetch candles (cached + de-duplicated; see getCandles) ────
   const fetchData = useCallback(async (silent = false) => {
     if (!instrKey || !accessToken) return;
     const meta  = INTERVALS.find(i => i.key === selInterval) || INTERVALS[0];
     const reqId = ++reqRef.current;
-    if (!silent) { setLoading(true); setError(''); }
+    let quiet = silent;
+    if (!silent) {
+      const hit = _cache.get(cacheKey(instrKey, meta.key));
+      if (hit) {
+        // Show cached candles instantly; only hit the API if they're stale
+        setAllCandles(hit.data); setViewOffset(0); setError(''); setLoading(false);
+        if (Date.now() - hit.at < (localIsOpen() ? CACHE_FRESH_OPEN : CACHE_FRESH_CLOSED)) return;
+        quiet = true;
+      } else {
+        setAllCandles([]); setLoading(true); setError('');
+      }
+    }
     try {
-      const today = istYmd();
-      const from  = istYmd(Date.now() - meta.days * 86400000);
-      let hist = [];
-      try { hist = await fetchCandlesV3(instrKey, meta.unit, meta.n, from, today, accessToken); } catch (_) {}
-      if (!hist.length && meta.v2) {
-        try { hist = await fetchCandles(instrKey, from, today, selInterval, accessToken); } catch (_) {}
-      }
-      let intra = [];
-      if (localIsOpen()) {
-        try { intra = await fetchIntradayV3(instrKey, meta.unit, meta.n, accessToken); } catch (_) {}
-      }
+      const data = await getCandles(instrKey, meta, accessToken, silent);
       if (reqId !== reqRef.current) return; // stale (interval switched)
-      const data = normalize([...hist, ...intra]);
       if (data.length) {
         setAllCandles(data);
         setError('');
-        if (!silent) setViewOffset(0);
-      } else if (!silent) {
+      } else if (!quiet) {
         setError(`No ${meta.label} candle data available`);
-        const seed = meta.key === 'day' ? normalize(seedRef.current) : [];
-        setAllCandles(seed);
+        setAllCandles(meta.key === 'day' ? normalize(seedRef.current) : []);
       }
     } catch (e) {
-      if (reqId === reqRef.current && !silent) {
+      if (reqId === reqRef.current && !quiet) {
         setError('Fetch error: ' + e.message);
         setAllCandles(selInterval === 'day' ? normalize(seedRef.current) : []);
       }
     } finally {
-      if (!silent && reqId === reqRef.current) setLoading(false);
+      if (!quiet && reqId === reqRef.current) setLoading(false);
     }
   }, [instrKey, selInterval, accessToken]);
 
@@ -198,12 +238,27 @@ export default function LiveChart({
 
   // ── Live tick (own feed always; parent price only as fallback) ─
   const wsKeys = useMemo(() => (instrKey ? [instrKey] : []), [instrKey]);
-  const { lastPrices, connected } = useMarketFeed(
+  const { lastPrices, connected, wsMode } = useMarketFeed(
     accessToken, wsKeys, wsKeys.length > 0 && marketOpen,
     { mode: 'ltpc', pollFallback: true }
   );
   const tick  = instrKey ? lastPrices[instrKey] : null;
   const price = tick?.ltp > 0 ? tick.ltp : (livePrice > 0 ? livePrice : 0);
+
+  // Feed health: tickAt = last time a price arrived; `now` re-evaluates staleness every 5 s
+  const tickAtRef = useRef(0);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!marketOpen) return;
+    const id = setInterval(() => setNow(Date.now()), 5000);
+    return () => clearInterval(id);
+  }, [marketOpen]);
+  useEffect(() => { if (tick?.ltp) tickAtRef.current = Date.now(); }, [tick?.ltp]);
+  const hasTick = !!tick?.ltp || tickAtRef.current > 0;
+  const feedStale = hasTick && now - tickAtRef.current > 20000;
+  const feedState = !marketOpen ? 'closed'
+    : (!connected || wsMode !== 'ws' || feedStale) ? (hasTick ? 'delayed' : 'connecting')
+    : 'live';
 
   useEffect(() => {
     if (tick?.ltp) setTickTime(new Date().toLocaleTimeString('en-IN', { ...IST, hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }));
@@ -290,7 +345,11 @@ export default function LiveChart({
     if (!display.length) return { hi: 100, lo: 0 };
     let hi = Math.max(...display.map(c => c[2]));
     let lo = Math.min(...display.map(c => c[3]));
-    [entry, sl, target, ltp].forEach(v => { if (v > 0) { hi = Math.max(hi, v); lo = Math.min(lo, v); } });
+    const span = (hi - lo) || 1;
+    const cHi = hi, cLo = lo;
+    // Levels join the range only when reasonably close; far ones are pinned to the edge with an arrow
+    [entry, sl, target].forEach(v => { if (v > 0 && v <= cHi + span * 0.25 && v >= cLo - span * 0.25) { hi = Math.max(hi, v); lo = Math.min(lo, v); } });
+    if (ltp > 0) { hi = Math.max(hi, ltp); lo = Math.min(lo, ltp); }
     const pad = (hi - lo) * 0.07;
     return { hi: hi + pad, lo: lo - pad };
   }, [display, entry, sl, target, ltp]);
@@ -395,12 +454,13 @@ export default function LiveChart({
     { p: sl,     col: '#ef4444', lbl: 'SL',    dash: '' },
     { p: ltp,    col: '#f59e0b', lbl: '',       dash: '2,2' },
   ].filter(x => x.p > 0).map(({ p, col, lbl, dash }) => {
-    const y = py(p);
-    if (y < 2 || y > MAIN_H - 2) return '';
+    let y = py(p), arrow = '';
+    if (y < 9)           { y = 9;          arrow = '▲'; }
+    else if (y > MAIN_H - 9) { y = MAIN_H - 9; arrow = '▼'; }
     const yt = y.toFixed(1);
-    return `<line x1="${LEFT}" y1="${yt}" x2="${W-PRICE_AX}" y2="${yt}" stroke="${col}" stroke-width="${!lbl?1.5:1}" stroke-dasharray="${dash}" opacity="0.9"/>` +
+    return `<line x1="${LEFT}" y1="${yt}" x2="${W-PRICE_AX}" y2="${yt}" stroke="${col}" stroke-width="${!lbl?1.5:1}" stroke-dasharray="${arrow ? '1,3' : dash}" opacity="${arrow ? 0.6 : 0.9}"/>` +
            `<rect x="${W-PRICE_AX+1}" y="${(y-7).toFixed(1)}" width="${PRICE_AX-2}" height="14" rx="3" fill="${col}"/>` +
-           `<text x="${W-PRICE_AX+4}" y="${(y+4).toFixed(1)}" font-size="9" font-weight="800" fill="#fff" font-family="monospace,system-ui">${fmtP(p)}</text>` +
+           `<text x="${W-PRICE_AX+4}" y="${(y+4).toFixed(1)}" font-size="9" font-weight="800" fill="#fff" font-family="monospace,system-ui">${arrow}${fmtP(p)}</text>` +
            (lbl ? `<rect x="${LEFT+1}" y="${(y-7).toFixed(1)}" width="30" height="12" rx="2" fill="${col}" opacity="0.85"/><text x="${LEFT+4}" y="${(y+3).toFixed(1)}" font-size="7.5" font-weight="700" fill="#fff" font-family="system-ui">${lbl}</text>` : '');
   }).join('');
 
@@ -415,10 +475,16 @@ export default function LiveChart({
           <span style={{ fontSize:17, fontWeight:900, color:'#0f172a' }}>₹{fmtP(ltp)}</span>
           <span style={{ fontSize:11, fontWeight:700, color:chgColor }}>{chgPct>=0?'+':''}{chgPct.toFixed(2)}%</span>
         </div>
-        {marketOpen && (connected || !!tick) && (
+        {feedState === 'live' && (
           <div style={{ display:'flex', alignItems:'center', gap:3, fontSize:9, color:'#16a34a', fontWeight:700 }}>
             <div style={{ width:6, height:6, borderRadius:'50%', background:'#16a34a', animation:'pulse 1.5s infinite' }} />
             LIVE {tickTime}
+          </div>
+        )}
+        {(feedState === 'delayed' || feedState === 'connecting') && (
+          <div style={{ display:'flex', alignItems:'center', gap:3, fontSize:9, color:'#d97706', fontWeight:700 }}>
+            <div style={{ width:6, height:6, borderRadius:'50%', background:'#f59e0b' }} />
+            {feedState === 'connecting' ? 'Connecting…' : `Live data delayed${tickTime ? ' · ' + tickTime : ''}`}
           </div>
         )}
       </div>
@@ -426,7 +492,7 @@ export default function LiveChart({
       {/* Interval pills */}
       <div style={{ display:'flex', gap:4, marginBottom:8 }}>
         {INTERVALS.map(({ key, label }) => (
-          <button key={key} onClick={() => { setSelInterval(key); setViewOffset(0); setAllCandles([]); }}
+          <button key={key} onClick={() => { setSelInterval(key); setViewOffset(0); }}
             style={{ padding:'3px 11px', fontSize:10, fontWeight:700, borderRadius:16, border:'none', cursor:'pointer', flexShrink:0,
               background: selInterval===key ? '#0f172a' : '#f1f5f9',
               color:      selInterval===key ? '#fff'    : '#64748b',
