@@ -60,24 +60,26 @@ function AppShell() {
 
       {/* ── Post-login App ── */}
       {booted && (
-        <>
-          {/* Slide nav drawer */}
+        <div className="app-body">
+          {/* Nav: slide drawer on small screens, fixed sidebar on desktop (CSS) */}
           <NavDrawer open={menuOpen} onClose={() => setMenuOpen(false)} />
 
-          {/* Log drawer (below header, above panes) */}
-          <div style={{ padding: '0 12px' }}>
-            <LogDrawer open={logOpen} lines={logLines} onClear={() => setLogLines([])} />
-          </div>
+          <div className="app-main">
+            {/* Log drawer (below header, above panes) */}
+            <div style={{ padding: '0 12px' }}>
+              <LogDrawer open={logOpen} lines={logLines} onClear={() => setLogLines([])} />
+            </div>
 
-          {/* Active pane — isolated so a crash here doesn't take down the whole app */}
-          <div className="pane active">
-            <ErrorBoundary key={activeTab + paneKey} onRetry={() => setPaneKey((k) => k + 1)}>
-              <Suspense fallback={<PaneFallback />}>
-                <ActivePane />
-              </Suspense>
-            </ErrorBoundary>
+            {/* Active pane — isolated so a crash here doesn't take down the whole app */}
+            <div className="pane active">
+              <ErrorBoundary key={activeTab + paneKey} onRetry={() => setPaneKey((k) => k + 1)}>
+                <Suspense fallback={<PaneFallback />}>
+                  <ActivePane />
+                </Suspense>
+              </ErrorBoundary>
+            </div>
           </div>
-        </>
+        </div>
       )}
 
       {/* ── Global toast ── */}
