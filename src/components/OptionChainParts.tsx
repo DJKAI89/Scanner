@@ -70,9 +70,9 @@ export function expiryLabel(e) {
 function Tile({ label, value, sub, color }) {
   return (
     <div style={{ background: '#f8fafc', border: '1px solid #eef2f7', borderRadius: 10, padding: '8px 10px', minWidth: 0 }}>
-      <div style={{ fontSize: 8, fontWeight: 800, color: '#94a3b8', letterSpacing: 1, textTransform: 'uppercase' }}>{label}</div>
+      <div style={{ fontSize: 10, fontWeight: 800, color: '#94a3b8', letterSpacing: 1, textTransform: 'uppercase' }}>{label}</div>
       <div style={{ fontSize: 15, fontWeight: 900, color: color || '#0f172a', marginTop: 2, letterSpacing: -0.3 }}>{value}</div>
-      {sub && <div style={{ fontSize: 9, color: SLATE, fontWeight: 600, marginTop: 1 }}>{sub}</div>}
+      {sub && <div style={{ fontSize: 10, color: SLATE, fontWeight: 600, marginTop: 1 }}>{sub}</div>}
     </div>
   );
 }
@@ -96,12 +96,12 @@ function RangeBar({ s, spot, accent }) {
         {s.putWall > 0 && <div style={{ position: 'absolute', top: 14, width: 3, height: 18, borderRadius: 2, background: GREEN, left: pos(s.putWall) + '%', transform: 'translateX(-50%)' }} />}
         {s.callWall > 0 && <div style={{ position: 'absolute', top: 14, width: 3, height: 18, borderRadius: 2, background: RED, left: pos(s.callWall) + '%', transform: 'translateX(-50%)' }} />}
         {s.maxPain > 0 && <div style={{ position: 'absolute', top: 19, width: 8, height: 8, background: '#7c3aed', left: pos(s.maxPain) + '%', transform: 'translateX(-50%) rotate(45deg)' }} />}
-        <div style={{ position: 'absolute', top: 0, left: pos(spot) + '%', transform: 'translateX(-50%)', fontSize: 9, fontWeight: 800, color: '#0f172a', whiteSpace: 'nowrap' }}>
+        <div style={{ position: 'absolute', top: 0, left: pos(spot) + '%', transform: 'translateX(-50%)', fontSize: 10, fontWeight: 800, color: '#0f172a', whiteSpace: 'nowrap' }}>
           {fmt(spot, 0)}
         </div>
         <div style={{ position: 'absolute', top: 18, width: 10, height: 10, borderRadius: '50%', background: '#0f172a', border: '2px solid #fff', boxShadow: '0 0 0 1px #0f172a', left: pos(spot) + '%', transform: 'translateX(-50%)' }} />
       </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px 12px', marginTop: 2, fontSize: 9, fontWeight: 700, color: SLATE }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px 12px', marginTop: 2, fontSize: 10, fontWeight: 700, color: SLATE }}>
         {s.putWall > 0 && <span><span style={{ color: GREEN }}>●</span> Support {fmt(s.putWall, 0)}</span>}
         {s.maxPain > 0 && <span><span style={{ color: '#7c3aed' }}>◆</span> Max Pain {fmt(s.maxPain, 0)}</span>}
         {s.callWall > 0 && <span><span style={{ color: RED }}>●</span> Resistance {fmt(s.callWall, 0)}</span>}
@@ -117,14 +117,14 @@ function OiFlow({ s }) {
   const tot = ca + pa;
   return (
     <div style={{ marginTop: 12 }}>
-      <div style={{ fontSize: 8, fontWeight: 800, color: '#94a3b8', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 4 }}>OI added today</div>
+      <div style={{ fontSize: 10, fontWeight: 800, color: '#94a3b8', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 4 }}>OI added today</div>
       {tot > 0 ? (
         <>
           <div style={{ display: 'flex', height: 8, borderRadius: 4, overflow: 'hidden', background: '#e2e8f0' }}>
             <div style={{ width: (ca / tot) * 100 + '%', background: RED, opacity: 0.8 }} />
             <div style={{ width: (pa / tot) * 100 + '%', background: GREEN, opacity: 0.8 }} />
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, fontWeight: 800, marginTop: 3 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, fontWeight: 800, marginTop: 3 }}>
             <span style={{ color: RED }}>Calls +{fmtOI(ca)}</span>
             <span style={{ color: GREEN }}>Puts +{fmtOI(pa)}</span>
           </div>
@@ -142,7 +142,7 @@ export function SnapshotCard({ s, filter, accent, spot, spotPts, spotChg, vix, v
     <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 14, padding: 14, marginBottom: 12, boxShadow: 'var(--shadow-raised)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
         <div>
-          <div style={{ fontSize: 9, fontWeight: 800, color: accent, letterSpacing: 1.2 }}>{filter}</div>
+          <div style={{ fontSize: 10, fontWeight: 800, color: accent, letterSpacing: 1.2 }}>{filter}</div>
           <div style={{ fontSize: 24, fontWeight: 900, color: '#0f172a', letterSpacing: -0.8, lineHeight: 1.1 }}>₹{fmt(spot, 2)}</div>
           <div style={{ fontSize: 11, fontWeight: 800, color: chgColor(spotChg) }}>
             {signed(spotPts, 2)} pts · {signed(spotChg ?? 0, 2)}%
@@ -152,10 +152,10 @@ export function SnapshotCard({ s, filter, accent, spot, spotPts, spotChg, vix, v
           <span style={{ fontSize: 10, fontWeight: 800, padding: '3px 9px', borderRadius: 20, background: vix < 16 ? '#f0fdf4' : vix > 22 ? '#fef2f2' : '#fffbeb', color: vix < 16 ? GREEN : vix > 22 ? RED : AMBER }}>
             VIX {vix.toFixed(2)} · {vixTxt}
           </span>
-          <span style={{ fontSize: 9, fontWeight: 800, color: wsMode === 'ws' ? GREEN : AMBER }}>
+          <span style={{ fontSize: 10, fontWeight: 800, color: wsMode === 'ws' ? GREEN : AMBER }}>
             ● {wsMode === 'ws' ? 'LIVE' : wsMode === 'poll' ? 'POLLING' : '...'} · {feedCount} strikes
           </span>
-          {s.dte != null && <span style={{ fontSize: 9, fontWeight: 700, color: SLATE }}>{s.dte === 0 ? 'Expires today' : `${s.dte}d to expiry`}</span>}
+          {s.dte != null && <span style={{ fontSize: 10, fontWeight: 700, color: SLATE }}>{s.dte === 0 ? 'Expires today' : `${s.dte}d to expiry`}</span>}
         </div>
       </div>
 
@@ -201,32 +201,32 @@ function SideCell({ cell, align, maxOi, itm }) {
         background: isLeft ? 'rgba(220,38,38,.10)' : 'rgba(22,163,74,.10)', pointerEvents: 'none' }} />
       <div style={{ position: 'relative' }}>
         {tag ? (
-          <div style={{ fontSize: 9.5, fontWeight: 800, color: tag.c, background: tag.bg, borderRadius: 5, padding: '2px 6px', marginBottom: 4, display: 'inline-block' }}>{tag.a} {tag.t}</div>
+          <div style={{ fontSize: 10, fontWeight: 800, color: tag.c, background: tag.bg, borderRadius: 5, padding: '2px 6px', marginBottom: 4, display: 'inline-block' }}>{tag.a} {tag.t}</div>
         ) : (
-          <div style={{ fontSize: 9.5, fontWeight: 700, color: '#94a3b8', marginBottom: 4 }}>No buildup</div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#94a3b8', marginBottom: 4 }}>No buildup</div>
         )}
         <div style={{ fontSize: 14, fontWeight: 800, color: ltpColor, display: 'flex', alignItems: 'baseline', gap: 4, justifyContent: justify }}>
-          {fmt(cell.ltp)}{cell.isLive && <span style={{ fontSize: 6, color: GREEN }}>⚡</span>}
-          <span style={{ fontSize: 9.5, fontWeight: 700 }}>{cell.ltpChgPct >= 0 ? '+' : ''}{cell.ltpChgPct}%</span>
+          {fmt(cell.ltp)}{cell.isLive && <span style={{ fontSize: 10, color: GREEN }}>⚡</span>}
+          <span style={{ fontSize: 10, fontWeight: 700 }}>{cell.ltpChgPct >= 0 ? '+' : ''}{cell.ltpChgPct}%</span>
         </div>
-        <div style={{ fontSize: 9.5, fontWeight: 700, color: '#334155', marginTop: 3 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: '#334155', marginTop: 3 }}>
           OI {fmtOI(cell.oi)}{' '}
           <span style={{ color: oiChg >= 0 ? '#2563eb' : '#ea580c' }}>{oiChg >= 0 ? '▲' : '▼'}{Math.abs(oiChg).toFixed(1)}%</span>
         </div>
-        <div style={{ fontSize: 9, color: SLATE, fontWeight: 600, marginTop: 1 }}>
+        <div style={{ fontSize: 10, color: SLATE, fontWeight: 600, marginTop: 1 }}>
           IV {cell.iv || '—'} · Δ {cell.delta != null ? Math.abs(cell.delta).toFixed(2) : '—'}
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 5, justifyContent: justify, alignItems: 'center' }}>
           <button onClick={() => setOpen((v) => !v)} style={{ border: 'none', cursor: 'pointer', background: confBg(cell.confidence), borderRadius: 5, padding: '1.5px 5px' }}>
-            <span style={{ fontSize: 9.5, fontWeight: 800, color: confColor(cell.confidence) }}>{cell.confidence}% {open ? '▾' : '▸'}</span>
+            <span style={{ fontSize: 10, fontWeight: 800, color: confColor(cell.confidence) }}>{cell.confidence}% {open ? '▾' : '▸'}</span>
           </button>
         </div>
-        <div style={{ fontSize: 8.5, color: '#94a3b8', marginTop: 3 }}>{fmtMargin(cell.marginEst)} margin</div>
+        <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 3 }}>{fmtMargin(cell.marginEst)} margin</div>
         {open && rows.length > 0 && (
           <div style={{ marginTop: 5, background: '#fafbfc', border: '1px solid #f1f5f9', borderRadius: 6, padding: '5px 7px', textAlign: 'left' }}>
-            <div style={{ fontSize: 7.5, fontWeight: 800, color: '#94a3b8', marginBottom: 2 }}>RAW SIGNAL — grid shows base score only, not the full ranked pipeline</div>
+            <div style={{ fontSize: 10, fontWeight: 800, color: '#94a3b8', marginBottom: 2 }}>RAW SIGNAL — grid shows base score only, not the full ranked pipeline</div>
             {rows.map((r, i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9 }}>
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10 }}>
                 <span style={{ color: SLATE }}>{r.label}</span>
                 <span style={{ fontWeight: 700, color: r.dir > 0 ? GREEN : r.dir < 0 ? RED : SLATE }}>{r.val}</span>
               </div>
@@ -239,7 +239,7 @@ function SideCell({ cell, align, maxOi, itm }) {
 }
 
 function Badge({ children, bg }) {
-  return <span style={{ fontSize: 7.5, fontWeight: 900, color: '#fff', background: bg, borderRadius: 3, padding: '1px 4px', letterSpacing: 0.3 }}>{children}</span>;
+  return <span style={{ fontSize: 10, fontWeight: 900, color: '#fff', background: bg, borderRadius: 3, padding: '1px 4px', letterSpacing: 0.3 }}>{children}</span>;
 }
 
 function StrikeRow({ row, accentColor, walls, maxOi, spot }) {
@@ -254,7 +254,7 @@ function StrikeRow({ row, accentColor, walls, maxOi, spot }) {
         borderLeft: '1px solid #f1f5f9', borderRight: '1px solid #f1f5f9', background: row.atm ? accentColor + '14' : '#fafbfc',
       }}>
         <div>{fmt(row.strike, 0)}</div>
-        <div style={{ fontSize: 8.5, color: '#94a3b8', fontWeight: 700 }}>PCR {pcr}</div>
+        <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700 }}>PCR {pcr}</div>
         <div style={{ display: 'flex', gap: 2, minHeight: 11 }}>
           {row.atm && <Badge bg={accentColor}>ATM</Badge>}
           {walls?.callWall === row.strike && <Badge bg={RED}>R</Badge>}
@@ -290,11 +290,11 @@ export function ChainSection({ chain, shownRows, totalStrikes, spot, accentColor
         border: `1px solid ${accentColor}30`, borderBottom: 'none',
       }}>
         <span style={{ fontSize: 11.5, fontWeight: 800, color: accentColor }}>📅 {chain?.expiry}</span>
-        <span style={{ fontSize: 9.5, color: SLATE, fontWeight: 600 }}>{shownRows.length}/{totalStrikes} strikes</span>
+        <span style={{ fontSize: 10, color: SLATE, fontWeight: 600 }}>{shownRows.length}/{totalStrikes} strikes</span>
       </div>
       <div style={{
         display: 'flex', alignItems: 'center', padding: '7px 9px', background: '#f1f5f9',
-        border: `1px solid ${accentColor}30`, borderTop: 'none', fontSize: 9, fontWeight: 800, color: SLATE, letterSpacing: 0.3,
+        border: `1px solid ${accentColor}30`, borderTop: 'none', fontSize: 10, fontWeight: 800, color: SLATE, letterSpacing: 0.3,
       }}>
         <div style={{ flex: 1, textAlign: 'left' }}>← CALLS</div>
         <div style={{ width: 80, textAlign: 'center' }}>STRIKE</div>
@@ -319,7 +319,7 @@ export function ChainSection({ chain, shownRows, totalStrikes, spot, accentColor
           </button>
         )}
       </div>
-      <div style={{ fontSize: 8.5, color: '#94a3b8', marginTop: 6, lineHeight: 1.5 }}>
+      <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 6, lineHeight: 1.5 }}>
         Shading behind each side = open interest relative to the largest wall (red calls, green puts). Amber tint = in the money.
         R / S / MP mark the call wall, put wall and max pain strikes. ▲▼ = OI change vs previous close.
       </div>

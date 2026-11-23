@@ -75,7 +75,7 @@ function ConfidenceWaterfall({ b }) {
       <div style={{ borderTop: '1px solid #e2e8f0', marginTop: 3, paddingTop: 3 }}>
         <WaterfallRow label="Final" val={b.final} isFinal />
       </div>
-      <div style={{ fontSize: 8.5, color: '#94a3b8', marginTop: 4 }}>
+      <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 4 }}>
         Each layer clamps independently to 1–99%, so a layer's true effect can be partly absorbed if the score is already near either bound.
       </div>
     </div>
@@ -95,7 +95,7 @@ export function ConfidenceBreakdown({ pick, kind = 'stock' }) {
         onClick={() => setOpen((v) => !v)}
         style={{
           background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-          fontSize: 9.5, fontWeight: 800, color: '#7c3aed', display: 'flex', alignItems: 'center', gap: 3,
+          fontSize: 10, fontWeight: 800, color: '#7c3aed', display: 'flex', alignItems: 'center', gap: 3,
         }}
       >
         {open ? '▾' : '▸'} Why {confVal}%?
@@ -105,7 +105,7 @@ export function ConfidenceBreakdown({ pick, kind = 'stock' }) {
           {breakdown && <ConfidenceWaterfall b={breakdown} />}
           {rows.length > 0 && (
             <div style={{ marginTop: 5, background: '#fafbfc', border: '1px solid #f1f5f9', borderRadius: 7, padding: '7px 9px' }}>
-              {breakdown && <div style={{ fontSize: 8.5, fontWeight: 800, color: '#94a3b8', marginBottom: 3 }}>SIGNALS THAT FED THE BASE SCORE</div>}
+              {breakdown && <div style={{ fontSize: 10, fontWeight: 800, color: '#94a3b8', marginBottom: 3 }}>SIGNALS THAT FED THE BASE SCORE</div>}
               {rows.map((r, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2.5px 0', fontSize: 10 }}>
                   <span style={{ color: '#64748b' }}>{r.label}</span>
