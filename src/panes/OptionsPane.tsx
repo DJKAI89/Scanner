@@ -126,14 +126,14 @@ function OptionCard({ pick, cfg: cardCfg }) {
       {/* Capital required */}
       <div style={{background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:9,padding:'8px 10px',marginBottom:9,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
         <div>
-          <div style={{fontSize:7.5,color:'#64748b',marginBottom:2}}>CAPITAL REQUIRED</div>
+          <div style={{fontSize:10,color:'#64748b',marginBottom:2}}>CAPITAL REQUIRED</div>
           <div style={{fontSize:15,fontWeight:800,color:'#0f172a'}}>₹{fmt(pick.amtRequired||0,0)}</div>
-          <div style={{fontSize:9,color:'#64748b'}}>{pick.lot} qty × ₹{fmt(pick.entry)} premium</div>
+          <div style={{fontSize:10,color:'#64748b'}}>{pick.lot} qty × ₹{fmt(pick.entry)} premium</div>
         </div>
         <div style={{textAlign:'right'}}>
-          <div style={{fontSize:7.5,color:'#64748b',marginBottom:2}}>MAX PROFIT / LOSS</div>
+          <div style={{fontSize:10,color:'#64748b',marginBottom:2}}>MAX PROFIT / LOSS</div>
           <div style={{fontSize:12.5,fontWeight:700,color:'#16a34a'}}>+₹{fmt(pick.maxProfit||0,0)}</div>
-          <div style={{fontSize:9,color:'#dc2626'}}>−₹{fmt(Math.abs(pick.maxLoss||0),0)}</div>
+          <div style={{fontSize:10,color:'#dc2626'}}>−₹{fmt(Math.abs(pick.maxLoss||0),0)}</div>
         </div>
       </div>
 
@@ -145,7 +145,7 @@ function OptionCard({ pick, cfg: cardCfg }) {
         slSub={`${pick.action==='BUY'?'-':'+'}${slPct}%`}
         tgtSub={`${pick.action==='BUY'?'+':'-'}${tgtPct}% · R:R ${(pick.rr||0).toFixed?pick.rr.toFixed(1):pick.rr}`}
       />
-      {pick.slTgtMethod && <div style={{fontSize:8.5,color:'#94a3b8',marginTop:-4,marginBottom:9}}>📐 {pick.slTgtMethod}</div>}
+      {pick.slTgtMethod && <div style={{fontSize:10,color:'#94a3b8',marginTop:-4,marginBottom:9}}>📐 {pick.slTgtMethod}</div>}
 
       <SignalTags tags={tags} />
 
@@ -153,6 +153,7 @@ function OptionCard({ pick, cfg: cardCfg }) {
       <ConfidenceBreakdown pick={pick} kind="option" />
 
       {/* Greeks */}
+      <details className="fold"><summary>Greeks and open interest</summary>
       <MetricGrid cols={4}>
         <MetricMini label="DELTA Δ" value={(pick.delta||0).toFixed(2)} color={dc} />
         <MetricMini label="IV %" value={(pick.iv||0).toFixed(1)} color={ivc} sub={ivCheap?'💡 Cheap':ivRich?'🔥 Rich':null} />
@@ -164,48 +165,54 @@ function OptionCard({ pick, cfg: cardCfg }) {
         <MetricMini label="Signal Score" value={`${pick.score||0}/9`} color="#d97706" sub={`${(pick.signals||[]).length} triggers`} />
       </MetricGrid>
 
+      </details>
+
       {/* Position sizing */}
       {tooBig && (
         <div style={{background:'#fef2f2',border:'1px solid #fecaca',borderRadius:9,padding:'8px 10px',marginBottom:9}}>
-          <div style={{fontSize:8,color:'#b91c1c',fontWeight:700,marginBottom:3}}>POSITION SIZING</div>
+          <div style={{fontSize:10,color:'#b91c1c',fontWeight:700,marginBottom:3}}>POSITION SIZING</div>
           <div style={{fontSize:12,fontWeight:800,color:'#b91c1c'}}>Skip: 1 lot risks {'\u20B9'}{fmt(lossPerLot,0)}</div>
-          <div style={{fontSize:9,color:'#64748b',marginTop:2}}>Your limit is {'\u20B9'}{fmt(maxRisk,0)} per trade ({riskPct2}% of {'\u20B9'}{(portSz/100000).toFixed(1)}L). Take it only if you accept the bigger loss.</div>
+          <div style={{fontSize:10,color:'#64748b',marginTop:2}}>Your limit is {'\u20B9'}{fmt(maxRisk,0)} per trade ({riskPct2}% of {'\u20B9'}{(portSz/100000).toFixed(1)}L). Take it only if you accept the bigger loss.</div>
         </div>
       )}
       {recLots > 0 && (
+        <details className="fold" open><summary>Position sizing</summary>
         <div style={{background:sizeBg,border:'1px solid #e2e8f0',borderRadius:9,padding:'8px 10px',marginBottom:9}}>
-          <div style={{fontSize:8,color:'#64748b',fontWeight:700,marginBottom:4}}>💰 POSITION SIZING (₹{(portSz/100000).toFixed(1)}L · {riskPct2}% risk = ₹{fmt(maxRisk,0)} max)</div>
+          <div style={{fontSize:10,color:'#64748b',fontWeight:700,marginBottom:4}}>💰 POSITION SIZING (₹{(portSz/100000).toFixed(1)}L · {riskPct2}% risk = ₹{fmt(maxRisk,0)} max)</div>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-            <div><span style={{fontSize:17,fontWeight:800,color:sizeColor}}>{recLots} lot{recLots>1?'s':''}</span><span style={{fontSize:9,color:'#64748b',marginLeft:6}}>recommended</span></div>
-            <div style={{textAlign:'right',fontSize:9,color:'#64748b'}}>Capital: ₹{fmt(recCapital,0)}<br/>Max loss: ₹{fmt(recLots*lossPerLot,0)}</div>
+            <div><span style={{fontSize:17,fontWeight:800,color:sizeColor}}>{recLots} lot{recLots>1?'s':''}</span><span style={{fontSize:10,color:'#64748b',marginLeft:6}}>recommended</span></div>
+            <div style={{textAlign:'right',fontSize:10,color:'#64748b'}}>Capital: ₹{fmt(recCapital,0)}<br/>Max loss: ₹{fmt(recLots*lossPerLot,0)}</div>
           </div>
-          {recLots>3&&<div style={{fontSize:8,color:'#64748b',marginTop:3}}>⚠ Consider max {Math.min(recLots,3)} lots to diversify</div>}
+          {recLots>3&&<div style={{fontSize:10,color:'#64748b',marginTop:3}}>⚠ Consider max {Math.min(recLots,3)} lots to diversify</div>}
         </div>
+        </details>
       )}
 
       {/* Payoff calculator */}
       {spot_ > 0 && (pick.entry||0) > 0 && (
+        <details className="fold"><summary>Payoff calculator</summary>
         <div style={{background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:9,padding:'8px 10px',marginBottom:9}}>
-          <div style={{fontSize:8,color:'#64748b',fontWeight:700,marginBottom:6}}>📊 PAYOFF CALCULATOR (delta approx)</div>
+          <div style={{fontSize:10,color:'#64748b',fontWeight:700,marginBottom:6}}>📊 PAYOFF CALCULATOR (delta approx)</div>
           {scenarios.map(s=>(
             <div key={s.pct} style={{display:'flex',justifyContent:'space-between',padding:'3px 6px',borderRadius:5,background:s.pnl>0?'#f0fdf4':s.pnl<0?'#fef2f2':'#f8fafc'}}>
-              <span style={{fontSize:9,color:'#374151',fontWeight:600}}>{s.pct>0?'+':''}{s.pct}% (₹{fmt(spot_*(1+s.pct/100),0)})</span>
-              <span style={{fontSize:9,fontWeight:700,color:s.pnl>0?'#16a34a':s.pnl<0?'#dc2626':'#64748b'}}>₹{fmt(s.newPrem)} {s.pnlPct!=='0'?`(${s.pnlPct>0?'+':''}${s.pnlPct}%)`:''}</span>
+              <span style={{fontSize:10,color:'#374151',fontWeight:600}}>{s.pct>0?'+':''}{s.pct}% (₹{fmt(spot_*(1+s.pct/100),0)})</span>
+              <span style={{fontSize:10,fontWeight:700,color:s.pnl>0?'#16a34a':s.pnl<0?'#dc2626':'#64748b'}}>₹{fmt(s.newPrem)} {s.pnlPct!=='0'?`(${s.pnlPct>0?'+':''}${s.pnlPct}%)`:''}</span>
             </div>
           ))}
           <div style={{display:'flex',gap:6,marginTop:6,paddingTop:6,borderTop:'1px solid #e2e8f0'}}>
             <div style={{flex:1,textAlign:'center'}}>
-              <div style={{fontSize:7,color:'#64748b'}}>BREAK-EVEN</div>
+              <div style={{fontSize:10,color:'#64748b'}}>BREAK-EVEN</div>
               <div style={{fontSize:10,fontWeight:700,color:'#374151'}}>₹{fmt(beSpot,0)}</div>
-              <div style={{fontSize:8,color:parseFloat(bePct)>0?'#dc2626':'#16a34a'}}>{parseFloat(bePct)>0?'+':''}{bePct}% move needed</div>
+              <div style={{fontSize:10,color:parseFloat(bePct)>0?'#dc2626':'#16a34a'}}>{parseFloat(bePct)>0?'+':''}{bePct}% move needed</div>
             </div>
             <div style={{flex:1,textAlign:'center'}}>
-              <div style={{fontSize:7,color:'#64748b'}}>THETA DECAY</div>
-              <div style={{fontSize:9,color:'#64748b'}}>1d: <b>₹{Math.max(0,(pick.entry||0)-theta_).toFixed(2)}</b> · 3d: <b>₹{Math.max(0,(pick.entry||0)-theta_*3).toFixed(2)}</b></div>
-              <div style={{fontSize:7,color:'#dc2626'}}>-₹{theta_.toFixed(2)}/day</div>
+              <div style={{fontSize:10,color:'#64748b'}}>THETA DECAY</div>
+              <div style={{fontSize:10,color:'#64748b'}}>1d: <b>₹{Math.max(0,(pick.entry||0)-theta_).toFixed(2)}</b> · 3d: <b>₹{Math.max(0,(pick.entry||0)-theta_*3).toFixed(2)}</b></div>
+              <div style={{fontSize:10,color:'#dc2626'}}>-₹{theta_.toFixed(2)}/day</div>
             </div>
           </div>
         </div>
+        </details>
       )}
 
       <FooterNote>
@@ -386,7 +393,7 @@ export default function OptionsPane() {
           {/* FII/DII bias */}
           {fiiInterp && (
             <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:9, padding:'10px 14px', marginBottom:12, boxShadow:'var(--shadow-flat)' }}>
-              <div style={{ fontSize:9, color:'#94a3b8', marginBottom:3 }}>FII/DII BIAS</div>
+              <div style={{ fontSize:10, color:'#94a3b8', marginBottom:3 }}>FII/DII BIAS</div>
               <div style={{ fontSize:13, fontWeight:800, color:fiiInterp.color }}>{fiiInterp.label}</div>
               <div style={{ fontSize:10, color:'#64748b', marginTop:2 }}>{fiiInterp.detail}</div>
             </div>
@@ -395,7 +402,7 @@ export default function OptionsPane() {
           {/* Composite momentum per index */}
           {Object.keys(marketCtxMap).length > 0 && (
             <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:9, padding:'10px 14px', marginBottom:12, boxShadow:'var(--shadow-flat)' }}>
-              <div style={{ fontSize:9, color:'#94a3b8', marginBottom:6 }}>INTRADAY COMPOSITE MOMENTUM</div>
+              <div style={{ fontSize:10, color:'#94a3b8', marginBottom:6 }}>INTRADAY COMPOSITE MOMENTUM</div>
               <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
                 {Object.entries(marketCtxMap).map(([name, ctx]) => (
                   <div key={name} style={{ fontSize:10, fontWeight:700, color: ctx.neutral ? '#d97706' : ctx.bullish ? '#16a34a' : '#dc2626', background: ctx.neutral ? '#fffbeb' : ctx.bullish ? '#f0fdf4' : '#fef2f2', border:`1px solid ${ctx.neutral?'#fde68a':ctx.bullish?'#bbf7d0':'#fecaca'}`, borderRadius:6, padding:'3px 8px', display:'inline-flex', alignItems:'center', gap:4 }}>
@@ -412,7 +419,7 @@ export default function OptionsPane() {
           <div className="opt-idx-grid">
             {vix > 0 && (
               <div style={{ background:'#fff', border:'1px solid #dbe3ee', borderRadius:8, padding:'11px 13px', boxShadow:'var(--shadow-raised)' }}>
-                <div style={{ fontSize:9, color:'#94a3b8', letterSpacing:.7, marginBottom:5 }}>INDIA VIX · LIVE</div>
+                <div style={{ fontSize:10, color:'#94a3b8', letterSpacing:.7, marginBottom:5 }}>INDIA VIX · LIVE</div>
                 <div className="hero-val" style={{ color:vix < 16 ? '#16a34a' : vix > 22 ? '#dc2626' : '#d97706' }}>{vix.toFixed(2)}</div>
                 <div style={{ fontSize:10, color:'#64748b', marginTop:6 }}>{vixTxt}</div>
                 {liveIndexPrices[VIX_KEY] && <span className="badge-live" style={{ marginTop:7, display:'inline-flex' }}>LIVE</span>}

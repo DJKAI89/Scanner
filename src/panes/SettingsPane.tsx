@@ -92,7 +92,7 @@ function WeightRow({ indKey, data, labelMap }) {
           <span style={{ fontSize: 11, fontWeight: 700, color: '#1e293b' }}>{meta.label}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 9, color: '#94a3b8', fontWeight: 600 }}>n={data.n}</span>
+          <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600 }}>n={data.n}</span>
           <span style={{
             fontSize: 11, fontWeight: 800, color: adjColor,
             background: isPos ? '#f0fdf4' : isNeg ? '#fef2f2' : '#f8fafc',
@@ -107,14 +107,14 @@ function WeightRow({ indKey, data, labelMap }) {
         <div style={{ flex: 1, height: 5, background: '#e2e8f0', borderRadius: 3, overflow: 'hidden' }}>
           <div style={{ height: '100%', width: barW + '%', background: wrColor, borderRadius: 3, transition: 'width .4s' }} />
         </div>
-        <span style={{ fontSize: 9, fontWeight: 700, color: wrColor, minWidth: 36, textAlign: 'right' }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: wrColor, minWidth: 36, textAlign: 'right' }}>
           {data.wrWith}% WR
         </span>
-        <span style={{ fontSize: 9, color: '#94a3b8', minWidth: 38, textAlign: 'right' }}>
+        <span style={{ fontSize: 10, color: '#94a3b8', minWidth: 38, textAlign: 'right' }}>
           base {data.wrBase}%
         </span>
         <span style={{
-          fontSize: 9, fontWeight: 700, minWidth: 40, textAlign: 'right',
+          fontSize: 10, fontWeight: 700, minWidth: 40, textAlign: 'right',
           color: data.lift > 0 ? '#16a34a' : data.lift < 0 ? '#dc2626' : '#94a3b8'
         }}>
           {data.lift > 0 ? '+' : ''}{data.lift}% lift
@@ -160,11 +160,11 @@ function AdaptWeightsSection({ adaptWeights }) {
         ].map(s => (
           <div key={s.label} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px', textAlign: 'center' }}>
             <div style={{ fontSize: 16, fontWeight: 800, color: s.color }}>{s.value}</div>
-            <div style={{ fontSize: 8, color: '#94a3b8', fontWeight: 600, marginTop: 2 }}>{s.label}</div>
+            <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600, marginTop: 2 }}>{s.label}</div>
           </div>
         ))}
       </div>
-      <div style={{ fontSize: 9, color: '#94a3b8', marginBottom: 12 }}>Last computed: {computedDate}</div>
+      <div style={{ fontSize: 10, color: '#94a3b8', marginBottom: 12 }}>Last computed: {computedDate}</div>
 
       {/* Tab selector */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
@@ -185,7 +185,7 @@ function AdaptWeightsSection({ adaptWeights }) {
         <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden', boxShadow: 'var(--shadow-flat)' }}>
           <div style={{ background: '#f8fafc', padding: '8px 12px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 10, fontWeight: 700, color: '#374151' }}>Indicator</span>
-            <span style={{ fontSize: 9, color: '#94a3b8' }}>Base WR: {Math.round(stockBaseWR * 100)}%</span>
+            <span style={{ fontSize: 10, color: '#94a3b8' }}>Base WR: {Math.round(stockBaseWR * 100)}%</span>
           </div>
           {stockEntries.length === 0
             ? <div style={{ padding: 16, fontSize: 11, color: '#94a3b8', textAlign: 'center' }}>No stock indicator data yet</div>
@@ -193,10 +193,10 @@ function AdaptWeightsSection({ adaptWeights }) {
           }
           {pendingStockInds.length > 0 && (
             <div style={{ padding: '10px 12px', background: '#fffbeb', borderTop: '1px solid #fde68a' }}>
-              <div style={{ fontSize: 9, color: '#b45309', fontWeight: 600, marginBottom: 5, display:'flex', alignItems:'center', gap:4 }}>
+              <div style={{ fontSize: 10, color: '#b45309', fontWeight: 600, marginBottom: 5, display:'flex', alignItems:'center', gap:4 }}>
                 <Icon name="clock" size={10}/>Accumulating ({pendingStockInds.length} indicators need 8+ samples):
               </div>
-              <div style={{ fontSize: 9, color: '#d97706', lineHeight: 1.8 }}>
+              <div style={{ fontSize: 10, color: '#d97706', lineHeight: 1.8 }}>
                 {pendingStockInds.map(k => STOCK_IND_LABELS[k]?.label).filter(Boolean).join(' · ')}
               </div>
             </div>
@@ -209,7 +209,7 @@ function AdaptWeightsSection({ adaptWeights }) {
         <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden', boxShadow: 'var(--shadow-flat)' }}>
           <div style={{ background: '#f8fafc', padding: '8px 12px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 10, fontWeight: 700, color: '#374151' }}>Indicator</span>
-            <span style={{ fontSize: 9, color: '#94a3b8' }}>Base WR: {Math.round(optBaseWR * 100)}%</span>
+            <span style={{ fontSize: 10, color: '#94a3b8' }}>Base WR: {Math.round(optBaseWR * 100)}%</span>
           </div>
           {optEntries.length === 0
             ? <div style={{ padding: 16, fontSize: 11, color: '#94a3b8', textAlign: 'center' }}>No option indicator data yet</div>
@@ -217,10 +217,10 @@ function AdaptWeightsSection({ adaptWeights }) {
           }
           {pendingOptInds.length > 0 && (
             <div style={{ padding: '10px 12px', background: '#fffbeb', borderTop: '1px solid #fde68a' }}>
-              <div style={{ fontSize: 9, color: '#b45309', fontWeight: 600, marginBottom: 5, display:'flex', alignItems:'center', gap:4 }}>
+              <div style={{ fontSize: 10, color: '#b45309', fontWeight: 600, marginBottom: 5, display:'flex', alignItems:'center', gap:4 }}>
                 <Icon name="clock" size={10}/>Accumulating ({pendingOptInds.length} indicators need 8+ samples):
               </div>
-              <div style={{ fontSize: 9, color: '#d97706', lineHeight: 1.8 }}>
+              <div style={{ fontSize: 10, color: '#d97706', lineHeight: 1.8 }}>
                 {pendingOptInds.map(k => OPT_IND_LABELS[k]?.label).filter(Boolean).join(' · ')}
               </div>
             </div>
@@ -230,7 +230,7 @@ function AdaptWeightsSection({ adaptWeights }) {
 
       {/* Legend */}
       <div style={{ marginTop: 12, padding: '10px 12px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}>
-        <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', marginBottom: 6 }}>HOW TO READ</div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', marginBottom: 6 }}>HOW TO READ</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {[
             { color: '#16a34a', text: '+pts = indicator predicts wins → confidence boosted when it fires' },
@@ -240,7 +240,7 @@ function AdaptWeightsSection({ adaptWeights }) {
           ].map((l, i) => (
             <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
               <div style={{ width: 8, height: 8, borderRadius: '50%', background: l.color, flexShrink: 0, marginTop: 2 }} />
-              <span style={{ fontSize: 9, color: '#64748b', lineHeight: 1.5 }}>{l.text}</span>
+              <span style={{ fontSize: 10, color: '#64748b', lineHeight: 1.5 }}>{l.text}</span>
             </div>
           ))}
         </div>
@@ -273,14 +273,14 @@ function HistorySyncStatus({ mlModels, mlSnapshots, gh, loadConfCalibration, lg 
           {inSync ? '✅ History in sync with latest model' : hasGap ? '⚠ History lagging behind latest model' : 'History status unknown'}
         </div>
         {hasGap && (
-          <div style={{ color: '#92400e', marginTop: 2, fontSize: 9 }}>
+          <div style={{ color: '#92400e', marginTop: 2, fontSize: 10 }}>
             Model updated {modelAt} · newest history entry {historyAt || 'none'}
           </div>
         )}
       </div>
       <button onClick={handleRefresh} disabled={busy} style={{
         padding: '5px 10px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff',
-        fontSize: 9.5, fontWeight: 800, color: '#334155', cursor: busy ? 'default' : 'pointer', whiteSpace: 'nowrap',
+        fontSize: 10, fontWeight: 800, color: '#334155', cursor: busy ? 'default' : 'pointer', whiteSpace: 'nowrap',
       }}>
         {busy ? '...' : '↻ Force Refresh'}
       </button>
@@ -319,21 +319,21 @@ function MlRankerSection({ mlModels, mlSnapshots, gh, loadConfCalibration, lg })
             ) : (
               <>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8 }}>
-                  <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Samples</div><div style={{ fontSize: 14, fontWeight: 800, color: '#1d4ed8' }}>{data.trainedOn}</div></div>
-                  <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Win Rate</div><div style={{ fontSize: 14, fontWeight: 800, color: '#16a34a' }}>{Math.round(data.baseRate * 100)}%</div></div>
-                  <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Accuracy</div><div style={{ fontSize: 14, fontWeight: 800, color: '#7c3aed' }}>{Math.round(data.accuracy * 100)}%</div></div>
-                  <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Edge</div><div style={{ fontSize: 14, fontWeight: 800, color: data.edge > 0 ? '#16a34a' : '#64748b' }}>{data.edge > 0 ? '+' : ''}{(data.edge * 100).toFixed(1)}</div></div>
+                  <div><div style={{ fontSize: 10, color: '#94a3b8' }}>Samples</div><div style={{ fontSize: 14, fontWeight: 800, color: '#1d4ed8' }}>{data.trainedOn}</div></div>
+                  <div><div style={{ fontSize: 10, color: '#94a3b8' }}>Win Rate</div><div style={{ fontSize: 14, fontWeight: 800, color: '#16a34a' }}>{Math.round(data.baseRate * 100)}%</div></div>
+                  <div><div style={{ fontSize: 10, color: '#94a3b8' }}>Accuracy</div><div style={{ fontSize: 14, fontWeight: 800, color: '#7c3aed' }}>{Math.round(data.accuracy * 100)}%</div></div>
+                  <div><div style={{ fontSize: 10, color: '#94a3b8' }}>Edge</div><div style={{ fontSize: 14, fontWeight: 800, color: data.edge > 0 ? '#16a34a' : '#64748b' }}>{data.edge > 0 ? '+' : ''}{(data.edge * 100).toFixed(1)}</div></div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8, marginTop: 8 }}>
-                  <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Walk-Forward</div><div style={{ fontSize: 12, fontWeight: 800, color: '#0f766e' }}>{Math.round(((data.walkForward?.accuracy || 0) || 0) * 100)}%</div></div>
-                  <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Serving Model</div><div style={{ fontSize: 12, fontWeight: 800, color: '#334155' }}>{mlSnapshots?.[0]?.[key]?.servingLabel || 'global'}</div></div>
+                  <div><div style={{ fontSize: 10, color: '#94a3b8' }}>Walk-Forward</div><div style={{ fontSize: 12, fontWeight: 800, color: '#0f766e' }}>{Math.round(((data.walkForward?.accuracy || 0) || 0) * 100)}%</div></div>
+                  <div><div style={{ fontSize: 10, color: '#94a3b8' }}>Serving Model</div><div style={{ fontSize: 12, fontWeight: 800, color: '#334155' }}>{mlSnapshots?.[0]?.[key]?.servingLabel || 'global'}</div></div>
                 </div>
                 {data.topFeatures?.length > 0 && (
                   <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid #e2e8f0' }}>
-                    <div style={{ fontSize: 8, color: '#94a3b8', marginBottom: 6 }}>TOP DRIVERS</div>
+                    <div style={{ fontSize: 10, color: '#94a3b8', marginBottom: 6 }}>TOP DRIVERS</div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                       {data.topFeatures.slice(0, 4).map((f) => (
-                        <span key={f.feature} style={{ fontSize: 8, fontWeight: 700, color: '#334155', background: '#e2e8f0', borderRadius: 999, padding: '3px 7px' }}>
+                        <span key={f.feature} style={{ fontSize: 10, fontWeight: 700, color: '#334155', background: '#e2e8f0', borderRadius: 999, padding: '3px 7px' }}>
                           {f.feature} {f.importance}%
                         </span>
                       ))}
@@ -348,10 +348,10 @@ function MlRankerSection({ mlModels, mlSnapshots, gh, loadConfCalibration, lg })
       <HistorySyncStatus mlModels={mlModels} mlSnapshots={mlSnapshots} gh={gh} loadConfCalibration={loadConfCalibration} lg={lg} />
       {!!mlSnapshots?.length && (
         <div style={{ marginTop: 12, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px' }}>
-          <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', marginBottom: 8 }}>MODEL HISTORY</div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', marginBottom: 8 }}>MODEL HISTORY</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {mlSnapshots.slice(0, 5).map((snap) => (
-              <div key={snap.computedAt} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 9, color: '#475569' }}>
+              <div key={snap.computedAt} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10, color: '#475569' }}>
                 <span style={{ color: '#64748b', fontSize:12, fontWeight: 700 }}>{new Date(snap.computedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
                 <span style={{ color: '#64748b', fontSize:12, fontWeight: 700 }}>Stock: {snap.stock?.trainedOn || 0}/{snap.stock ? Math.round((snap.stock.accuracy || 0) * 100) : 0}%</span>
                 <span style={{ color: '#64748b', fontSize:12, fontWeight: 700 }}>Option: {snap.option?.trainedOn || 0}/{snap.option ? Math.round((snap.option.accuracy || 0) * 100) : 0}%</span>
@@ -362,9 +362,9 @@ function MlRankerSection({ mlModels, mlSnapshots, gh, loadConfCalibration, lg })
       )}
       {(mlModels?.thresholds?.stock || mlModels?.thresholds?.option) && (
         <div style={{ marginTop: 12, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px' }}>
-          <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', marginBottom: 8 }}>AI THRESHOLDS</div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', marginBottom: 8 }}>AI THRESHOLDS</div>
           {['stock', 'option'].map((k) => mlModels?.thresholds?.[k] ? (
-            <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 9, color: '#475569', marginBottom: 5 }}>
+            <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10, color: '#475569', marginBottom: 5 }}>
               <span style={{ fontWeight: 700 }}>{k.toUpperCase()}</span>
               <span>Prob {Math.round((mlModels.thresholds[k].probability || 0) * 100)}%</span>
               <span>RR {mlModels.thresholds[k].minRR}</span>
@@ -375,9 +375,9 @@ function MlRankerSection({ mlModels, mlSnapshots, gh, loadConfCalibration, lg })
       )}
       {(mlModels?.drift?.stock || mlModels?.drift?.option) && (
         <div style={{ marginTop: 12, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px' }}>
-          <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', marginBottom: 8 }}>DRIFT / ROLLBACK</div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', marginBottom: 8 }}>DRIFT / ROLLBACK</div>
           {['stock', 'option'].map((k) => mlModels?.drift?.[k] ? (
-            <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 9, color: '#475569', marginBottom: 5 }}>
+            <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10, color: '#475569', marginBottom: 5 }}>
               <span style={{ fontWeight: 700 }}>{k.toUpperCase()}</span>
               <span>WF {Math.round((mlModels.drift[k].walkForwardAccuracy || 0) * 100)}%</span>
               <span style={{ color: mlModels.drift[k].stable ? '#16a34a' : '#dc2626', fontWeight: 700 }}>{mlModels.drift[k].stable ? 'Stable' : 'Drift'}</span>
@@ -391,6 +391,7 @@ function MlRankerSection({ mlModels, mlSnapshots, gh, loadConfCalibration, lg })
 }
 
 export default function SettingsPane() {
+  const [sec, setSec] = React.useState('filters');
   const {
     cfg, saveCfg, resetCfg,
     gh, saveGh,
@@ -456,11 +457,17 @@ export default function SettingsPane() {
     v >= 55 ? '🔵 Balanced results' : v >= 40 ? '🟡 More signals' : '🔴 Many signals (noisy)';
 
   return (
-    <div>
+    <div className="settings-layout">
+      <nav className="settings-nav" aria-label="Settings sections">
+        {[['filters','Confidence and sizing'],['thresholds','Thresholds'],['trade','Trade management'],['ai','AI and ML'],['data','Stock universe and FII/DII'],['connections','Connections and tokens'],['notifications','Notifications']].map(([id,lbl])=>(
+          <button key={id} className={'sn'+(sec===id?' on':'')} onClick={()=>setSec(id)}>{lbl}</button>
+        ))}
+      </nav>
+      <div className="settings-body">
       <div className="settings-g">
 
         {/* ── Confidence ── */}
-        <div className="setting-card" style={{ gridColumn: '1 / -1' }}>
+        <div className="setting-card" data-sec="filters" hidden={sec !== 'filters'} style={{ gridColumn: '1 / -1' }}>
           <h4>🎯 Confidence Filters</h4>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
             {[
@@ -481,7 +488,7 @@ export default function SettingsPane() {
         </div>
 
         {/* ── Position Sizing ── */}
-        <div className="setting-card">
+        <div className="setting-card" data-sec="filters" hidden={sec !== 'filters'}>
           <h4>💰 Position Sizing</h4>
           <SetRow label="Portfolio Size (₹)" sub="Total trading capital">
             <Inp value={local.portSize} onChange={v => set('portSize', v)} min={10000} step={10000} width={90} />
@@ -489,24 +496,24 @@ export default function SettingsPane() {
           <SetRow label="Max Risk per Trade (%)" sub="% of capital at risk per trade">
             <Inp value={local.riskPct} onChange={v => set('riskPct', v)} min={0.5} max={10} step={0.5} width={70} />
           </SetRow>
-          <div style={{ fontSize: 9, color: '#64748b', padding: '6px 8px', background: '#f8fafc', borderRadius: 6, marginTop: 6 }}>
+          <div style={{ fontSize: 10, color: '#64748b', padding: '6px 8px', background: '#f8fafc', borderRadius: 6, marginTop: 6 }}>
             📐 Max loss = ₹{((local.portSize || 500000) * (local.riskPct || 2) / 100).toLocaleString('en-IN', { maximumFractionDigits: 0 })} per trade
           </div>
         </div>
 
         {/* ── Options Stock Universe ── */}
-        <div className="setting-card">
+        <div className="setting-card" data-sec="thresholds" hidden={sec !== 'thresholds'}>
           <h4>⚡ Options Stock Scan</h4>
           <SetRow label="Stocks to Scan for Options" sub="Top F&O stocks by volume + volatility, from your full stock list">
             <Inp value={local.optStockScanCount} onChange={v => set('optStockScanCount', v)} min={5} max={100} step={5} width={70} />
           </SetRow>
-          <div style={{ fontSize: 9, color: '#64748b', padding: '6px 8px', background: '#f8fafc', borderRadius: 6, marginTop: 6 }}>
+          <div style={{ fontSize: 10, color: '#64748b', padding: '6px 8px', background: '#f8fafc', borderRadius: 6, marginTop: 6 }}>
             📐 Picks the top {local.optStockScanCount || 50} F&O-eligible stocks each scan, ranked by turnover (volume × price) and day volatility together. Higher = more coverage but slower scans (API rate limits).
           </div>
         </div>
 
         {/* ── Technical Thresholds ── */}
-        <div className="setting-card">
+        <div className="setting-card" data-sec="thresholds" hidden={sec !== 'thresholds'}>
           <h4>📈 Technical Thresholds</h4>
           <SetRow label="RSI Oversold"     sub="Below = BUY signal"><Inp value={local.rsiOS} onChange={v => set('rsiOS', v)} min={10} max={45} /></SetRow>
           <SetRow label="RSI Overbought"   sub="Above = SELL signal"><Inp value={local.rsiOB} onChange={v => set('rsiOB', v)} min={55} max={90} /></SetRow>
@@ -517,7 +524,7 @@ export default function SettingsPane() {
         </div>
 
         {/* ── Options Thresholds ── */}
-        <div className="setting-card">
+        <div className="setting-card" data-sec="thresholds" hidden={sec !== 'thresholds'}>
           <h4>⚡ Options Thresholds</h4>
           <SetRow label="Min Delta (abs)"   sub="Directional strength filter"><Inp value={local.delta} onChange={v => set('delta', v)} min={0.1} step={0.05} /></SetRow>
           <SetRow label="IV Alert %"        sub="High vol threshold"><Inp value={local.iv} onChange={v => set('iv', v)} min={5} /></SetRow>
@@ -529,7 +536,7 @@ export default function SettingsPane() {
         </div>
 
         {/* ── Trade Management ── */}
-        <div className="setting-card">
+        <div className="setting-card" data-sec="trade" hidden={sec !== 'trade'}>
           <h4>🎯 Trade Management</h4>
           <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10, lineHeight: 1.7 }}>
             Partial exits at T1/T2, break-even after T1, then a trailing stop on the remainder. T3 closes whatever's left. Applies to both stocks and options.
@@ -541,7 +548,7 @@ export default function SettingsPane() {
         </div>
 
         {/* ── Market Regime ── */}
-        <div className="setting-card">
+        <div className="setting-card" data-sec="trade" hidden={sec !== 'trade'}>
           <h4>🌊 Market Regime Suppression</h4>
           <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10, lineHeight: 1.7 }}>
             Derates confidence in choppy/high-VIX conditions (where false breakouts cluster) and gives calm trending markets a small boost.
@@ -552,7 +559,7 @@ export default function SettingsPane() {
         </div>
 
         {/* ── Confluence Scoring ── */}
-        <div className="setting-card">
+        <div className="setting-card" data-sec="thresholds" hidden={sec !== 'thresholds'}>
           <h4>🧩 Confluence Scoring</h4>
           <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10, lineHeight: 1.7 }}>
             6 independent modules (Trend, Momentum, Volume, Price Action, Institutional, Market Context) vote on direction. Rewards genuine multi-module agreement over scattered weak signals.
@@ -564,7 +571,7 @@ export default function SettingsPane() {
         </div>
 
         {/* ── Adaptive Weights ── */}
-        <div className="setting-card" style={{ gridColumn: '1 / -1' }}>
+        <div className="setting-card" data-sec="ai" hidden={sec !== 'ai'} style={{ gridColumn: '1 / -1' }}>
           <h4>🧠 Adaptive Indicator Weights</h4>
           <div style={{ fontSize: 10, color: '#64748b', marginBottom: 14, lineHeight: 1.7 }}>
             Automatically learned from your past signal outcomes. Each indicator's confidence adjustment
@@ -574,7 +581,7 @@ export default function SettingsPane() {
           <AdaptWeightsSection adaptWeights={adaptWeights} />
         </div>
 
-        <div className="setting-card" style={{ gridColumn: '1 / -1' }}>
+        <div className="setting-card" data-sec="ai" hidden={sec !== 'ai'} style={{ gridColumn: '1 / -1' }}>
           <h4>🤖 ML Ranker</h4>
           <MlRankerSection mlModels={mlModels} mlSnapshots={mlSnapshots} gh={gh} loadConfCalibration={loadConfCalibration} lg={lg} />
         </div>
@@ -583,7 +590,7 @@ export default function SettingsPane() {
         <MtfDiagnostics />
 
         {/* ── Stock Universe ── */}
-        <div className="setting-card">
+        <div className="setting-card" data-sec="data" hidden={sec !== 'data'}>
           <h4>📋 Stock Universe</h4>
           <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10, lineHeight: 1.7 }}>
             Loaded from <code style={{ background: '#f1f5f9', padding: '1px 4px', borderRadius: 3 }}>stocks/stocks.json</code> in your GitHub repo.
@@ -599,7 +606,7 @@ export default function SettingsPane() {
         </div>
 
         {/* ── FII/DII ── */}
-        <div className="setting-card">
+        <div className="setting-card" data-sec="data" hidden={sec !== 'data'}>
           <h4>🏦 FII / DII Data</h4>
           <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10, lineHeight: 1.7 }}>
             Live from Upstox (<code style={{ background: '#f1f5f9', padding: '1px 4px', borderRadius: 3 }}>fii-dii/latest.json</code> in your GitHub repo used only as fallback).
@@ -622,7 +629,7 @@ export default function SettingsPane() {
         </div>
 
         {/* ── GitHub / Signal Log ── */}
-        <div className="setting-card">
+        <div className="setting-card" data-sec="connections" hidden={sec !== 'connections'}>
           <h4>📋 Signal Log (GitHub)</h4>
           <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10, lineHeight: 1.7 }}>
             Logs every signal as daily JSON files. Settings sync across browsers automatically.<br />
@@ -655,7 +662,7 @@ export default function SettingsPane() {
         </div>
 
         {/* ── Notifications ── */}
-        <div className="setting-card">
+        <div className="setting-card" data-sec="notifications" hidden={sec !== 'notifications'}>
           <h4>🔔 Browser Notifications</h4>
           <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10, lineHeight: 1.7 }}>
             Alerts for high confidence signals (≥80%), BB Squeeze, RSI divergence, Target/SL hit.
@@ -675,7 +682,7 @@ export default function SettingsPane() {
         </div>
 
         {/* ── Token Management ── */}
-        <div className="setting-card">
+        <div className="setting-card" data-sec="connections" hidden={sec !== 'connections'}>
           <h4>🔐 Upstox Token</h4>
           {tokenSavedDate && <div style={{ fontSize: 10, color: '#16a34a', fontWeight: 600, marginBottom: 8 }}>✅ Token saved: {tokenSavedDate}</div>}
           <div style={{ fontSize: 10, color: '#94a3b8', marginBottom: 8 }}>Tokens expire daily. Paste a fresh token each morning.</div>
@@ -715,6 +722,7 @@ export default function SettingsPane() {
           {saveStatus && <div style={{ textAlign: 'center', fontSize: 10, color: '#64748b', marginTop: 6 }}>{saveStatus}</div>}
         </div>
 
+      </div>
       </div>
     </div>
   );

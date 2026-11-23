@@ -54,18 +54,18 @@ function JournalBar({ sig }: { sig: any }) {
   return (
     <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed #e2e8f0' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 9, fontWeight: 800, color: '#94a3b8', letterSpacing: 0.5 }}>MY TRADE</span>
+        <span style={{ fontSize: 10, fontWeight: 800, color: '#94a3b8', letterSpacing: 0.5 }}>MY TRADE</span>
         {btn('Taken', sig.taken === true, () => run({ taken: true, takenAt: sig.takenAt || new Date().toISOString() }), '#16a34a')}
         {btn('Skipped', sig.taken === false, () => run({ taken: false }), '#64748b')}
         {sig.taken != null && btn('Clear', false, () => run({ taken: null, fillEntry: null, fillExit: null }), '#94a3b8')}
-        {msg && <span style={{ fontSize: 9, color: msg === 'Saved' ? '#16a34a' : '#dc2626' }}>{msg}</span>}
+        {msg && <span style={{ fontSize: 10, color: msg === 'Saved' ? '#16a34a' : '#dc2626' }}>{msg}</span>}
       </div>
       {sig.taken === true && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
-          <span style={{ fontSize: 9, color: '#64748b' }}>My entry ₹</span>
+          <span style={{ fontSize: 10, color: '#64748b' }}>My entry ₹</span>
           <input type="number" inputMode="decimal" value={fe} onChange={e => setFe(e.target.value)} style={inp} />
           {closed && <>
-            <span style={{ fontSize: 9, color: '#64748b' }}>My exit ₹</span>
+            <span style={{ fontSize: 10, color: '#64748b' }}>My exit ₹</span>
             <input type="number" inputMode="decimal" value={fx} onChange={e => setFx(e.target.value)} style={inp} />
           </>}
           <button disabled={busy} onClick={() => run({ fillEntry: num(fe), fillExit: closed ? num(fx) : (sig.fillExit ?? null) })}
@@ -135,12 +135,12 @@ function SignalRow({ sig, livePrice, marketOpen = true }) {
         <div>
           <span style={{ fontWeight:800, fontSize:14 }}><Icon name={typeIcon} size={13} style={{ marginRight:4 }}/>{sig.stock || sig.name}</span>
           {isOpt && (
-            <span style={{ fontSize:9, background:'#e0e7ff', color:'#3730a3', borderRadius:4, padding:'1px 5px', marginLeft:6, fontWeight:700 }}>
+            <span style={{ fontSize:10, background:'#e0e7ff', color:'#3730a3', borderRadius:4, padding:'1px 5px', marginLeft:6, fontWeight:700 }}>
               {sig.strike} {sig.optType} {sig.expiry}
             </span>
           )}
           {isOpt && (
-            <span style={{ fontSize:9, fontWeight:800, marginLeft:6, padding:'1px 6px', borderRadius:4,
+            <span style={{ fontSize:10, fontWeight:800, marginLeft:6, padding:'1px 6px', borderRadius:4,
               background: bullView ? '#dcfce7' : '#fee2e2', color: bullView ? '#15803d' : '#b91c1c' }}>
               {bullView ? '▲' : '▼'} {sig.optType === 'CE' ? 'CALL' : 'PUT'} · {bullView ? 'bullish' : 'bearish'} view
             </span>
@@ -148,18 +148,18 @@ function SignalRow({ sig, livePrice, marketOpen = true }) {
           {ltp && sig.status==='OPEN' && (
             live
               ? <span className="badge-live" style={{ marginLeft:6 }}>₹{fmt(ltp)}</span>
-              : <span style={{ marginLeft:6, fontSize:10, fontWeight:700, color:'#64748b' }}>₹{fmt(ltp)} <span style={{ fontSize:8, fontWeight:600, color:'#94a3b8' }}>last</span></span>
+              : <span style={{ marginLeft:6, fontSize:10, fontWeight:700, color:'#64748b' }}>₹{fmt(ltp)} <span style={{ fontSize:10, fontWeight:600, color:'#94a3b8' }}>last</span></span>
           )}
         </div>
         <div style={{ display:'flex', gap:5, flexWrap:'wrap' }}>
-          <span style={{ fontSize:8, fontWeight:800, padding:'2px 8px', borderRadius:20, background:isBuy?'#dcfce7':'#fee2e2', color:isBuy?'#16a34a':'#dc2626' }}>
+          <span style={{ fontSize:10, fontWeight:800, padding:'2px 8px', borderRadius:20, background:isBuy?'#dcfce7':'#fee2e2', color:isBuy?'#16a34a':'#dc2626' }}>
             {sig.signal}
           </span>
-          <span style={{ fontSize:8, fontWeight:800, padding:'2px 8px', borderRadius:20, background:sc.bg, color:sc.color, border:`1px solid ${sc.border}` }}>
+          <span style={{ fontSize:10, fontWeight:800, padding:'2px 8px', borderRadius:20, background:sc.bg, color:sc.color, border:`1px solid ${sc.border}` }}>
             {sig.status?.replace('_',' ')}
           </span>
           {sig.mtfGrade && (
-            <span title={`Timeframes ${sig.mtfDirs || ''}${sig.mtfRoomATR != null ? ` · ${sig.mtfRoomATR} ATR room` : ''}`} style={{ fontSize:8, fontWeight:800, padding:'2px 8px', borderRadius:20,
+            <span title={`Timeframes ${sig.mtfDirs || ''}${sig.mtfRoomATR != null ? ` · ${sig.mtfRoomATR} ATR room` : ''}`} style={{ fontSize:10, fontWeight:800, padding:'2px 8px', borderRadius:20,
               background: sig.mtfGrade==='A' ? '#dcfce7' : sig.mtfGrade==='B' ? '#dbeafe' : '#fef3c7',
               color: sig.mtfGrade==='A' ? '#15803d' : sig.mtfGrade==='B' ? '#1d4ed8' : '#b45309' }}>
               MTF {sig.mtfGrade}
@@ -182,7 +182,7 @@ function SignalRow({ sig, livePrice, marketOpen = true }) {
           ...(isOpt && sig.capitalReq ? [{ l: sig.capitalIsMargin ? 'EST. MARGIN' : 'EST. AMOUNT', v: fmtRs0(sig.capitalReq) }] : []),
         ].map(m => (
           <div key={m.l} style={{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:6, padding:'5px 7px' }}>
-            <div style={{ fontSize:8, color:'#94a3b8', marginBottom:2, letterSpacing:.3 }}>{m.l}</div>
+            <div style={{ fontSize:10, color:'#94a3b8', marginBottom:2, letterSpacing:.3 }}>{m.l}</div>
             <div style={{ fontSize:13, fontWeight:800 }}>{m.v}</div>
           </div>
         ))}
@@ -204,7 +204,7 @@ function SignalRow({ sig, livePrice, marketOpen = true }) {
                 background: hit ? '#f0fdf4' : isNext ? '#eff6ff' : '#f8fafc',
                 border: isNext ? '2px solid #3b82f6' : `1px solid ${hit ? '#86efac' : '#e2e8f0'}`,
               }}>
-                <div style={{ fontSize:7.5, fontWeight:800, color: hit ? '#16a34a' : isNext ? '#1d4ed8' : '#94a3b8' }}>{hit && <Icon name="check" size={8} style={{ marginRight:2 }}/>}{t.l}{isNext ? ' · NEXT' : ''}</div>
+                <div style={{ fontSize:10, fontWeight:800, color: hit ? '#16a34a' : isNext ? '#1d4ed8' : '#94a3b8' }}>{hit && <Icon name="check" size={8} style={{ marginRight:2 }}/>}{t.l}{isNext ? ' · NEXT' : ''}</div>
                 <div style={{ fontSize:10.5, fontWeight:700, color: hit ? '#16a34a' : '#334155' }}>{t.v ? `₹${fmt(t.v)}` : '—'}</div>
               </div>
             );
@@ -216,15 +216,15 @@ function SignalRow({ sig, livePrice, marketOpen = true }) {
       {(partials.length > 0 || sig.beActive) && (
         <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginBottom:8 }}>
           {sig.beActive && (
-            <span style={{ fontSize:8, fontWeight:800, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:6, padding:'2px 7px' }}><Icon name="lock" size={9} style={{ marginRight:3 }}/><span>BE</span></span>
+            <span style={{ fontSize:10, fontWeight:800, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:6, padding:'2px 7px' }}><Icon name="lock" size={9} style={{ marginRight:3 }}/><span>BE</span></span>
           )}
           {partials.map((p, i) => (
-            <span key={i} style={{ fontSize:8, fontWeight:800, background:'#f0fdf4', color:'#16a34a', border:'1px solid #bbf7d0', borderRadius:6, padding:'2px 7px' }}>
+            <span key={i} style={{ fontSize:10, fontWeight:800, background:'#f0fdf4', color:'#16a34a', border:'1px solid #bbf7d0', borderRadius:6, padding:'2px 7px' }}>
               <Icon name="check" size={9} style={{ marginRight:3 }}/>{p.level} @ ₹{fmt(p.price)} ({p.pctClosed}%)
             </span>
           ))}
           {sig.remainingPct != null && sig.remainingPct < 100 && sig.status === 'OPEN' && (
-            <span style={{ fontSize:8, fontWeight:800, background:'#fffbeb', color:'#92400e', border:'1px solid #fde68a', borderRadius:6, padding:'2px 7px' }}>
+            <span style={{ fontSize:10, fontWeight:800, background:'#fffbeb', color:'#92400e', border:'1px solid #fde68a', borderRadius:6, padding:'2px 7px' }}>
               {sig.remainingPct}% remaining
             </span>
           )}
@@ -236,21 +236,21 @@ function SignalRow({ sig, livePrice, marketOpen = true }) {
         <div style={{ background:(!live&&(pnlPct==null||pnlPct===0))?'#f8fafc':pnlPct!=null&&pnlPct>=0?'#f0fdf4':'#fef2f2', border:`1px solid ${(!live&&(pnlPct==null||pnlPct===0))?'#e2e8f0':pnlPct!=null&&pnlPct>=0?'#bbf7d0':'#fecaca'}`, borderRadius:8, padding:'9px 11px', marginBottom:8 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
             <div>
-              <div style={{ fontSize:9, fontWeight:700, letterSpacing:.4, color:'#94a3b8' }}>{live ? 'LIVE P&L' : 'P&L AT LAST PRICE'}</div>
+              <div style={{ fontSize:10, fontWeight:700, letterSpacing:.4, color:'#94a3b8' }}>{live ? 'LIVE P&L' : 'P&L AT LAST PRICE'}</div>
               <div style={{ fontSize:16, fontWeight:800, letterSpacing:-.3, color:(!live&&(pnlPct==null||pnlPct===0))?'#64748b':pnlPct!=null&&pnlPct>=0?'#16a34a':'#dc2626' }}>
                 {pnlPct!=null ? (pnlPct>=0?'+':'')+pnlPct.toFixed(2)+'%' : '—'}
               </div>
             </div>
             {slDist!=null && (
               <div style={{ textAlign:'center' }}>
-                <div style={{ fontSize:9, fontWeight:700, letterSpacing:.4, color:'#94a3b8' }}>SL DIST</div>
+                <div style={{ fontSize:10, fontWeight:700, letterSpacing:.4, color:'#94a3b8' }}>SL DIST</div>
                 <div style={{ fontSize:12, fontWeight:700, color:pnlPct<0?'#dc2626':'#64748b' }}>
                   {pnlPct>=0?'+':'-'}{slDist}%
                 </div>
               </div>
             )}
             <div style={{ textAlign:'right' }}>
-              <div style={{ fontSize:9, fontWeight:700, letterSpacing:.4, color:'#94a3b8' }}>{live ? 'LIVE PRICE' : 'LAST PRICE'}</div>
+              <div style={{ fontSize:10, fontWeight:700, letterSpacing:.4, color:'#94a3b8' }}>{live ? 'LIVE PRICE' : 'LAST PRICE'}</div>
               <div style={{ fontSize:13, fontWeight:700 }}>₹{fmt(ltp)}</div>
             </div>
           </div>
@@ -276,7 +276,7 @@ function SignalRow({ sig, livePrice, marketOpen = true }) {
       )}
 
       {/* Footer */}
-      <div style={{ fontSize:9, color:'#94a3b8', display:'flex', gap:10, flexWrap:'wrap' }}>
+      <div style={{ fontSize:10, color:'#94a3b8', display:'flex', gap:10, flexWrap:'wrap' }}>
         <span>📅 {fmtWhen(sig.date, sig.time)}</span>
         {sig.rr     && <span><Icon name="scale" size={10} style={{ marginRight:2 }}/>R:R {sig.rr}</span>}
         {isOpt && sig.lot && <span><Icon name="box" size={10} style={{ marginRight:2 }}/>{sig.lot} qty</span>}
@@ -322,7 +322,7 @@ function SignalGroup({ members, lastPrices, marketOpen }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
             <span style={{ fontSize: 15, fontWeight: 900, color: '#0f172a' }}>{name}</span>
-            <span style={{ fontSize: 9, fontWeight: 800, padding: '1px 6px', borderRadius: 4, background: bullView ? '#dcfce7' : '#fee2e2', color: bullView ? '#15803d' : '#b91c1c' }}>
+            <span style={{ fontSize: 10, fontWeight: 800, padding: '1px 6px', borderRadius: 4, background: bullView ? '#dcfce7' : '#fee2e2', color: bullView ? '#15803d' : '#b91c1c' }}>
               {bullView ? '▲' : '▼'} {first.optType === 'CE' ? 'CALL' : 'PUT'} · {bullView ? 'bullish' : 'bearish'} view
             </span>
           </div>
@@ -338,7 +338,7 @@ function SignalGroup({ members, lastPrices, marketOpen }) {
         {cnt('SL_HIT') > 0 && chip(`${cnt('SL_HIT')} SL hit`, '#fef2f2', '#b91c1c')}
         {avgPnl != null && !(avgPnl === 0 && !marketOpen) && chip(`Avg P&L ${avgPnl >= 0 ? '+' : ''}${avgPnl.toFixed(2)}%`, avgPnl >= 0 ? '#f0fdf4' : '#fef2f2', avgPnl >= 0 ? '#15803d' : '#b91c1c')}
       </div>
-      <div style={{ margin: '0 12px 10px', fontSize: 9.5, fontWeight: 700, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '4px 8px' }}>
+      <div style={{ margin: '0 12px 10px', fontSize: 10, fontWeight: 700, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '4px 8px' }}>
         ⚠ {members.length} correlated signals — effectively one market view with {members.length}× the exposure
       </div>
       {open && (
@@ -364,6 +364,7 @@ export default function LogPane() {
   // stats derived live from filtered signals — see useMemo below
   const [filter, setFilter]           = useState('all');
   const [typeFilter, setTypeFilter]   = useState('all');
+  const [symQuery, setSymQuery]         = useState('');
   const [days, setDays]               = useState(1);
   const [wsResolved, setWsResolved]   = useState(0);
   const updateJournal = useCallback(async (sig: any, patch: any) => {
@@ -432,6 +433,7 @@ export default function LogPane() {
   const filtered = signals.filter(s => {
     if (filter!=='all'&&s.status!==filter) return false;
     if (typeFilter!=='all'&&s.type!==typeFilter) return false;
+    if (symQuery.trim() && !JSON.stringify([s.symbol, s.sym, s.s, s.und, s.underlying, s.name]).toUpperCase().includes(symQuery.trim().toUpperCase())) return false;
     return true;
   });
 
@@ -514,7 +516,7 @@ export default function LogPane() {
           <div style={{ width: 7, height: 7, borderRadius: '50%', background: BANNER.dot, flexShrink: 0 }} />
           <span style={{ fontWeight: 600, color: BANNER.fg, lineHeight: 1.45 }}>{bannerText}</span>
           {wsResolved > 0 && (
-            <span style={{ marginLeft: 'auto', background: '#dcfce7', color: '#15803d', fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 10, whiteSpace: 'nowrap' }}>
+            <span style={{ marginLeft: 'auto', background: '#dcfce7', color: '#15803d', fontSize: 10, fontWeight: 800, padding: '2px 7px', borderRadius: 10, whiteSpace: 'nowrap' }}>
               ⚡ {wsResolved} resolved this session
             </span>
           )}
@@ -539,6 +541,7 @@ export default function LogPane() {
           <option value="STOCK">Stocks 📊</option>
           <option value="OPTION">Options ⚡</option>
         </select>
+        <input className="search-in log-search" type="search" placeholder="Search symbol" aria-label="Search symbol" value={symQuery} onChange={e=>setSymQuery(e.target.value)} />
         <button className="btn btn-g" onClick={load} disabled={loading} style={{ padding:'7px 14px', fontSize:11 }}>
           {loading?'⏳':'🔄 Refresh'}
         </button>
@@ -567,9 +570,9 @@ export default function LogPane() {
                   <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
                     {rows.map(r => (
                       <div key={r.label} style={{ flex:'1 1 70px', padding:'4px 6px', borderRadius:6, background:'#f8fafc', textAlign:'center' }}>
-                        <div style={{ fontSize:9, color:'#64748b' }}>{r.label}</div>
+                        <div style={{ fontSize:10, color:'#64748b' }}>{r.label}</div>
                         <div style={{ fontSize:13, fontWeight:800, color: r.wr >= 50 ? '#16a34a' : '#dc2626' }}>{r.wr}%</div>
-                        <div style={{ fontSize:9, color:'#94a3b8' }}>n={r.n}</div>
+                        <div style={{ fontSize:10, color:'#94a3b8' }}>n={r.n}</div>
                       </div>
                     ))}
                   </div>

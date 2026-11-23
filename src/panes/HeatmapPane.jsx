@@ -52,9 +52,9 @@ function HeatTile({ stock, ltp, chgPct, chgPt, volRank, hasSignal, squeeze, onTa
     }}>
       {(hasSignal || squeeze) && (
         <div style={{ position: 'absolute', top: 2, right: 3, display: 'flex', gap: 2 }}>
-          {hasSignal && <span title="Open signal" style={{ fontSize: 8 }}>🎯</span>}
-          {squeeze === 'extreme' && <span title="Extreme BB squeeze — breakout imminent" style={{ fontSize: 8 }}>⚡</span>}
-          {squeeze === 'squeeze' && <span title="BB squeeze — consolidating" style={{ fontSize: 8 }}>🔸</span>}
+          {hasSignal && <span title="Open signal" style={{ fontSize: 10 }}>🎯</span>}
+          {squeeze === 'extreme' && <span title="Extreme BB squeeze — breakout imminent" style={{ fontSize: 10 }}>⚡</span>}
+          {squeeze === 'squeeze' && <span title="BB squeeze — consolidating" style={{ fontSize: 10 }}>🔸</span>}
         </div>
       )}
 
@@ -65,7 +65,7 @@ function HeatTile({ stock, ltp, chgPct, chgPt, volRank, hasSignal, squeeze, onTa
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>{stock.s}</div>
 
-      <div style={{ fontSize: 9, fontWeight: 600, color: hasData ? colors.sub : '#cbd5e1', lineHeight: 1.1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <div style={{ fontSize: 10, fontWeight: 600, color: hasData ? colors.sub : '#cbd5e1', lineHeight: 1.1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {hasData ? `₹${fmt(ltp)}` : '—'}
       </div>
 
@@ -100,7 +100,7 @@ function BreadthBar({ enriched }) {
         <div style={{ width: `${flat/total*100}%`, background: '#94a3b8', transition: 'width .6s' }} />
         <div style={{ width: `${dec/total*100}%`,  background: '#dc2626', transition: 'width .6s' }} />
       </div>
-      <div style={{ display: 'flex', gap: 12, fontSize: 9, fontWeight: 700 }}>
+      <div style={{ display: 'flex', gap: 12, fontSize: 10, fontWeight: 700 }}>
         <span style={{ color: '#16a34a' }}>▲ {adv}</span>
         <span style={{ color: '#94a3b8' }}>— {flat}</span>
         <span style={{ color: '#dc2626' }}>▼ {dec}</span>
@@ -134,10 +134,10 @@ function SectorAggregateRow({ enriched, sector, setSector }) {
         return (
           <button key={sec} onClick={() => setSector(sector === sec ? 'ALL' : sec)} style={{
             flexShrink: 0, padding: '5px 9px', borderRadius: 7, border: sector === sec ? '2px solid #0f172a' : '1px solid rgba(0,0,0,0.08)',
-            background: c.bg, color: c.text, fontSize: 9.5, fontWeight: 800, cursor: 'pointer', textAlign: 'left',
+            background: c.bg, color: c.text, fontSize: 10, fontWeight: 800, cursor: 'pointer', textAlign: 'left',
           }}>
             <div style={{ whiteSpace: 'nowrap' }}>{sec}</div>
-            <div style={{ fontSize: 9, opacity: 0.85 }}>{fmtP(avg)} · {count}</div>
+            <div style={{ fontSize: 10, opacity: 0.85 }}>{fmtP(avg)} · {count}</div>
           </button>
         );
       })}
@@ -266,7 +266,7 @@ export default function HeatmapPane() {
   return (
     <div>
       {allKeys.length > 0 && (
-        <div style={{ fontSize: 9, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 5 }}>
+        <div style={{ fontSize: 10, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 5 }}>
           <div style={{ width: 6, height: 6, borderRadius: '50%', background: wsConnected ? '#16a34a' : '#94a3b8', flexShrink: 0 }} />
           <span style={{ color: '#94a3b8' }}>
             {wsConnected
@@ -320,7 +320,7 @@ export default function HeatmapPane() {
         }}>{loading ? '⏳' : '↻'}</button>
       </div>
 
-      <div style={{ fontSize: 9, color: '#94a3b8', marginBottom: 8, display: 'flex', justifyContent: 'space-between' }}>
+      <div style={{ fontSize: 10, color: '#94a3b8', marginBottom: 8, display: 'flex', justifyContent: 'space-between' }}>
         <span>{filtered.length} stocks{sector !== 'ALL' ? ` · ${sector}` : ''}</span>
         <span>{loadedCount}/{allKeys.length} prices loaded</span>
       </div>
@@ -349,16 +349,16 @@ export default function HeatmapPane() {
 
       {/* Legend */}
       <div style={{ marginTop: 14, padding: '10px 12px', background: '#f8fafc', borderRadius: 10, border: '1px solid #e2e8f0', boxShadow: 'var(--shadow-flat)' }}>
-        <div style={{ fontSize: 9, fontWeight: 700, color: '#94a3b8', marginBottom: 6, letterSpacing: 1 }}>COLOR SCALE</div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: '#94a3b8', marginBottom: 6, letterSpacing: 1 }}>COLOR SCALE</div>
         <div style={{ display: 'flex', borderRadius: 6, overflow: 'hidden', height: 12 }}>
           {['#0d5c2f','#166534','#15803d','#22c55e','#4ade80','#94a3b8','#f87171','#ef4444','#dc2626','#991b1b','#7f1d1d'].map((c, i) => (
             <div key={i} style={{ flex: 1, background: c }} />
           ))}
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontSize: 9, color: '#94a3b8' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4, fontSize: 10, color: '#94a3b8' }}>
           <span>≥+3%</span><span>0%</span><span>≤-3%</span>
         </div>
-        <div style={{ marginTop: 8, fontSize: 9, color: '#94a3b8', display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ marginTop: 8, fontSize: 10, color: '#94a3b8', display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <span>🎯 Open signal</span>
           <span>⚡ Extreme squeeze</span>
           <span>🔸 BB squeeze</span>

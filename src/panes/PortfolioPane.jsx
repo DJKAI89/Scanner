@@ -20,6 +20,7 @@ export default function PortfolioPane() {
   const [holdings, setHoldings]   = useState([]);
   const [updTime, setUpdTime]     = useState('');
   const [tab, setTab]             = useState('holdings');
+  const [query, setQuery]         = useState('');
   const [sortCol, setSortCol]     = useState('sym');
   const [sortDir, setSortDir]     = useState('asc');
 
@@ -87,7 +88,11 @@ export default function PortfolioPane() {
 
   const current = tab === 'positions' ? enrichedPos : enrichedHld;
 
-  const sortedCurrent = useMemo(() => sortRows(current, sortCol, sortDir), [current, sortCol, sortDir]);
+  const sortedCurrent = useMemo(() => {
+    const q = query.trim().toUpperCase();
+    const rows = q ? current.filter(r => String(r.tradingsymbol || r.symbol || '').toUpperCase().includes(q)) : current;
+    return sortRows(rows, sortCol, sortDir);
+  }, [current, sortCol, sortDir, query]);
 
   // ── Shared color helpers ──
   const gc = v => v >= 0 ? '#16a34a' : '#dc2626';
@@ -102,13 +107,13 @@ export default function PortfolioPane() {
     const active = sortCol === col;
     return (
       <div onClick={() => toggleSort(col)} style={{
-        fontSize: 9, fontWeight: 700, color: active ? '#1d4ed8' : '#94a3b8',
+        fontSize: 10, fontWeight: 700, color: active ? '#1d4ed8' : '#94a3b8',
         letterSpacing: 0.5, cursor: 'pointer', textAlign: align,
         display: 'flex', alignItems: 'center', justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
         gap: 2, userSelect: 'none', whiteSpace: 'nowrap',
       }}>
         {label}
-        <span style={{ fontSize: 8, opacity: active ? 1 : 0.4 }}>
+        <span style={{ fontSize: 10, opacity: active ? 1 : 0.4 }}>
           {active ? (sortDir === 'asc' ? '▲' : '▼') : '⇅'}
         </span>
       </div>
@@ -133,11 +138,11 @@ export default function PortfolioPane() {
                 <span className="badge-live"/>
               )}
             </div>
-            <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 1 }}>{item.exchange || 'NSE'} EQ · Qty: {item.qty?.toLocaleString('en-IN')}</div>
+            <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 1 }}>{item.exchange || 'NSE'} EQ · Qty: {item.qty?.toLocaleString('en-IN')}</div>
           </div>
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: 17, fontWeight: 800, letterSpacing:-.3, color: item.ltp >= item.avg ? '#16a34a' : '#dc2626' }}>₹{fmt(item.ltp)}</div>
-            <div style={{ fontSize: 9, color: '#94a3b8' }}>Avg ₹{fmt(item.avg)}</div>
+            <div style={{ fontSize: 10, color: '#94a3b8' }}>Avg ₹{fmt(item.avg)}</div>
           </div>
         </div>
 
@@ -150,7 +155,7 @@ export default function PortfolioPane() {
             { label: 'OVERALL P&L', value: fmtPnl(item.pnl),             color: gc(item.pnl) },
           ].map(({ label, value, color }) => (
             <div key={label} style={{ background: '#f8fafc', borderRadius: 6, padding: '5px 7px' }}>
-              <div style={{ fontSize: 9, color: '#94a3b8', fontWeight: 700, letterSpacing: 0.5, marginBottom: 2 }}>{label}</div>
+              <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700, letterSpacing: 0.5, marginBottom: 2 }}>{label}</div>
               <div style={{ fontSize: 11, fontWeight: 800, color }}>{value}</div>
             </div>
           ))}
@@ -198,10 +203,10 @@ export default function PortfolioPane() {
           <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}>
             {sym}
             {item.isLive && marketStatus.open && (
-              <span style={{ fontSize: 7, background: '#dcfce7', color: '#16a34a', borderRadius: 3, padding: '1px 3px', fontWeight: 800 }}>⚡</span>
+              <span style={{ fontSize: 10, background: '#dcfce7', color: '#16a34a', borderRadius: 3, padding: '1px 3px', fontWeight: 800 }}>⚡</span>
             )}
           </div>
-          <div style={{ fontSize: 9, color: '#94a3b8' }}>{item.exchange || 'NSE'} EQ</div>
+          <div style={{ fontSize: 10, color: '#94a3b8' }}>{item.exchange || 'NSE'} EQ</div>
         </div>
         <div style={{ textAlign: 'right', fontWeight: 600 }}>{item.qty?.toLocaleString('en-IN')}</div>
         <div style={{ textAlign: 'right' }}>₹{fmt(item.avg)}</div>
@@ -224,7 +229,7 @@ export default function PortfolioPane() {
         <div>
           {/* WS status */}
           {allKeys.length > 0 && (
-            <div style={{ fontSize: 9, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{ fontSize: 10, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 5 }}>
               <div style={{ width: 6, height: 6, borderRadius: '50%', background: wsConnected ? '#16a34a' : '#94a3b8', flexShrink: 0 }} />
               <span style={{ color: '#94a3b8' }}>
                 {wsConnected ? `⚡ Live P&L — ${allKeys.length} instruments streaming` : 'WebSocket connecting...'}
@@ -233,6 +238,7 @@ export default function PortfolioPane() {
             </div>
           )}
 
+          <div className="pf-top">
           {/* Hero: value + P&L */}
           <div style={{
             background: 'linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%)', borderRadius: 16,
@@ -247,7 +253,7 @@ export default function PortfolioPane() {
                 { l: 'OVERALL', v: fmtPnl(totalPnl), p: fmtPct(returnPct),  up: totalPnl >= 0 },
               ].map(x => (
                 <div key={x.l} style={{ background: 'rgba(255,255,255,.1)', borderRadius: 10, padding: '8px 10px' }}>
-                  <div style={{ fontSize: 9, opacity: .7, fontWeight: 700, letterSpacing: .8 }}>{x.l} P&L</div>
+                  <div style={{ fontSize: 10, opacity: .7, fontWeight: 700, letterSpacing: .8 }}>{x.l} P&L</div>
                   <div style={{ fontSize: 15, fontWeight: 800, color: x.up ? '#4ade80' : '#f87171' }}>{x.v}</div>
                   <div style={{ fontSize: 10, fontWeight: 700, color: x.up ? '#4ade80' : '#f87171' }}>{x.p}</div>
                 </div>
@@ -289,6 +295,8 @@ export default function PortfolioPane() {
             </div>
           )}
 
+          </div>
+
           {/* Tab toggle */}
           <div style={{ display: 'flex', gap: 0, marginBottom: 12, background: '#f1f5f9', borderRadius: 10, padding: 3 }}>
             {[
@@ -305,6 +313,11 @@ export default function PortfolioPane() {
             ))}
           </div>
 
+          {current.length > 0 && (
+            <input className="search-in" type="search" placeholder="Search symbol" aria-label="Search symbol"
+              value={query} onChange={e => setQuery(e.target.value)} />
+          )}
+
           {current.length === 0 ? (
             <EmptyState>No {tab} found in your Upstox account</EmptyState>
           ) : (
@@ -315,7 +328,7 @@ export default function PortfolioPane() {
                 <div style={{ display: 'flex', gap: 6, marginBottom: 10, overflowX: 'auto', paddingBottom: 2 }}>
                   {COLS.map(({ col, label }) => (
                     <button key={col} onClick={() => toggleSort(col)} style={{
-                      padding: '4px 10px', fontSize: 9, fontWeight: 700, borderRadius: 16,
+                      padding: '4px 10px', fontSize: 10, fontWeight: 700, borderRadius: 16,
                       border: 'none', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
                       background: sortCol === col ? '#0f172a' : '#f1f5f9',
                       color:      sortCol === col ? '#fff'    : '#64748b',

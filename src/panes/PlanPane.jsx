@@ -40,7 +40,7 @@ const KV = ({ items }) => (
   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 10 }}>
     {items.map(([k, v]) => (
       <div key={k} style={{ background: '#f8fafc', borderRadius: 8, padding: '7px 9px' }}>
-        <div style={{ fontSize: 9, fontWeight: 700, color: '#94a3b8', letterSpacing: 0.4 }}>{k}</div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: 0.4 }}>{k}</div>
         <div style={{ fontSize: 12, fontWeight: 800, color: '#0f172a' }}>{v}</div>
       </div>
     ))}
