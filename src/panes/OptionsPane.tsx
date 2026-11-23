@@ -19,6 +19,8 @@ const OPT_FILTERS = [
   { id:'aligned',label:'✅ With-Trend' },{ id:'counter',label:'⚠ Counter-Trend' },
 ];
 
+import { OptionsTable, useIsDesktop } from '../components/DataTables.jsx';
+
 function OptionCard({ pick, cfg: cardCfg }) {
   const { openSignalSymbols } = useApp();
   const alreadyOpen = openSignalSymbols?.has(pick.und);
@@ -224,6 +226,7 @@ function OptionCard({ pick, cfg: cardCfg }) {
 
 
 export default function OptionsPane() {
+  const isDesktop = useIsDesktop();
   const {
     token, cfg, marketStatus, lg, onTokenExpired, updateBadge, fiiInterp, fiiData, gh, adaptWeights, mlModels, confCalibration,
     activeTab, setScanning, setStatusDot, setStatusTxt, stocks, vixHistorySeries,
@@ -470,6 +473,11 @@ export default function OptionsPane() {
               {displayGroups.map(g => (
               <div key={g.name}>
                 <div className="opt-group-hdr">{g.fullName||g.name}{g.type==='stock'?' 📊':''} — ₹{fmt(g.spot)} ({fmtC(g.spotChg)}) · Exp: {g.expiries?.length > 1 ? `${g.expiries.length} expiries (${g.expiries[0]} → ${g.expiries[g.expiries.length-1]})` : g.expiry} · {g.picks.filter(p=>p.trendAligned).length} with-trend · {g.picks.length} total</div>
+                {isDesktop ? (
+                  <OptionsTable picks={g.picks} cfg={cfg}
+                    keyOf={(p,i)=>`${g._scanId||optionsScanId}-${p.und}-${p.strike}-${p.type}-${p.expiry}-${p._scanIndex??i}`}
+                    renderCard={p=><OptionCard pick={p} cfg={cfg} />} />
+                ) : (<>
                 {/* With-trend first */}
                 {g.picks.filter(p=>p.trendAligned).length > 0 && (
                   <div style={{ background:'#f0fdf4', border:'1px solid #bbf7d0', borderRadius:6, padding:'6px 10px', marginBottom:8, fontSize:10, fontWeight:700, color:'#15803d' }}>
@@ -490,6 +498,7 @@ export default function OptionsPane() {
                     </div>
                   </>
                 )}
+                </>)}
               </div>
             ))}
             </>

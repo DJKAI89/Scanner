@@ -76,6 +76,8 @@ function JournalBar({ sig }: { sig: any }) {
   );
 }
 
+import { LogTable, useIsDesktop } from '../components/DataTables.jsx';
+
 function SignalRow({ sig, livePrice, marketOpen = true }) {
   const sc = STATUS_COLORS[sig.status] || STATUS_COLORS.OPEN;
   const isBuy  = isBullSignal(sig); // uses shared isBullSignal (handles BUY/SELL/CALL/PUT)
@@ -365,6 +367,7 @@ export default function LogPane() {
   const [filter, setFilter]           = useState('all');
   const [typeFilter, setTypeFilter]   = useState('all');
   const [symQuery, setSymQuery]         = useState('');
+  const isDesktop = useIsDesktop();
   const [days, setDays]               = useState(1);
   const [wsResolved, setWsResolved]   = useState(0);
   const updateJournal = useCallback(async (sig: any, patch: any) => {
@@ -450,6 +453,7 @@ export default function LogPane() {
       sls:     closed.length - hits,
       winRate,
       avgConf: Math.round(filtered.reduce((s, x) => s + (x.confidence || 0), 0) / filtered.length),
+      avgPnl:  (() => { const v = closed.map(x => x.pnlPct).filter(n => typeof n === 'number'); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; })(),
     };
   }, [filtered]);
 
@@ -557,6 +561,7 @@ export default function LogPane() {
               <StatCard label="TOTAL"    value={stats.total}   sub={`${nStock} stock${nStock!==1?'s':''} · ${nOpt} option${nOpt!==1?'s':''}`} valClass="bl" />
               <StatCard label="OPEN ⚡"  value={stats.open}    sub={marketOpen ? 'tracking live' : 'paused · market closed'} valClass="am" />
               <StatCard label="WIN RATE" value={stats.winRate!=null?stats.winRate+'%':'—'} sub={`${stats.hits}W · ${stats.sls}L`} valClass={(stats.winRate||0)>=50?'up':'dn'} />
+              <StatCard label="AVG P&L" value={stats.avgPnl!=null?(stats.avgPnl>=0?'+':'')+stats.avgPnl.toFixed(2)+'%':'—'} sub="per closed signal" valClass={(stats.avgPnl||0)>=0?'up':'dn'} />
               <StatCard label="AVG CONF" value={stats.avgConf+'%'} sub={`across ${stats.total} signals`} valClass="pu" />
             </div>
           )}
@@ -583,6 +588,9 @@ export default function LogPane() {
 
           {filtered.length===0
             ?<EmptyState>{gh.token?`No signals for selected filters (${days}d)`:'Configure GitHub in ⚙ Settings to start logging'}</EmptyState>
+            :isDesktop
+            ?<LogTable signals={filtered} pnlOf={(sg)=>{ if (sg.status==='OPEN') { const l=lastPrices[getSignalFeedKey(sg)]?.ltp; return l&&sg.entry?+((l-sg.entry)/sg.entry*100).toFixed(2):null; } return typeof sg.pnlPct==='number'?sg.pnlPct:null; }}
+                renderRow={(sg)=><SignalRow sig={sg} marketOpen={marketOpen} livePrice={sg.status==='OPEN'?(lastPrices[getSignalFeedKey(sg)]?.ltp ?? null):null} />} />
             :rows.map((r, i) => r.kind === 'group'
               ? <SignalGroup key={r.key} members={r.members} lastPrices={lastPrices} marketOpen={marketOpen} />
               : <SignalRow

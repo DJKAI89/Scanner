@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
 import ScanProgress from '../components/ScanProgress';
 import StockCard from '../components/StockCard.jsx';
+import { PicksTable, useIsDesktop } from '../components/DataTables.jsx';
 import { fmt, interpVIX, fmtVol } from '../utils/formatters';
 import LiveChart from '../components/LiveChart';
 import { AccentCard, CardHeader, LevelsStrip, ProgressStat, SignalTags, WhyBox, contextTags, KpiStrip, riskFlags } from '../components/cardKit';
@@ -578,6 +579,7 @@ export default function StocksPane() {
   const [picksError, setPicksError]     = useState('');
   const [picks, setPicks]               = useState([]);
   const [pickFilter, setPickFilter]     = useState('all');
+  const isDesktop = useIsDesktop();
   const [scanStats, setScanStats]       = useState(null);
   const [picksTime, setPicksTime]       = useState('');
   const [pickProgress, setPickProgress] = useState('');
@@ -641,7 +643,7 @@ export default function StocksPane() {
     const rec = String(p.rec || p.signal || '');
     if (pickFilter === 'buy')  return /BUY/i.test(rec);
     if (pickFilter === 'sell') return /SELL|AVOID/i.test(rec);
-    if (pickFilter === 'conf') return (p.confidence || 0) >= 60;
+    if (pickFilter === 'conf') return (p.conf || 0) >= 60;
     return true;
   });
 
@@ -784,7 +786,9 @@ export default function StocksPane() {
                   {!stocks?.length?'⚙ Configure stocks.json in GitHub Settings':marketStatus.open?'🔄 Click ▶ Scan to fetch picks':'📅 Market Closed'}
                   {scanStats&&<><br/><span style={{fontSize:11,color:'#64748b'}}>Conf≥{cfg.minStockConf||50}% · Pot≥{cfg.pot||3}% · Risk&lt;{cfg.risk||55}% · R:R≥{cfg.rr||1.2}</span><br/><span style={{fontSize:10}}>Scanned {scanStats.totalScanned||0} stocks · Lower thresholds in ⚙ Settings</span></>}
                 </EmptyState>
-                :<div className="cards-g">{visiblePicks.map((p,i)=>{const live=stockPrices[p.key];const pickData=live?{...p,ltp:live.ltp,chgPct:live.chgPct}:p;return(<StockCard key={`${p._scanId||picksScanId}-${p.key||p.s}-${i}`} pick={pickData} rank={i+1} cfg={cfg} onPopup={()=>setPopupPick(pickData)}/>);})}</div>
+                :isDesktop
+                  ?<PicksTable picks={visiblePicks.map(p=>{const live=stockPrices[p.key];return live?{...p,ltp:live.ltp,chgPct:live.chgPct}:p;})} selectedKey={popupPick?.key||popupPick?.s} onSelect={p=>setPopupPick(p)}/>
+                  :<div className="cards-g">{visiblePicks.map((p,i)=>{const live=stockPrices[p.key];const pickData=live?{...p,ltp:live.ltp,chgPct:live.chgPct}:p;return(<StockCard key={`${p._scanId||picksScanId}-${p.key||p.s}-${i}`} pick={pickData} rank={i+1} cfg={cfg} onPopup={()=>setPopupPick(pickData)}/>);})}</div>
               }
               <div className="disc">⚠ Not SEBI advice. Always DYODD.</div>
             </div>
