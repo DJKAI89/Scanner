@@ -451,6 +451,27 @@ export default function LogPane() {
     };
   }, [filtered]);
 
+  // Live calibration: closed signals grouped by logged score bucket. Higher buckets should win more.
+  const calibration = useMemo(() => {
+    const closed = filtered.filter(s => s.status==='TARGET_HIT' || s.status==='SL_HIT');
+    const build = (getScore: (s: any) => number | null) => {
+      const edges = [0, 50, 60, 70, 80, 101];
+      const rows: { label: string; n: number; wr: number }[] = [];
+      for (let i = 0; i < edges.length - 1; i++) {
+        const part = closed.filter(s => { const v = getScore(s); return v != null && v >= edges[i] && v < edges[i + 1]; });
+        if (!part.length) continue;
+        const wins = part.filter(s => s.status==='TARGET_HIT').length;
+        rows.push({ label: i === edges.length - 2 ? `${edges[i]}%+` : `${edges[i]}–${edges[i + 1]}%`, n: part.length, wr: Math.round(wins / part.length * 100) });
+      }
+      return rows;
+    };
+    const asPct = (v: any) => { const n = +v; return Number.isFinite(n) ? (n <= 1 ? n * 100 : n) : null; };
+    const conf = build(s => asPct(s.confidence));
+    const ml = build(s => (s.mlProbability != null ? asPct(s.mlProbability) : null));
+    if (closed.length < 10) return null;
+    return { conf, ml, total: closed.length };
+  }, [filtered]);
+
   const stocksOpen  = openSignals.filter(s=>s.type==='STOCK').length;
   const optionsOpen = openSignals.filter(s=>s.type==='OPTION').length;
 
@@ -534,6 +555,26 @@ export default function LogPane() {
               <StatCard label="OPEN ⚡"  value={stats.open}    sub={marketOpen ? 'tracking live' : 'paused · market closed'} valClass="am" />
               <StatCard label="WIN RATE" value={stats.winRate!=null?stats.winRate+'%':'—'} sub={`${stats.hits}W · ${stats.sls}L`} valClass={(stats.winRate||0)>=50?'up':'dn'} />
               <StatCard label="AVG CONF" value={stats.avgConf+'%'} sub={`across ${stats.total} signals`} valClass="pu" />
+            </div>
+          )}
+
+          {calibration && (calibration.conf.length > 1 || calibration.ml.length > 1) && (
+            <div style={{ marginBottom:12, padding:'10px 12px', border:'1px solid #e2e8f0', borderRadius:10, background:'#fff' }}>
+              <div style={{ fontSize:10, fontWeight:800, color:'#94a3b8', letterSpacing:0.5, marginBottom:6 }}>CALIBRATION · {calibration.total} closed</div>
+              {([['Confidence', calibration.conf], ['ML probability', calibration.ml]] as [string, { label: string; n: number; wr: number }[]][]).map(([title, rows]) => rows.length > 1 && (
+                <div key={title} style={{ marginBottom:6 }}>
+                  <div style={{ fontSize:10, fontWeight:700, color:'#64748b', marginBottom:3 }}>{title}</div>
+                  <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                    {rows.map(r => (
+                      <div key={r.label} style={{ flex:'1 1 70px', padding:'4px 6px', borderRadius:6, background:'#f8fafc', textAlign:'center' }}>
+                        <div style={{ fontSize:9, color:'#64748b' }}>{r.label}</div>
+                        <div style={{ fontSize:13, fontWeight:800, color: r.wr >= 50 ? '#16a34a' : '#dc2626' }}>{r.wr}%</div>
+                        <div style={{ fontSize:9, color:'#94a3b8' }}>n={r.n}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
 
