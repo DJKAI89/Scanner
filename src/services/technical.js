@@ -23,6 +23,21 @@ export function calcEMACrossover(closes) {
   return { e50, e200, ema50: e50, ema200: e200, goldenCross, deathCross, nearCross, uptrend };
 }
 
+// Golden / death cross that happened within the last `lookback` sessions (calcEMACrossover only
+// sees the exact day, which a daily scan would miss on any given morning). closes = oldest-first.
+export function calcRecentCross(closes, lookback = 5) {
+  if (!closes || closes.length < 200 + lookback) return { golden: false, death: false };
+  let golden = false, death = false;
+  for (let k = 0; k < lookback; k++) {
+    const end = closes.length - k;
+    const c = closes.slice(0, end), p = closes.slice(0, end - 1);
+    const e50 = calcEMA(c, 50), e200 = calcEMA(c, 200), p50 = calcEMA(p, 50), p200 = calcEMA(p, 200);
+    if (p50 <= p200 && e50 > e200) golden = true;
+    if (p50 >= p200 && e50 < e200) death = true;
+  }
+  return { golden, death };
+}
+
 // ── RSI ──────────────────────────────────────────────────────
 export function calcRSI(closes, period = 14) {
   if (!closes || closes.length < period + 1) return 50;
@@ -367,12 +382,22 @@ export function calcVolumeSurge(candles, lookback = 20) {
   const avgVol = past.reduce((s, c) => s + +c[5], 0) / past.length;
   if (!avgVol || avgVol <= 0) return null;
   const ratio = avgVol > 0 ? +(todayVol / avgVol).toFixed(2) : 1;
+
+  // Climax / Exhaustion detection: Huge volume spike (>= 3.5x) with rejection wick
+  const c0 = candles[0];
+  const o = +c0[1], h = +c0[2], l = +c0[3], cl = +c0[4];
+  const range = h - l || 1;
+  const upperWick = h - Math.max(o, cl);
+  const isUpperWickHeavy = upperWick / range > 0.35;
+  const isClimaxVolume = ratio >= 3.5 && isUpperWickHeavy;
+
   return {
     todayVol,
     avgVol: +avgVol.toFixed(0),
     ratio,
-    confirmed: ratio >= 1.5,
-    strong: ratio >= 2.5,
+    confirmed: ratio >= 1.5 && !isClimaxVolume,
+    strong: ratio >= 2.5 && !isClimaxVolume,
+    climaxExhaustion: isClimaxVolume,
     weak: ratio >= 1.0 && ratio < 1.5,
     dry: ratio < 0.8,
   };
@@ -1064,14 +1089,36 @@ export function calcMaxPain(chain) {
 }
 
 export function calcOIWalls(chain) {
-  if (!chain || chain.length < 3) return { callWall: 0, putWall: 0 };
+  if (!chain || chain.length < 3) return { callWall: 0, putWall: 0, callCluster: 0, putCluster: 0 };
   let maxCallOI = 0, maxPutOI = 0, callWall = 0, putWall = 0;
+  
+  // Calculate weighted cluster of top 3 strikes around heavy OI
+  const callEntries = [];
+  const putEntries = [];
+
   for (const row of chain) {
-    const callOI = row.call_options?.market_data?.oi || 0, putOI = row.put_options?.market_data?.oi || 0;
-    if (callOI > maxCallOI) { maxCallOI = callOI; callWall = row.strike_price; }
-    if (putOI  > maxPutOI)  { maxPutOI  = putOI;  putWall  = row.strike_price; }
+    const sp = row.strike_price;
+    const callOI = row.call_options?.market_data?.oi || 0;
+    const putOI = row.put_options?.market_data?.oi || 0;
+    if (callOI > maxCallOI) { maxCallOI = callOI; callWall = sp; }
+    if (putOI  > maxPutOI)  { maxPutOI  = putOI;  putWall  = sp; }
+    if (callOI > 0) callEntries.push({ strike: sp, oi: callOI });
+    if (putOI > 0) putEntries.push({ strike: sp, oi: putOI });
   }
-  return { callWall, putWall, callWallOI: maxCallOI, putWallOI: maxPutOI };
+
+  // Top 3 calls and puts by OI to find weighted center of mass (Cluster)
+  callEntries.sort((a, b) => b.oi - a.oi);
+  putEntries.sort((a, b) => b.oi - a.oi);
+
+  const top3Calls = callEntries.slice(0, 3);
+  const sumCallOI = top3Calls.reduce((s, x) => s + x.oi, 0) || 1;
+  const callCluster = +(top3Calls.reduce((s, x) => s + x.strike * x.oi, 0) / sumCallOI).toFixed(0);
+
+  const top3Puts = putEntries.slice(0, 3);
+  const sumPutOI = top3Puts.reduce((s, x) => s + x.oi, 0) || 1;
+  const putCluster = +(top3Puts.reduce((s, x) => s + x.strike * x.oi, 0) / sumPutOI).toFixed(0);
+
+  return { callWall, putWall, callWallOI: maxCallOI, putWallOI: maxPutOI, callCluster, putCluster };
 }
 
 // ── Option Analysis page — lightweight per-strike scanner ─────
@@ -1112,6 +1159,7 @@ export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, 
 
       const ltp = md.ltp, delta = gr?.delta || 0, iv = gr?.iv || 0, theta = gr?.theta || 0;
       const oi = md?.oi || 0, prevOI = md?.prev_oi || oi;
+      const spreadPct = calcSpread(md);
       const oiChg = prevOI > 0 ? ((oi - prevOI) / prevOI * 100) : 0;
       const prevClose = md?.close_price || md?.close || 0;
       const ltpChgPct = prevClose > 0 ? +((ltp - prevClose) / prevClose * 100).toFixed(2) : 0;
@@ -1159,7 +1207,7 @@ export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, 
       const marginEst = +(ltp * lot).toFixed(0);
 
       out[optType] = {
-        ltp: +ltp.toFixed(2), ltpChgPct, oi, oiChg: +oiChg.toFixed(1), delta: +delta.toFixed(2), iv: +iv.toFixed(1), theta: +theta.toFixed(2),
+        ltp: +ltp.toFixed(2), ltpChgPct, spreadPct, oi, oiChg: +oiChg.toFixed(1), delta: +delta.toFixed(2), iv: +iv.toFixed(1), theta: +theta.toFixed(2),
         confidence, baseConfidence, prevOI, isCE: isCEOpt, oiBuildType, oiBuildBonus, marginEst,
         signals, zoneAdj, dirFlipPenalty, stockPCR,
         instrKey: opt.instrument_key || null,
@@ -1577,6 +1625,15 @@ export function calcOptConfidenceFull(delta, iv, oiChg, theta, signals, spot, st
 }
 
 // ── Full scanChain — EXACT port from HTML ─────────────────────
+// Bid-ask spread as % of the mid price. Upstox's option chain returns bid_price / ask_price per contract;
+// they are sometimes null/0 (then no spread is known and nothing is blocked on it).
+export function calcSpread(md) {
+  const bid = +md?.bid_price, ask = +md?.ask_price;
+  if (!(bid > 0) || !(ask > 0) || ask < bid) return null;
+  const mid = (bid + ask) / 2;
+  return +(((ask - bid) / mid) * 100).toFixed(2);
+}
+
 export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish, vix, maxPain, stockPCR, marketCtx, cfg) {
   const picks = [];
   const isNeutral      = marketCtx?.neutral === true;
@@ -1616,6 +1673,7 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       if (iv === 0 && absD0 > 0.95) continue;
       if (iv === 0 && ltp < 1)      continue;
       const oi = md?.oi || 0, prevOI = md?.prev_oi || oi;
+      const spreadPct = calcSpread(md);
       // Liquidity gate — a calculated SL is meaningless if the contract barely trades;
       // thin OI means price can gap straight through the SL before it's ever caught.
       if (oi < (cfg?.minOptOI ?? 500)) continue;
@@ -1705,6 +1763,18 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       else                        { if (absD >= delta_thresh) action = 'BUY'; }
       if (iv >= iv_thresh && oiChg <= -oi_thresh) action = 'SELL';
 
+      // Multi-timeframe gate (marketCtx.mtf is set by the scanner from weekly/daily/60-min/15-min
+      // history of the UNDERLYING). View of the trade on the underlying: BUY CE / SELL PE = bullish,
+      // BUY PE / SELL CE = bearish. Higher timeframes against the view = no trade; otherwise the
+      // grade nudges confidence. No mtf data = behaves exactly as before.
+      let mtfG = null, mtfVetoedAction = null;
+      if (marketCtx?.mtf && action !== 'WATCH') {
+        const view = (action === 'BUY') === isCE ? 1 : -1;
+        mtfG = view > 0 ? marketCtx.mtf.bull : marketCtx.mtf.bear;
+        if (mtfG?.veto) { mtfVetoedAction = action; action = 'WATCH'; }
+        else if (mtfG) confidence = Math.max(1, Math.min(99, confidence + mtfG.adj));
+      }
+
       // SELL: flip SL/Target
       if (action === 'SELL') {
         const riskPct   = entry > 0 ? (entry - sl)  / entry : 0.25;
@@ -1750,6 +1820,9 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
         confidence, atm: sp === atm, spot, expiry, und: name,
         lot, amtRequired, amtIsMargin: action === 'SELL', maxLoss, maxProfit,
         trendAligned, trendDir: momentumDir, compositeScore, slTgtMethod,
+        spreadPct, bid: +md?.bid_price || null, ask: +md?.ask_price || null,
+        mtfVetoedAction,
+        mtf: mtfG ? { grade: mtfG.grade, score: mtfG.score, dirs: mtfG.dirs, support: mtfG.support, resistance: mtfG.resistance, roomATR: mtfG.roomATR, veto: mtfG.veto, why: mtfG.why, partial: mtfG.partial } : null,
         _dte: _optAdj.dte,
         stockPCR: stockPCR || null, vix: vix || 15, priceZone,
         pdh: pdh || null, pdl: pdl || null,

@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { DEF, CFG_VERSION } from '../constants/config';
-import { localIsOpen, getMarketStatusLocal, getIST, getISTDate } from '../utils/marketTime';
+import { localIsOpen, getMarketStatusLocal, getIST, getISTDate, istDaysAgo } from '../utils/marketTime';
 import { fetchMarketStatus, fetchUserProfile, normalizeAccessToken, fetchFIIDIIData, fetchCandles } from '../services/api';
 
 // One-time migration: rename legacy 'friday_*' localStorage keys to 'scanner_*'
@@ -20,7 +20,7 @@ import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNe
 import { evaluateSignalExit } from '../services/tradeManagement';
 import { fetchQ, resolveAccessToken } from '../services/api';
 import { syncUpstoxTokenToGithub } from '../services/githubSecretSync';
-import { trainSignalMlModels, buildModelSnapshot } from '../services/mlRanking';
+import { trainSignalMlModels, buildModelSnapshot, signalWin } from '../services/mlRanking';
 
 const AppContext = createContext(null);
 
@@ -317,8 +317,8 @@ export function AppProvider({ children }) {
       const stored = await pullVixHistoryFromGH(g);
       const closes = Array.isArray(stored?.closes) ? stored.closes : [];
       const lastDate = closes.length ? closes[closes.length - 1].date : null;
-      const from = lastDate || new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10);
-      const to = new Date().toISOString().slice(0, 10);
+      const from = lastDate || istDaysAgo(400);
+      const to = getISTDate();
       const candles = await fetchCandles('NSE_INDEX|India VIX', from, to, 'day', upstoxToken, onTokenExpired);
       const newCloses = (candles || [])
         .map((c) => ({ date: String(c[0]).slice(0, 10), close: c[4] }))
@@ -347,7 +347,7 @@ export function AppProvider({ children }) {
       try {
         const signals = await ghReadMultipleDays(g, 60); // 60 days for better sample size
         if (!signals?.length) { setMlModels(null); localStorage.removeItem('scanner_ml_models'); return; }
-        const closed = signals.filter(s => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
+        const closed = signals.filter(s => !s.planned && (s.status === 'TARGET_HIT' || s.status === 'SL_HIT'));
         if (closed.length < 10) { setMlModels(null); localStorage.removeItem('scanner_ml_models'); lg(`Calibration: need 10+ closed signals, have ${closed.length}`, 'w'); return; }
         // Browser-safe mode:
         // Use cached/remote AI model and avoid heavy on-page retraining that can freeze UI.
@@ -426,7 +426,7 @@ export function AppProvider({ children }) {
         const bucket = Math.floor((s.confidence || 50) / 10) * 10;
         if (!bands[bucket]) bands[bucket] = { hits:0, total:0 };
         bands[bucket].total++;
-        if (s.status === 'TARGET_HIT') bands[bucket].hits++;
+        if (signalWin(s)) bands[bucket].hits++;
       }
       const calibration = {};
       for (const [band, data] of Object.entries(bands)) {
@@ -450,7 +450,7 @@ export function AppProvider({ children }) {
       }
 
       // Baseline win rate across ALL closed signals
-      const baselineWR = closed.filter(s => s.status === 'TARGET_HIT').length / closed.length;
+      const baselineWR = closed.filter(s => signalWin(s)).length / closed.length;
 
       // Per-type analysis: stocks and options separately
       const stockClosed = withInds.filter(s => s.type === 'STOCK');
@@ -484,9 +484,9 @@ export function AppProvider({ children }) {
           const withoutInd = signals.filter(s => s.indicators[ind] === false);
           if (withInd.length < MIN_SAMPLES) continue; // not enough data yet
 
-          const wrWith    = withInd.filter(s => s.status === 'TARGET_HIT').length / withInd.length;
+          const wrWith    = withInd.filter(s => signalWin(s)).length / withInd.length;
           const wrWithout = withoutInd.length >= MIN_SAMPLES
-            ? withoutInd.filter(s => s.status === 'TARGET_HIT').length / withoutInd.length
+            ? withoutInd.filter(s => signalWin(s)).length / withoutInd.length
             : baseWR;
 
           // Lift = how much better/worse this indicator is vs baseline
@@ -510,10 +510,10 @@ export function AppProvider({ children }) {
       }
 
       const stockWR  = stockClosed.length
-        ? stockClosed.filter(s => s.status === 'TARGET_HIT').length / stockClosed.length
+        ? stockClosed.filter(s => signalWin(s)).length / stockClosed.length
         : baselineWR;
       const optWR    = optClosed.length
-        ? optClosed.filter(s => s.status === 'TARGET_HIT').length / optClosed.length
+        ? optClosed.filter(s => signalWin(s)).length / optClosed.length
         : baselineWR;
 
       const stockWeights = computeIndWeights(stockClosed, STOCK_INDICATORS, stockWR);

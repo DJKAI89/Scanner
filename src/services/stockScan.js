@@ -4,7 +4,7 @@
 
 import { fetchQ, fetchCandles, fetchOptions } from './api.js';
 import { fetchScanQuotesViaWS } from '../hooks/useMarketFeed.js';
-import { logSignals, buildStockSignal } from './github.js';
+import { logSignals, logShadowSignals, buildStockSignal } from './github.js';
 import {
   calcRSI, calcEMACrossover, calcATR, calcSupertrend, calcBBSqueeze, calcNR7, calcADX,
   detectPDHLBreakout, calc52WkBreakout, calcVolumeSurge, detectGap, calcWickRejection,
@@ -13,9 +13,11 @@ import {
   countIndicatorsEx, getRec, autoSLTarget, calcEntryTrigger, detectReversal,
   calcMACD, isNearSupport, calcRSIDivergence, getSector, calcConfidence, calcVWAP,
   calcVWAPBands, applyCalibration, applyAdaptWeights, calcEMA, calcIVPercentile,
-  applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment, computeVixPercentile, vixRegimeShiftScore,
-} from './technical.js';
+  applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment, computeVixPercentile, vixRegimeShiftScore, calcRecentCross } from './technical.js';
 import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
+import { pushShadow, drainShadow } from './shadowLog.js';
+import { getMtf, gradeMtf } from './mtf.js';
+import { stockTrigger } from './triggers.js';
 import { getIST, getISTDate, sleep } from '../utils/marketTime.js';
 import { fetchIntraday } from './api.js';
 
@@ -25,6 +27,19 @@ export function getDeliveryPct(q) {
   if (q.delivery_volume != null && q.volume > 0) return +(q.delivery_volume / q.volume * 100).toFixed(1);
   if (q.delivery_quantity != null && q.volume > 0) return +(q.delivery_quantity / q.volume * 100).toFixed(1);
   return null;
+}
+
+// Sector relative-strength alignment. A long wants: stock >= its sector's average move AND sector >= Nifty
+// (mirrored for shorts). Returns a confidence penalty (<=0) and a short flag. Needs >=3 stocks in the sector
+// and known numbers, otherwise it stays neutral (never penalises on missing data).
+export function sectorRsAdj(stockChg, secAvgChg, secCount, niftyChg, isBull, cfg) {
+  const pen = cfg?.sectorRsPenalty ?? 10;
+  if (!(pen > 0) || secCount < 3 || ![stockChg, secAvgChg, niftyChg].every(Number.isFinite)) return { adj: 0, aligned: null };
+  const d = isBull ? 1 : -1;
+  const stockLeads = (stockChg - secAvgChg) * d >= 0;
+  const sectorLeads = (secAvgChg - niftyChg) * d >= 0;
+  if (stockLeads && sectorLeads) return { adj: 0, aligned: true };
+  return { adj: -(stockLeads || sectorLeads ? Math.round(pen / 2) : pen), aligned: false };
 }
 
 export function getChgPct(q) {
@@ -190,9 +205,14 @@ export async function runPicksScan(ctx, callbacks) {
   // Step 4 — Candles for TOP 20 only (exact HTML: staggered batches of 3, 220ms apart)
   setPickProgress('Step 4/5: Fetching candle history (staggered)...');
   const today  = getISTDate();
-  const from60 = new Date(Date.now()-65*86400000).toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
+  // ~1 year of daily candles (was 65 days = only ~45 trading days, so EMA50/EMA200, the 52-week range and
+  // golden/death crosses could never be computed for the Picks). Existing indicators keep their old
+  // short window below so their behaviour is unchanged; only the long-term ones use the full history.
+  const from60 = new Date(Date.now()-380*86400000).toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
+  const SHORT_N = 45;
   const top20  = byVol.slice(0, Math.min(20, byVol.length));
   const tech   = {};
+  const mtfDaily = {};   // 1-year daily candles per instrument, reused by the timeframe stage (saves a call each)
   let candleOK = 0;
   const CANDLE_BATCH = 3;
   for (let b=0; b<top20.length; b+=CANDLE_BATCH) {
@@ -208,16 +228,23 @@ export async function runPicksScan(ctx, callbacks) {
       if (res.status!=='fulfilled') { lg('Candle batch error: '+res.reason,'w'); continue; }
       const {inst, candles} = res.value;
       if (candles.length>=5) {
-        const closes   = candles.map(c=>+c[4]).reverse();
-        const rc       = candles.slice(0,20);
+        const candlesLong = candles;                           // newest-first, up to ~1 year
+        mtfDaily[inst.key] = candles;
+        const closesLong  = candlesLong.map(c=>+c[4]).reverse(); // oldest-first
+        const candlesS    = candlesLong.slice(0, SHORT_N);      // the window every existing indicator used before
+        const closes      = candlesS.map(c=>+c[4]).reverse();
+        const rc       = candlesS.slice(0,20);
         const avgVol20 = rc.reduce((s,x)=>s+(+x[5]||0),0)/Math.max(1,rc.length);
+        const turnoverCr = rc.length ? rc.reduce((s,x)=>s+(+x[4])*(+x[5]||0),0)/rc.length/1e7 : null;
         const _macd    = calcMACD(closes);
         const _bb      = calcBBSqueeze(closes);
-        const _adx     = calcADX(candles);
-        const _vwapB   = calcVWAPBands(candles);
-        const _rsiDiv  = calcRSIDivergence(candles);   // HTML passes candles, not closes
+        const _adx     = calcADX(candlesS);
+        const _vwapB   = calcVWAPBands(candlesS);
+        const _rsiDiv  = calcRSIDivergence(candlesS);   // HTML passes candles, not closes
         const instLtp = inst._q?.last_price || 0;
         const isAboveMA = (cls, p) => cls.length >= p ? cls[cls.length-1] > cls.slice(-p).reduce((a,b)=>a+b,0)/p : null;
+        const _ema   = calcEMACrossover(closesLong);
+        const _cross = calcRecentCross(closesLong, 5);
         tech[inst.s] = {
           rsi:      calcRSI(closes),
           macdBull: _macd ? _macd.bullish : (closes.length>=35 ? (calcEMA(closes,12)-calcEMA(closes,26))>0 : null),
@@ -226,12 +253,17 @@ export async function runPicksScan(ctx, callbacks) {
           adx:      _adx,
           vwapBands:_vwapB,
           rsiDiv:   _rsiDiv,
-          a50:      isAboveMA(closes, 50),
-          a200:     isAboveMA(closes, 200),
-          atr:      calcATR(candles),
-          patterns: detectPatterns(candles),
-          avgVol20, sr: calcSR(candles), vwap: calcVWAP(candles),
-          candles, closes,
+          a50:      isAboveMA(closesLong, 50),
+          a200:     isAboveMA(closesLong, 200),
+          ema50: _ema?.ema50 || null, ema200: _ema?.ema200 || null,
+          goldenCrossRecent: !!_cross.golden, deathCrossRecent: !!_cross.death,
+          ltUptrend: !!(_ema && closesLong.length>=200 && _ema.e50>_ema.e200 && closesLong[closesLong.length-1]>_ema.e200),
+          ltDowntrend: !!(_ema && closesLong.length>=200 && _ema.e50<_ema.e200 && closesLong[closesLong.length-1]<_ema.e200),
+          turnoverCr: turnoverCr!=null ? +turnoverCr.toFixed(2) : null,
+          atr:      calcATR(candlesS),
+          patterns: detectPatterns(candlesS),
+          avgVol20, sr: calcSR(candlesLong), vwap: calcVWAP(candlesS),   // sr: pivots/support/resistance use only the newest bars; the full history gives a real 52-week high/low
+          candles: candlesS, closes,
         };
         candleOK++;
       }
@@ -245,10 +277,23 @@ export async function runPicksScan(ctx, callbacks) {
   const secMap = {};
   for (const item of byVol) {
     const sec = getSector(item.s);
-    if (!secMap[sec]) secMap[sec]={g:0,c:0};
+    if (!secMap[sec]) secMap[sec]={g:0,c:0,sum:0,n:0};
     if (getChgPct(item._q)>0) secMap[sec].g++;
     secMap[sec].c++;
+    const _cp = getChgPct(item._q);
+    if (Number.isFinite(_cp)) { secMap[sec].sum += _cp; secMap[sec].n++; }
   }
+
+  // Multi-timeframe context for every candidate that has candle data. Fetched BEFORE scoring so the grade is
+  // part of the confidence the calibration / adaptive / ML layers and the signal gate all work from (it used
+  // to be applied afterwards as a late overlay, which the ML ranker and the gate never saw).
+  setPickProgress('Step 5/5: Multi-timeframe check...');
+  const mtfCtx = {};
+  await Promise.allSettled(byVol.filter(it => tech[it.s]?.candles?.length && it._q?.last_price > 0).map(async (it) => {
+    mtfCtx[it.key] = await getMtf({ key: it.key, price: it._q.last_price, token, onTokenExpired, daily: mtfDaily[it.key], lg });
+  }));
+  const mtfLoaded = Object.values(mtfCtx).filter(Boolean).length;
+  lg(`MTF: ${mtfLoaded} of ${Object.keys(mtfCtx).length} candidates have timeframe data`, mtfLoaded ? 'o' : 'w');
 
   // Score ALL byVol stocks (exact HTML — stocks beyond top20 get empty tech={})
   const allScored=[], results=[];
@@ -335,6 +380,11 @@ export async function runPicksScan(ctx, callbacks) {
       pcrBullishExtreme: pcr>0 && pcr<=0.65,
       near52wLow: !!(sr?.week52L>0 && ltp>0 && Math.abs((ltp-sr.week52L)/ltp*100)<2),
       near52wHigh: !!(sr?.week52H>0 && ltp>0 && Math.abs((ltp-sr.week52H)/ltp*100)<2),
+      // Long-term context from the 1-year history. Like every flag here they carry NO hard-coded
+      // bonus: applyAdaptWeights learns each one's win-rate lift from your closed signals.
+      goldenCrossRecent: t.goldenCrossRecent===true, deathCrossRecent: t.deathCrossRecent===true,
+      ltUptrend: t.ltUptrend===true, ltDowntrend: t.ltDowntrend===true,
+      breakout52w: !!(sr?.week52H>0 && ltp>=sr.week52H*0.995 && volOk===true),
       confluenceStrong: confluence.total>0 && confluence.ratio>=0.65 && confluence.agree>=4,
       confluenceWeak: confluence.total>0 && confluence.ratio<0.5,
       confluenceConflict: confluence.conflicting>=2,
@@ -348,8 +398,15 @@ export async function runPicksScan(ctx, callbacks) {
     const slTargets={consMethod:useS1?'S1 support':'ATR+VIX',modMethod:'2:1 R:R'};
     const pot  = calcPotential(ltp,tgtMod,sl,numInds,preRec,mlModels?.thresholds?.stock?.wrByRec);
     const risk = calcRisk(ltp,sl,tgtMod,t.atr||0,vixVal);
+    // Stock picks are long ideas, so the timeframes are graded for a long. Same rules as the options scan:
+    // A +6 / B +2 / C -6, and a block when the daily trend plus another higher timeframe are against it.
+    const _mtfG = mtfCtx[item.key] ? gradeMtf(mtfCtx[item.key], 1) : null;
+    const mtfPick = _mtfG ? { grade: _mtfG.grade, score: _mtfG.score, dirs: _mtfG.dirs, support: _mtfG.support, resistance: _mtfG.resistance, roomATR: _mtfG.roomATR, veto: _mtfG.veto, why: _mtfG.why, partial: _mtfG.partial } : null;
+    const _mtfAdj = _mtfG ? _mtfG.adj : 0;
+    if (_mtfAdj) conf = Math.max(1, Math.min(99, conf + _mtfAdj));
     const mlRank = applyMlRanking(conf, mlModels || null, {
       type: 'STOCK',
+      mtf: mtfPick,
       confidence: conf,
       numInds,
       risk,
@@ -372,19 +429,39 @@ export async function runPicksScan(ctx, callbacks) {
     const confBreakdown = {
       base: Math.round(_confBase), calAdj: Math.round(_calAdj),
       regimeAdj: Math.round(_regimeAdj),
-      adaptAdj: Math.round(_adaptAdj), mlAdj: Math.round(mlRank.mlAdj || 0), final: conf,
+      adaptAdj: Math.round(_adaptAdj), mtfAdj: _mtfAdj, mlAdj: Math.round(mlRank.mlAdj || 0), final: conf,
     };
-    const rec  = getRec(conf,pot.base,risk,pot.rr);
+    // Sector RS alignment (stock vs sector vs Nifty) — soft confidence penalty when a long isn't leading.
+    const _sm = secMap[sec];
+    const _srs = sectorRsAdj(chgPct, _sm?.n ? _sm.sum/_sm.n : NaN, _sm?.n || 0, nChgPct, true, cfg);
+    if (_srs.adj) { conf = Math.max(1, conf + _srs.adj); confBreakdown.sectorRsAdj = _srs.adj; confBreakdown.final = conf; }
+    let rec = getRec(conf, pot.base, risk, pot.rr);
+    // Volume-climax invalidation: a >=3.5x volume spike that closes with a heavy upper
+    // rejection wick is usually exhaustion, not breakout confirmation → downgrade a BUY.
+    if (rec === 'STRONG BUY' || rec === 'BUY') {
+      const vSurge = t.candles?.length >= 6 ? calcVolumeSurge(t.candles) : null;
+      if (vSurge?.climaxExhaustion) {
+        rec = 'WATCH';
+        conf = Math.max(1, conf - 12);
+      }
+    }
     // Shared gate (mlRanking.evaluateSignalGate) — see that function for why:
     // this exact sequence (learned-vs-manual confidence floor, since only
     // passing signals get logged so a too-high learned threshold is a
     // self-reinforcing lockout; RR/risk/potential floors; aiBlock veto) used
     // to be hand-rewritten at every pipeline and had already drifted apart
     // more than once.
-    const passes = evaluateSignalGate({
+    const gate = evaluateSignalGate({
       type: 'STOCK', aiBlock: mlRank.aiBlock, conf, rr: pot.rr, potBase: pot.base,
       risk, rec, mlModels, cfg,
-    }).passes;
+    });
+    // Liquidity: skip names with thin average daily turnover (fills and stops don't hold there).
+    const minTurn = cfg.minStockTurnoverCr ?? 5;
+    const lowLiq = t.turnoverCr!=null && t.turnoverCr < minTurn;
+    const mtfVeto = !!mtfPick?.veto;
+    const passes = gate.passes && !lowLiq && !mtfVeto;
+    const gateReason = mtfVeto ? 'mtf_avoid: ' + (mtfPick.why || 'higher timeframes against') : lowLiq ? `liquidity: avg turnover ₹${t.turnoverCr} cr < ₹${minTurn} cr` : gate.reason;
+    const trigger = stockTrigger({ ..._indSnap, volOk: volOk===true, chgPct, nearSupp: !!nearSupp });
 
     const entryTrigger=calcEntryTrigger(ltp,high,sr,t.atr||0,rec,vwap,chgPct);
     const macd=t.macd||{}, macdBull=t.macdBull, bb=t.bb, adx=t.adx, rsiDiv=t.rsiDiv;
@@ -399,6 +476,9 @@ export async function runPicksScan(ctx, callbacks) {
       vwap, aboveVWAP, vwapType:'daily', vwapBands,
       vol, avgVol20, high, low, delivPct, regime: stockRegime, volRegimeShift, mlSegment: mlRank.mlSegment, confluence,
       _indSnap, confBreakdown,
+      mtf: mtfPick, mtfUnavailable: !_mtfG, mtfBoost: _mtfAdj, mtfNote: _mtfG ? `${_mtfG.grade} ${_mtfG.dirs}` : null,
+      trigger, turnoverCr: t.turnoverCr ?? null, ema50: t.ema50 ?? null, ema200: t.ema200 ?? null,
+      hi52: sr?.week52H||null, lo52: sr?.week52L||null,
       mlProbability: mlRank.mlProbability,
       mlAdj: mlRank.mlAdj,
       mlExplain: mlRank.explanation,
@@ -408,6 +488,7 @@ export async function runPicksScan(ctx, callbacks) {
       recentCandles:(t.candles||[]).slice(0,20), closes:t.closes||[],
     };
     allScored.push(scored);
+    if (!passes) pushShadow(scored, gateReason, 'STOCK'); // tracked as a shadow signal
     if (passes && rec!=='AVOID') results.push(scored);
     secMap[sec].g+=rec==='BUY'||rec==='STRONG BUY'?1:0;
   }
@@ -420,35 +501,12 @@ export async function runPicksScan(ctx, callbacks) {
 
   results.sort((a,b)=>b.conf-a.conf);
 
-  // ── MTF 30-min boost for top 5 picks (exact HTML port) ──
-  const today2=getISTDate();
-  const from7d=new Date(Date.now()-10*864e5).toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
-  const top5=results.slice(0,5);
-  await Promise.allSettled(top5.map(async(p,idx)=>{
-    await sleep(idx*300);
-    try{
-      const c30=await fetchCandles(p.key,from7d,today2,'30minute',token,onTokenExpired);
-      if(c30.length<8) return;
-      const cl30=c30.map(c=>+c[4]).reverse();
-      const macd30=calcMACD(cl30),adx30=calcADX(c30),rsi30=calcRSI(cl30);
-      const trend30=cl30[cl30.length-1]>cl30[Math.max(0,cl30.length-8)]?'UP':'DOWN';
-      let mtfBoost=0;
-      const isBuyRec=p.rec==='BUY'||p.rec==='STRONG BUY';
-      if(isBuyRec){
-        if(trend30==='UP')            mtfBoost+=4;
-        if(macd30?.bullish)           mtfBoost+=3;
-        if(macd30?.bullCross)         mtfBoost+=4;
-        if(adx30?.bullTrend)          mtfBoost+=3;
-        if(rsi30&&rsi30>=45&&rsi30<=72) mtfBoost+=2;
-      }
-      if(mtfBoost>0){
-        p.conf=Math.min(99,p.conf+mtfBoost);
-        p.mtfBoost=mtfBoost;
-        p.mtfNote=`30min:${trend30}${macd30?.bullCross?' MACD✕':''}${adx30?.bullTrend?' ADX':''}`;
-        lg(`MTF ${p.s}: +${mtfBoost}pts (${p.mtfNote})`,'o');
-      }
-    }catch(e){ lg('MTF '+p.s+': '+e.message,'w'); }
-  }));
+  // -- Multi-timeframe check (top-down), replaces the old 30-min-only boost --
+  // Weekly + daily decide direction and room to run, 60-min shows pullback vs rejection,
+  // 15-min times the entry. Higher timeframes outrank the entry timeframe: a BUY against
+  // the daily/weekly trend (or pressed under resistance) is dropped to the shadow log
+  // instead of shown. Missing data never blocks (getMtf returns null -> pick unchanged).
+  // (The Picks timeframe check now happens inside the scoring loop above, before the ML ranker and the gate.)
   // Re-sort after MTF boost may change conf, cap at 12 like HTML
   results.sort((a,b)=>b.conf-a.conf);
   const cappedResults = results.slice(0, 12);
@@ -469,17 +527,20 @@ export async function runPicksScan(ctx, callbacks) {
   const topSec=Object.entries(secMap).filter(([,v])=>v.c>0).sort((a,b)=>(b[1].g/b[1].c)-(a[1].g/a[1].c))[0]?.[0]||'Mixed';
   const scanId = Date.now();
   const nextPicks = finalPicks.map((pick) => ({ ...pick, _scanId: scanId }));
+  const secChgAvg = {};
+  for (const [sec, v] of Object.entries(secMap)) if (v.n > 0) secChgAvg[sec] = { avg: +(v.sum / v.n).toFixed(2), n: v.n };
   const secMapNormalized = {};
   for (const [sec, v] of Object.entries(secMap)) {
     if (v.c > 0) secMapNormalized[sec] = +(((v.g / v.c) - 0.5) * 2).toFixed(2);
   }
-  const scanStats = {pcr,pcrTxt,sent,sentSc,topSec,cnt:finalPicks.length,totalScanned:byVol.length,secMap:secMapNormalized};
+  const scanStats = {pcr,pcrTxt,sent,sentSc,topSec,cnt:finalPicks.length,totalScanned:byVol.length,secMap:secMapNormalized,secChg:secChgAvg};
 
   lg(`✅ Picks: ${finalPicks.length} from ${byVol.length} stocks`,'o');
   if (!finalPicks.length) lg(`⚠ 0 picks — lower Conf(${cfg.minStockConf}%)/Pot(${cfg.pot}%)/Risk(${cfg.risk}%) in ⚙ Settings`,'w');
   // Don't log WATCH/AVOID — they have <15% WR and pollute calibration data
   const loggablePicks = finalPicks.filter(p=>!p._fallback && p.rec!=='WATCH' && p.rec!=='AVOID');
   if (loggablePicks.length&&gh?.token) logSignals(gh,loggablePicks.map(p=>buildStockSignal(p,vixVal)),vixVal,lg);
+  if (gh?.token) logShadowSignals(gh,drainShadow(),vixVal,lg);
   checkPickAlerts(nextPicks, cfg);
 
   // ── Background intraday enrichment for picks ───────
@@ -605,6 +666,7 @@ export async function runBreakoutScan(ctx, callbacks) {
   }
   setBoProgress('Computing signals...');
   const phase=getIntradayPhase(), results=[];
+  let mtfBudget = 25;   // timeframe lookups per breakout scan (each ~4 cached calls); beyond it a pick shows "MTF n/a"
   for (const item of byVol) {
     const q=item._q, ltp=q.last_price, t=techB[item.s]; if(!t) continue;
     const ema=t.ema, st=t.st;
@@ -648,7 +710,11 @@ export async function runBreakoutScan(ctx, callbacks) {
       :pdhl?.bullBreakout?'PDH_BREAK':pdhl?.bearBreakout?'PDL_BREAK'
       :st?.crossed?(st.trend==='UP'?'ST_CROSS_UP':'ST_CROSS_DOWN'):'GENERIC';
     const boRec = isBull?(score>=7?'STRONG BUY':'BUY'):(score>=7?'SELL':'WATCH');
-    const boBaseConf = applyConfluenceAdjustment(applyRegimeAdjustment(Math.min(95,score*10), marketRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties), boConfluence, cfg);
+    const _boSec = scanStats?.secChg?.[item.sec] ?? scanStats?.secChg?.[getSector(item.s)];
+    const _boNiftyChg = Number.isFinite(ctx.niftyChgPct) ? ctx.niftyChgPct
+      : (niftyCloses.length >= 2 ? (niftyCloses.at(-1) - niftyCloses.at(-2)) / niftyCloses.at(-2) * 100 : NaN);
+    const _boSrs = sectorRsAdj(secChgPct, _boSec?.avg, _boSec?.n || 0, _boNiftyChg, isBull, cfg);
+    const boBaseConf = Math.max(1, applyConfluenceAdjustment(applyRegimeAdjustment(Math.min(95,score*10), marketRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties), boConfluence, cfg) + _boSrs.adj);
     // Previously this pipeline stopped at heuristic regime+confluence
     // adjustment — no ML probability, no learned threshold, no aiBlock veto,
     // unlike the main Stocks scan. A breakout pick's confidence came from a
@@ -661,8 +727,21 @@ export async function runBreakoutScan(ctx, callbacks) {
       adxBull: !!adx?.bullTrend,
       bbSqueeze: !!bb?.squeeze,
     };
-    const boMlRank = applyMlRanking(boBaseConf, mlModels || null, {
-      type: 'STOCK', confidence: boBaseConf, numInds: score,
+    // Multi-timeframe grade BEFORE the ML ranker and the gate (same order as the Picks and options scans),
+    // only for actionable breakouts, within a per-scan lookup budget.
+    let boMtfG = null;
+    if (boRec !== 'WATCH' && mtfBudget > 0) {
+      mtfBudget--;
+      try {
+        const _ctx = await getMtf({ key: item.key, price: ltp, token, onTokenExpired, daily: t.candles, weekly: t.weekly, lg });
+        boMtfG = _ctx ? gradeMtf(_ctx, isBull ? 1 : -1) : null;
+      } catch (_) { boMtfG = null; }
+    }
+    const boMtfPick = boMtfG ? { grade: boMtfG.grade, score: boMtfG.score, dirs: boMtfG.dirs, support: boMtfG.support, resistance: boMtfG.resistance, roomATR: boMtfG.roomATR, veto: boMtfG.veto, why: boMtfG.why, partial: boMtfG.partial } : null;
+    const boMtfAdj = boMtfG ? boMtfG.adj : 0;
+    const boConfIn = Math.max(1, Math.min(99, boBaseConf + boMtfAdj));
+    const boMlRank = applyMlRanking(boConfIn, mlModels || null, {
+      type: 'STOCK', confidence: boConfIn, numInds: score, mtf: boMtfPick,
       risk: 50, pot: { rr: trade.rr, wr: 0, base: 0, adj: 0, ev: 0 },
       rec: boRec, reversal: false, vix: vixVal,
       regime: marketRegime, volRegimeShift: boVolRegimeShift, _indSnap: boIndSnap,
@@ -682,11 +761,10 @@ export async function runBreakoutScan(ctx, callbacks) {
       type: 'STOCK', aiBlock: boMlRank.aiBlock, conf: boConf, rr: trade.rr,
       potBase: boPotBase, risk: 50, rec: boRec, mlModels, cfg,
     }).passes;
-    if (!boPasses) continue;
-    results.push({
+    const boItem = {
       ...item, ltp, chgPct:getChgPct(q), ema, pdhl, st, vol, score, bullScore, bearScore, dir, wk52, mom, nr7, bb, gap, adx, rs, wMTF, wick,
       trade, atr:t.atr, isBull, phase, sectorScore, sec:item.sec||item.s||'NSE',
-      ivPct, primaryType,
+      ivPct, primaryType, trigger: primaryType || 'BREAKOUT',
       rec: boRec,
       conf: boConf,
       sl:trade.sl, target:trade.target,
@@ -699,13 +777,19 @@ export async function runBreakoutScan(ctx, callbacks) {
       nearSupp:false, vwap:0, aboveVWAP:null, vwapType:'daily',
       entryTrigger:{trigger:trade.sl,method:isBull?'Break above PDH':'Break below PDL',alreadyTriggered:false},
       reversal:{type:'NONE'}, recentCandles:t.candles.slice(0,20), closes:t.closes,
-    });
+      mtf: boMtfPick, mtfUnavailable: !boMtfG, mtfBoost: boMtfAdj, mtfNote: boMtfG ? `${boMtfG.grade} ${boMtfG.dirs}` : null,
+    };
+    // Blocked by the higher timeframes: keep the outcome in the shadow log (so the veto can be judged), do not show it.
+    if (boMtfPick?.veto) { pushShadow(boItem, 'mtf_avoid: ' + (boMtfPick.why || 'higher timeframes against'), 'STOCK'); continue; }
+    if (!boPasses) continue;
+    results.push(boItem);
   }
   results.sort((a,b)=>{
     const ap=(a.wk52?.breakHigh||a.wk52?.breakLow?2:0)+(a.ema?.goldenCross||a.ema?.deathCross?2:0);
     const bp=(b.wk52?.breakHigh||b.wk52?.breakLow?2:0)+(b.ema?.goldenCross||b.ema?.deathCross?2:0);
     return bp-ap||b.score-a.score;
   });
+  // (The breakout timeframe check happens inside the scoring loop above, before the ML ranker and the gate.)
   const goldCross =results.filter(r=>r.ema?.goldenCross).length;
   const deathCross=results.filter(r=>r.ema?.deathCross).length;
   const pdhBreak  =results.filter(r=>r.pdhl?.bullBreakout).length;

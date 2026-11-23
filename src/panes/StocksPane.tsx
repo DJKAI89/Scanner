@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
+import ScanProgress from '../components/ScanProgress';
 import StockCard from '../components/StockCard.jsx';
-import { fmt, interpVIX } from '../utils/formatters';
+import { fmt, interpVIX, fmtVol } from '../utils/formatters';
 import LiveChart from '../components/LiveChart';
-import { AccentCard, CardHeader, LevelsStrip, ProgressStat, SignalTags, WhyBox } from '../components/cardKit';
+import { AccentCard, CardHeader, LevelsStrip, ProgressStat, SignalTags, WhyBox, contextTags, KpiStrip, riskFlags } from '../components/cardKit';
+import MtfPanel from '../components/MtfPanel.jsx';
 import { getIST } from '../utils/marketTime';
 import { useMarketFeed } from '../hooks/useMarketFeed.js';
 import { runPicksScan, runBreakoutScan, fetchClosedMarketIndexPrices } from '../services/stockScan';
@@ -204,6 +206,9 @@ function BoChartPopup({ r, onClose }) {
           </div>
         </div>
 
+        {/* Timeframes */}
+        <div style={{ margin: '0 12px' }}><MtfPanel instrumentKey={r.key} price={r.ltp} title="Timeframes" defaultOpen={false} /></div>
+
         {/* Why */}
         {r._whyLines?.length > 0 && (
           <div style={{ margin: '0 12px', padding: '10px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, marginBottom: 12 }}>
@@ -288,7 +293,7 @@ function PickChartPopup({ p, onClose }) {
         {/* Live chart */}
         <div style={{ padding:'0 12px', marginBottom:12 }}>
           <LiveChart
-            instrKey={p.key || ''}
+            instrKey={p.key || p.instrKey || ''}
             candles={p.recentCandles || []}
             closes={p.closes || []}
             entry={et?.trigger || ltp}
@@ -387,6 +392,9 @@ function PickChartPopup({ p, onClose }) {
           </div>
         )}
 
+        {/* Timeframes */}
+        <div style={{ margin: '0 12px' }}><MtfPanel instrumentKey={p.key} price={p.ltp || p.entry} title="Timeframes" defaultOpen={false} /></div>
+
         {/* Why */}
         <div style={{ margin:'0 12px', padding:'10px 12px', background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:10, marginBottom:12 }}>
           <div style={{ fontSize:9, fontWeight:800, color:'#64748b', marginBottom:6 }}>SIGNAL ANALYSIS</div>
@@ -421,13 +429,7 @@ function BoCard({ r, rank, onPopup }) {
 
   const tags = [];
   const tag = (label, tone) => tags.push({ label, tone });
-  const regimeMap = {
-    CHOPPY_HIGH_VOL: { txt: '🌊 CHOPPY + HIGH VIX', tone: 'red' },
-    CHOPPY:          { txt: '🌊 CHOPPY', tone: 'amber' },
-    TRENDING_CALM:   { txt: '📈 CALM TREND', tone: 'green' },
-    TRENDING:        { txt: '📈 TRENDING', tone: 'green' },
-  };
-  if (r.regime && regimeMap[r.regime]) tag(regimeMap[r.regime].txt, regimeMap[r.regime].tone);
+  tags.push(...riskFlags(r), ...contextTags(r)); // caution notes first, then regime · confluence · AI win-probability
   if (_bull>0&&_bear>0) tag('⚡ MIXED SIGNALS','amber');
   if (r.ema) {
     if (r.ema.goldenCross)       tag('⭐ GOLDEN CROSS','amber');
@@ -479,6 +481,8 @@ function BoCard({ r, rank, onPopup }) {
   if (r.stockVWAP?.aboveVWAP && r.stockVWAP?.strong) tag(`📊 ABOVE VWAP ₹${fmtV(r.stockVWAP.vwap)} (+${r.stockVWAP.distPct}%)`,'green');
   else if (!r.stockVWAP?.aboveVWAP && r.stockVWAP?.strong) tag(`📊 BELOW VWAP ₹${fmtV(r.stockVWAP.vwap)} (${r.stockVWAP.distPct}%)`,'red');
   else if (r.stockVWAP?.nearVWAP) tag(`📊 AT VWAP ₹${fmtV(r.stockVWAP.vwap)}`,'slate');
+  if (r.mtf) tag(`MTF ${r.mtf.grade} \u00B7 ${r.mtf.dirs}${r.mtf.roomATR != null ? ` \u00B7 ${r.mtf.roomATR} ATR room` : ''}`, r.mtf.grade === 'A' ? 'green' : r.mtf.grade === 'B' ? 'blue' : 'amber');
+  else if (r.mtfUnavailable) tag('MTF n/a', 'slate');
   if (r.wMTF?.confirms) tag('📅 WEEKLY CONFIRMS','purple');
   if (r.sectorScore>0)  tag(`🏭 ${r.sec||'NSE'} STRONG`,'green');
   else if (r.sectorScore<0) tag(`🏭 ${r.sec||'NSE'} WEAK`,'red');
@@ -498,7 +502,7 @@ function BoCard({ r, rank, onPopup }) {
   else if (r.pdhl?.nearPDL)      why.push(`Near PDL ₹${fmtV(r.pdhl.pdl)} — watch for breakdown`);
   if (r.st?.crossed) why.push(`Supertrend(7,3) flipped ${r.st.trend==='UP'?'bullish':'bearish'} at ₹${fmtV(r.st.value)} — momentum shift`);
   else if (r.st)     why.push(`Supertrend(7,3) ${r.st.trend==='UP'?'bullish':'bearish'} at ₹${fmtV(r.st.value)} (${r.st.dist>0?'+':''}${r.st.dist||0}% from line)`);
-  if (r.vol?.strong)         why.push(`🔥 Volume surge ${r.vol.ratio}× avg (${((r.vol.todayVol||0)/1e5).toFixed(1)}L today vs ${((r.vol.avgVol||0)/1e5).toFixed(1)}L avg) — institutional activity`);
+  if (r.vol?.strong)         why.push(`🔥 Volume surge ${r.vol.ratio}× avg (${fmtVol(r.vol.todayVol||0)} today vs ${fmtVol(r.vol.avgVol||0)} avg) — institutional activity`);
   else if (r.vol?.confirmed) why.push(`Volume ${r.vol.ratio}× 20-day avg — breakout has conviction`);
   else if (r.vol?.dry)       why.push(`⚠ Low volume (${r.vol.ratio}× avg) — treat with caution`);
   if (r.wk52?.breakHigh)    why.push(`🏆 Breaking 52-week high ₹${fmtV(r.wk52.hi52)} — strong institutional signal`);
@@ -539,6 +543,13 @@ function BoCard({ r, rank, onPopup }) {
         onPopup={onPopup}
       />
 
+      <KpiStrip items={[
+        { label: 'SCORE', value: `${r.score || 0}/10`, color: scoreColor, sub: isBull ? 'bullish' : 'bearish' },
+        { label: 'CONF', value: `${r.conf || 0}%`, color: (r.conf || 0) >= 65 ? '#16a34a' : (r.conf || 0) >= 50 ? '#d97706' : '#dc2626' },
+        typeof r.mlProbability === 'number' ? { label: 'AI WIN', value: `${r.mlProbability}%`, color: r.mlProbability >= 60 ? '#16a34a' : r.mlProbability >= 50 ? '#d97706' : '#dc2626', sub: 'model' } : null,
+        { label: 'R:R', value: `${t.rr || 0}:1`, color: (t.rr || 0) >= 2 ? '#16a34a' : (t.rr || 0) >= 1.5 ? '#d97706' : '#dc2626' },
+      ]} />
+
       <SignalTags tags={tags} />
 
       <LevelsStrip
@@ -550,9 +561,7 @@ function BoCard({ r, rank, onPopup }) {
         entrySub={t.method || null}
       />
 
-      <ProgressStat label="Strength" pct={Math.min(100,(r.score||0)*10)} color={scoreColor} valueLabel={`${r.score||0}/10`} />
-
-      <WhyBox lines={why} />
+      <WhyBox title="WHY THIS SIGNAL" lines={why} collapsible />
     </AccentCard>
   );
 }
@@ -704,7 +713,9 @@ export default function StocksPane() {
         <div>
           {!marketStatus.open&&<MarketClosedBanner msg={marketStatus.msg||'🔔 NSE Market Closed'}/>}
           {picksError&&<ErrorBanner title="⚠ Scan Error" message={picksError} onRetry={runPicks}/>}
-          {picksLoading&&<div style={{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:8,padding:'10px 14px',marginBottom:10}}><div style={{fontSize:11,fontWeight:700,color:'#1d4ed8',marginBottom:4}}>⏳ Scanning... {pickProgress}</div><div style={{height:3,background:'#e2e8f0',borderRadius:3}}><div style={{height:'100%',background:'#3b82f6',borderRadius:3,width:'60%',animation:'pulse 1.5s ease-in-out infinite'}}/></div></div>}
+          {picksLoading && <ScanProgress title="Scanning stocks" message={pickProgress} accent="#3b82f6" accentDark="#1d4ed8"
+            steps={['Market', 'PCR', 'Quotes', 'Candles', 'Scoring']} weights={[0.05, 0.10, 0.20, 0.50, 0.15]}
+            hint="EMA · RSI · MACD · ADX · VWAP · Delivery · Confluence · ML rank" />}
           {!picksLoading||picks.length>0?(
             <div>
               {/* 4 stat cards — live via WebSocket. NIFTY 50 / BANK NIFTY cards
@@ -766,7 +777,9 @@ export default function StocksPane() {
       {mode==='breakout'&&(
         <div>
           {boError&&<ErrorBanner title="⚠ Breakout Error" message={boError} onRetry={runBreakout}/>}
-          {boLoading?<Spinner label="Breakout Scanner..." progress={boProgress} sub="EMA 50/200 · PDH/PDL · Supertrend · Vol · 52Wk · Gap · NR7 · BB · RS · Wick"/>:(
+          {boLoading?<ScanProgress title="Breakout scanner" message={boProgress} accent="#7c3aed" accentDark="#5b21b6"
+            phases={[{ label: 'Quotes', re: /quotes|websocket/i }, { label: 'Candles', re: /candles/i }, { label: 'Signals', re: /computing|signals/i }]}
+            weights={[0.2, 0.6, 0.2]} hint="EMA 50/200 · PDH/PDL · Supertrend · Vol · 52Wk · Gap · NR7 · BB · RS · Wick" />:(
             <div>
               {/* Nifty/BankNifty cards removed — global Ticker header covers
                   those (plus Sensex) on every page now. VIX kept, not duplicated there. */}
@@ -780,8 +793,8 @@ export default function StocksPane() {
               </div>
               {boStats&&<div className="stats-g">
                 <StatCard label="TOTAL SIGNALS" value={boStats.total} sub={`from ${boCards.length} stocks`} valClass="bl"/>
-                <StatCard label="BULLISH 📈" value={boStats.bullCount} sub={`${boStats.goldCross||0}GC · ${boStats.pdhBreak||0}PDH · ${boStats.wk52Hi||0}52wkH`} valClass="up"/>
-                <StatCard label="BEARISH 📉" value={boStats.bearCount} sub={`${boStats.deathCross||0}DC · ${boStats.pdlBreak||0}PDL`} valClass="dn"/>
+                <StatCard label="BULLISH 📈" value={boStats.bullCount} sub={`GC ${boStats.goldCross||0} · PDH ${boStats.pdhBreak||0} · 52wk-H ${boStats.wk52Hi||0}`} valClass="up"/>
+                <StatCard label="BEARISH 📉" value={boStats.bearCount} sub={`DC ${boStats.deathCross||0} · PDL ${boStats.pdlBreak||0}`} valClass="dn"/>
                 <StatCard label="VOL SURGE 🔥" value={boStats.volSurge||0} sub={`${boStats.stCrossed||0} ST crossed`} valClass="am"/>
               </div>}
               <div className="bo-filter-row" style={{marginBottom:12}}>

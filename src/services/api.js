@@ -164,6 +164,34 @@ export async function fetchIntraday(key, interval = '30minute', token, onTokenEx
   return d?.data?.candles || [];
 }
 
+// -- V3 candles: any unit/interval (minutes 1-300, hours 1-5, days, weeks, months) --
+// Limits per Upstox docs: minutes 1-15 -> max 1 month per request, >15 min and hours -> 1
+// quarter, days -> 1 decade, weeks/months unlimited. Minute/hour history starts Jan 2022.
+// Path order is .../:unit/:interval/:to_date/:from_date (note: to before from).
+export async function fetchCandlesV3(key, unit, interval, from, to, token, onTokenExpired) {
+  const d = await withRetry(
+    () => apiGet(
+      '/v3/historical-candle/' + encodeURIComponent(key) + '/' + unit + '/' + interval + '/' + to + '/' + from,
+      token, onTokenExpired
+    ),
+    'candleV3:' + unit + interval
+  );
+  return d?.data?.candles || [];
+}
+
+// Today's candles for any unit/interval (V3 intraday). Returns [] when the market is closed.
+export async function fetchIntradayV3(key, unit, interval, token, onTokenExpired) {
+  if (!localIsOpen()) return [];
+  const d = await withRetry(
+    () => apiGet(
+      '/v3/historical-candle/intraday/' + encodeURIComponent(key) + '/' + unit + '/' + interval,
+      token, onTokenExpired
+    ),
+    'intradayV3:' + unit + interval
+  );
+  return d?.data?.candles || [];
+}
+
 // ── Live option greeks (delta/theta/gamma/vega/iv/oi) — WS 'full' mode
 // technically carries these but Upstox hasn't published the proto field
 // numbers for optionGreeks, so we poll this REST endpoint instead of

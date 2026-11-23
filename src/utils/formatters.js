@@ -39,3 +39,13 @@ export function interpVIX(vix) {
   if (vix < 24)  return { txt: 'High 🔴',        cls: 'dn', sc: 35 };
   return           { txt: 'Extreme 💀',           cls: 'dn', sc: 15 };
 }
+
+// ₹ with no decimals, Indian grouping
+export function fmtRs0(n) {
+  return '₹' + fmt(n, 0);
+}
+
+// "date time" label; tolerates missing parts
+export function fmtWhen(date, time) {
+  return [date, time].filter(Boolean).join(' · ') || '—';
+}

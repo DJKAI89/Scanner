@@ -164,6 +164,54 @@ function ConfHeatmap({ bands }) {
   );
 }
 
+// ── Generic win-rate band bars (liquidity / regime-shift / model attribution) ──
+function MetricBars({ items, labelKey = 'band', showAvgNet = false, labelWidth = 96 }) {
+  const max = Math.max(...items.map(b => b.t), 1);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {items.map((b, i) => {
+        const c = clr(b.r || 0);
+        return (
+          <div key={b[labelKey] || i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', minWidth: labelWidth }}>{b[labelKey]}</div>
+            <SparkBar value={b.t} max={max} color={c} height={18} />
+            <div style={{ minWidth: showAvgNet ? 96 : 58, textAlign: 'right' }}>
+              <span style={{ fontSize: 10, fontWeight: 800, color: c }}>{pct(b.r)}</span>
+              <span style={{ fontSize: 8, color: '#94a3b8', marginLeft: 4 }}>·{b.t}</span>
+              {showAvgNet && b.avgNet != null && (
+                <span style={{ fontSize: 9, fontWeight: 700, color: b.avgNet >= 0 ? '#10b981' : '#ef4444', marginLeft: 6 }}>
+                  {b.avgNet >= 0 ? '+' : ''}{b.avgNet}%
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── R-multiple histogram ────────────────────────────────────────
+function RHistogram({ buckets }) {
+  const max = Math.max(...buckets.map(b => b.t), 1);
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 90, padding: '4px 2px' }}>
+      {buckets.map(b => {
+        const h = Math.max(3, (b.t / max) * 74);
+        const isLoss = b.label.startsWith('<') || b.label.startsWith('-1');
+        const color = isLoss ? '#ef4444' : b.label.startsWith('0') ? '#f59e0b' : '#10b981';
+        return (
+          <div key={b.label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+            <div style={{ fontSize: 9, fontWeight: 800, color: '#0f172a' }}>{b.t}</div>
+            <div style={{ width: '100%', height: h, borderRadius: 4, background: `linear-gradient(180deg,${color},${color}99)` }} />
+            <div style={{ fontSize: 7, color: '#94a3b8', fontWeight: 700, textAlign: 'center' }}>{b.label}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Underlying leaderboard ────────────────────────────────────
 function Leaderboard({ items }) {
   const best = items[0]?.r || 1;
@@ -388,25 +436,34 @@ function CSArc({ rows }) {
   );
 }
 
-// ── Section wrapper ───────────────────────────────────────────
-function Section({ title, children, accent = '#10b981' }) {
+// ── Section wrapper (collapsible, flat) ───────────────────────
+const ExpandCtx = React.createContext(null);
+function Section({ title, children, accent = '#10b981', summary = '', defaultOpen = false }) {
+  const force = React.useContext(ExpandCtx);
+  const [open, setOpen] = useState(force ?? defaultOpen);
   return (
-    <div style={{
-      background: '#ffffff',
-      border: `1px solid ${accent}44`,
-      borderRadius: 16, overflow: 'hidden', marginBottom: 12,
-      boxShadow: '0 1px 4px #0000000a',
-    }}>
-      <div style={{
-        padding: '10px 14px 8px',
-        borderBottom: `1px solid ${accent}33`,
-        background: `linear-gradient(90deg, ${accent}18, #f8fafc)`,
-        display: 'flex', alignItems: 'center', gap: 8,
+    <div style={{ borderTop: '1px solid #f1f5f9' }}>
+      <button onClick={() => setOpen(o => !o)} aria-expanded={open} style={{
+        display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '11px 14px',
+        background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
       }}>
-        <div style={{ width: 3, height: 14, borderRadius: 2, background: accent }} />
-        <span style={{ fontSize: 11, fontWeight: 800, color: '#0f172a', letterSpacing: 0.3 }}>{title}</span>
+        <div style={{ width: 3, height: 14, borderRadius: 2, background: accent, flexShrink: 0 }} />
+        <span style={{ fontSize: 12, fontWeight: 800, color: '#0f172a', flex: 1 }}>{title}</span>
+        {summary && <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b' }}>{summary}</span>}
+        <span style={{ fontSize: 10, color: '#94a3b8' }}>{open ? '▾' : '▸'}</span>
+      </button>
+      {open && <div style={{ padding: '2px 14px 14px' }}>{children}</div>}
+    </div>
+  );
+}
+
+function Group({ label, children }) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ fontSize: 10, fontWeight: 800, color: '#94a3b8', letterSpacing: 0.8, margin: '4px 2px 6px' }}>{label}</div>
+      <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 14, overflow: 'hidden', boxShadow: '0 1px 4px #0000000a' }}>
+        {children}
       </div>
-      <div style={{ padding: '12px 14px' }}>{children}</div>
     </div>
   );
 }
@@ -545,6 +602,7 @@ export default function AnalysisPane() {
   const [data,    setData]    = useState(null);
   const [days,    setDays]    = useState(30);
   const [dayPopup, setDayPopup] = useState(null);
+  const [expandAll, setExpandAll] = useState(null);
 
   const load = useCallback(async () => {
     if (!gh.token || !gh.user || !gh.repo) { setError('GitHub not configured — go to ⚙ Settings.'); return; }
@@ -563,13 +621,21 @@ export default function AnalysisPane() {
     <div>
       {/* Toolbar */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, alignItems: 'center' }}>
-        <select value={days} onChange={e => setDays(+e.target.value)}
-          style={{ flex: 1, background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 9, padding: '8px 12px', fontSize: 11, fontWeight: 700, color: '#0f172a', cursor: 'pointer' }}>
-          {[7, 14, 30, 60, 90].map(d => <option key={d} value={d}>Last {d} days</option>)}
-        </select>
+        <div style={{ flex: 1, display: 'flex', gap: 6, overflowX: 'auto' }}>
+          {[7, 14, 30, 60, 90].map(d => (
+            <button key={d} onClick={() => setDays(d)} style={{
+              padding: '6px 12px', fontSize: 11, fontWeight: 700, borderRadius: 16, border: 'none', cursor: 'pointer', flexShrink: 0,
+              background: days === d ? '#0f172a' : '#f1f5f9', color: days === d ? '#fff' : '#64748b',
+            }}>{d}d</button>
+          ))}
+        </div>
         <button onClick={load} disabled={loading}
           style={{ padding: '8px 18px', fontSize: 11, fontWeight: 800, borderRadius: 9, border: 'none', background: loading ? '#e2e8f0' : 'linear-gradient(135deg,#10b981,#0d9488)', color: loading ? '#94a3b8' : '#fff', cursor: loading ? 'default' : 'pointer' }}>
           {loading ? '⏳' : '↻ Refresh'}
+        </button>
+        <button onClick={() => setExpandAll(v => v === true ? false : true)}
+          style={{ padding: '8px 12px', fontSize: 11, fontWeight: 800, borderRadius: 9, border: '1px solid #e2e8f0', background: '#fff', color: '#0f172a', cursor: 'pointer' }}>
+          {expandAll === true ? 'Collapse' : 'Expand'}
         </button>
       </div>
 
@@ -585,7 +651,8 @@ export default function AnalysisPane() {
         const pnlColor = v => v === null ? '#94a3b8' : v >= 0 ? '#10b981' : '#ef4444';
 
         return (
-          <div>
+          <ExpandCtx.Provider value={expandAll}>
+          <div key={String(expandAll)}>
             {/* Alerts */}
             {d.alerts.length > 0 && (
               <div style={{ marginBottom: 14 }}>
@@ -637,9 +704,59 @@ export default function AnalysisPane() {
               <StatTile label="Open Watching"  value={d.open.length}  sub={`${d.expired.length} expired`} color="#f59e0b" />
             </div>
 
+            <Group label="PERFORMANCE">
+              {d.journal && (
+                <Section title="Trade Journal — Paper vs Real" accent="#0ea5e9" defaultOpen
+                  summary={`${d.journal.taken} taken · ${d.journal.skipped} skipped`}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8 }}>
+                    {[
+                      { l: 'TAKEN WIN RATE', v: d.journal.takenWR != null ? `${d.journal.takenWR}%` : '—', s: `${d.journal.takenClosed} closed` },
+                      { l: 'SKIPPED WIN RATE', v: d.journal.skippedWR != null ? `${d.journal.skippedWR}%` : '—', s: `${d.journal.skippedClosed} closed` },
+                      { l: 'PAPER AVG P&L', v: d.journal.paperAvg != null ? `${d.journal.paperAvg}%` : '—', s: `${d.journal.withFills} with fills` },
+                      { l: 'ACTUAL AVG P&L', v: d.journal.realAvg != null ? `${d.journal.realAvg}%` : '—', s: 'from your fills' },
+                      { l: 'ENTRY SLIPPAGE', v: d.journal.entrySlipAvg != null ? `${d.journal.entrySlipAvg}%` : '—', s: '+ = worse price' },
+                      { l: 'EXIT SLIPPAGE', v: d.journal.exitSlipAvg != null ? `${d.journal.exitSlipAvg}%` : '—', s: '+ = worse price' },
+                    ].map(m => (
+                      <div key={m.l} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px' }}>
+                        <div style={{ fontSize: 8, fontWeight: 700, color: '#94a3b8', letterSpacing: 0.5 }}>{m.l}</div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: '#0f172a' }}>{m.v}</div>
+                        <div style={{ fontSize: 9, color: '#94a3b8' }}>{m.s}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 8 }}>
+                    Mark signals Taken/Skipped on the Signal Log page and enter your actual entry/exit prices. If skipped signals win more than taken ones, your selection is costing you; if actual P&L trails paper P&L, slippage is eating the edge.
+                  </div>
+                </Section>
+              )}
+            {/* Cost-adjusted net P&L */}
+            {d.netAdjusted && (
+              <Section title="Real Net P&L (after est. costs)" summary={`Net ${d.netAdjusted.avgNetPct >= 0 ? '+' : ''}${d.netAdjusted.avgNetPct}%`} defaultOpen accent="#059669">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
+                  <StatTile label="Raw Avg" value={`${d.netAdjusted.avgRawPct >= 0 ? '+' : ''}${d.netAdjusted.avgRawPct}%`} color="#6366f1" />
+                  <StatTile label="Net Avg" value={`${d.netAdjusted.avgNetPct >= 0 ? '+' : ''}${d.netAdjusted.avgNetPct}%`} color={d.netAdjusted.avgNetPct >= 0 ? '#10b981' : '#ef4444'} />
+                  <StatTile label="Cost Drag" value={`-${d.netAdjusted.costDragPct}%`} sub={`n=${d.netAdjusted.t}`} color="#f59e0b" />
+                </div>
+                <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
+                  Net avg uses liquidity-scaled cost estimate (thinner OI on options = wider assumed spread)
+                </div>
+              </Section>
+            )}
+
+            {/* Planned vs realized R-multiple */}
+            {d.rrRealized && (
+              <Section title="Planned vs Realized R-Multiple" summary={`${d.rrRealized.avgPlannedRR ?? '—'} → ${d.rrRealized.avgRealizedR}`} defaultOpen accent="#be123c">
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8, marginBottom: 10 }}>
+                  <StatTile label="Avg Planned RR" value={d.rrRealized.avgPlannedRR ?? '—'} color="#6366f1" />
+                  <StatTile label="Avg Realized R" value={d.rrRealized.avgRealizedR} color={d.rrRealized.avgRealizedR >= 0 ? '#10b981' : '#ef4444'} sub={`n=${d.rrRealized.t}`} />
+                </div>
+                <RHistogram buckets={d.rrRealized.histogram} />
+              </Section>
+            )}
+
             {/* CE vs PE */}
             {d.ceWR?.t >= 3 && d.peWR?.t >= 3 && (
-              <Section title="CE vs PE Battle" accent="#6366f1">
+              <Section title="CE vs PE Battle" summary={`CE ${pct(d.ceWR.r)} · PE ${pct(d.peWR.r)}`} defaultOpen accent="#6366f1">
                 <CEPEFlow ceWR={d.ceWR} peWR={d.peWR} ceSignals={d.ceSignals} peSignals={d.peSignals} />
                 {d.sigTypes.length > 0 && (
                   <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -657,9 +774,39 @@ export default function AnalysisPane() {
               </Section>
             )}
 
+            {/* Daily timeline */}
+            {d.dailyRows.length >= 1 && (
+              <Section title="Daily Performance" summary={`${d.dailyRows.length} days`} defaultOpen accent="#10b981">
+                <DailyTimeline
+                  rows={d.dailyRows}
+                  onDayClick={date => {
+                    const entry = d.dailyRows.find(([d]) => d === date);
+                    setDayPopup(entry ? { date, signals: entry[1].signals || [] } : null);
+                  }}
+                />
+              </Section>
+            )}
+
+            </Group>
+
+            <Group label="WHEN AND WHAT WORKS">
+              {d.triggerCheck && (
+                <Section title="Win Rate by Strategy Trigger" accent="#f97316" defaultOpen
+                  summary={`${d.triggerCheck.ideas} ideas`}>
+                  {d.triggerCheck.rows.map((r, i) => (
+                    <div key={r.trigger} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, padding: '6px 0', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
+                      <span style={{ fontWeight: 800, color: '#0f172a' }}>{r.trigger.replace(/_/g, ' ').toLowerCase().replace(/^\w/, c => c.toUpperCase())}</span>
+                      <span style={{ color: r.tooFew ? '#94a3b8' : '#64748b' }}>n={r.n} · {r.wr}% win · net <b style={{ color: (r.net ?? 0) >= 0 ? '#16a34a' : '#dc2626' }}>{r.net ?? '—'}%</b>{r.tooFew ? ' · too few to judge' : ''}</span>
+                    </div>
+                  ))}
+                  <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 8, lineHeight: 1.5 }}>
+                    Every signal records the single main reason it fired. Judge a trigger only after 20+ ideas. A trigger that stays negative after enough trades should be dropped, not tuned.
+                  </div>
+                </Section>
+              )}
             {/* Time clock */}
             {d.timeBreak.length >= 3 && (
-              <Section title="Best Time to Trade" accent="#f59e0b">
+              <Section title="Best Time to Trade" summary={''} accent="#f59e0b">
                 <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
                   <TimeClock sessions={d.timeBreak} />
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -680,21 +827,106 @@ export default function AnalysisPane() {
 
             {/* Confidence heatmap */}
             {d.confBands.length >= 3 && (
-              <Section title="Confidence → Win Rate" accent="#22d3ee">
+              <Section title="Confidence → Win Rate" summary={''} accent="#22d3ee">
                 <ConfHeatmap bands={d.confBands} />
               </Section>
             )}
 
             {/* Underlying leaderboard */}
             {d.byUnderlying.length >= 2 && (
-              <Section title="Win Rate by Underlying" accent="#a855f7">
+              <Section title="Win Rate by Underlying" summary={''} accent="#a855f7">
                 <Leaderboard items={d.byUnderlying} />
               </Section>
             )}
 
+            {/* Liquidity impact */}
+            {d.liquidityBands.length >= 2 && (
+              <Section title="Liquidity Impact (Options, by OI)" summary={''} accent="#0891b2">
+                <MetricBars items={d.liquidityBands} labelKey="band" showAvgNet />
+              </Section>
+            )}
+
+            {/* Volatility regime-shift impact */}
+            {d.regimeShiftBands.length >= 2 && (
+              <Section title="Volatility Regime-Shift Impact" summary={''} accent="#d97706">
+                <MetricBars items={d.regimeShiftBands} labelKey="band" labelWidth={130} />
+                <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
+                  Sharp shift = signal fired right after a VIX move away from its 5-day norm
+                </div>
+              </Section>
+            )}
+
+            </Group>
+
+            <Group label="AI AND MODEL QUALITY">
+              {d.mlCheck && (
+                <Section title="ML Score Check" accent="#7c3aed" defaultOpen
+                  summary={`${d.mlCheck.ideas} ideas · spread ${d.mlCheck.spread >= 0 ? '+' : ''}${d.mlCheck.spread} pts`}>
+                  {d.mlCheck.buckets.map((b, i) => (
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, padding: '6px 0', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
+                      <span style={{ fontWeight: 700, color: '#0f172a' }}>ML score {b.from}–{b.to}%</span>
+                      <span style={{ color: '#64748b' }}>n={b.n} · {b.wr}% win · net <b style={{ color: (b.net ?? 0) >= 0 ? '#16a34a' : '#dc2626' }}>{b.net ?? '—'}%</b></span>
+                    </div>
+                  ))}
+                  <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 8, lineHeight: 1.5 }}>
+                    Uses the probability logged at signal time, so the model had not seen the result. Near-duplicate signals are collapsed to one idea. If the top bucket does not clearly beat the bottom one, the model is not adding skill.
+                    {' '}Retire-adaptive-weights check: {d.mlCheck.ready ? 'PASSING (150+ ideas, top bucket ahead by 10+ pts with positive net)' : `not yet (needs 150+ ideas, a 10+ pt spread and positive net in the top bucket; now ${d.mlCheck.ideas} ideas, ${d.mlCheck.spread} pt spread)`}.
+                  </div>
+                </Section>
+              )}
+              {d.mtfCheck && (
+                <Section title="Multi-Timeframe Grade" accent="#0ea5e9" defaultOpen
+                  summary={`${d.mtfCheck.graded} graded ideas`}>
+                  {d.mtfCheck.rows.map((r, i) => (
+                    <div key={r.grade} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, padding: '6px 0', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
+                      <span style={{ fontWeight: 800, color: '#0f172a' }}>Grade {r.grade}</span>
+                      <span style={{ color: '#64748b' }}>n={r.n} · {r.wr}% win · net <b style={{ color: (r.net ?? 0) >= 0 ? '#16a34a' : '#dc2626' }}>{r.net ?? '—'}%</b></span>
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, padding: '6px 0', borderTop: '1px solid #f1f5f9' }}>
+                    <span style={{ fontWeight: 800, color: '#94a3b8' }}>Before grading</span>
+                    <span style={{ color: '#94a3b8' }}>n={d.mtfCheck.ungraded.n} · {d.mtfCheck.ungraded.wr ?? '—'}% win · net {d.mtfCheck.ungraded.net ?? '—'}%</span>
+                  </div>
+                  <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 8, lineHeight: 1.5 }}>
+                    Every signal now carries the grade from weekly, daily, 60-min and 15-min together. A should beat B, and B beat C. Trades graded AVOID are not shown: see "mtf_avoid" in Filter Check for how they would have done.
+                  </div>
+                </Section>
+              )}
+              {d.shadow && (
+                <Section title="Filter Check — Rejected Picks" accent="#f59e0b" defaultOpen
+                  summary={d.shadow.closed ? `rejected ${d.shadow.shadowWR}% vs accepted ${d.shadow.acceptedWR}%` : `${d.shadow.logged} tracking`}>
+                  {d.shadow.closed === 0 ? (
+                    <div style={{ fontSize: 10, color: '#94a3b8' }}>{d.shadow.logged} rejected picks are being tracked. Results appear once they hit target, SL or expire.</div>
+                  ) : (
+                    <>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8, marginBottom: 10 }}>
+                        {[
+                          { l: 'ACCEPTED', wr: d.shadow.acceptedWR, net: d.shadow.acceptedNet },
+                          { l: 'REJECTED', wr: d.shadow.shadowWR, net: d.shadow.shadowNet },
+                        ].map(m => (
+                          <div key={m.l} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px' }}>
+                            <div style={{ fontSize: 8, fontWeight: 700, color: '#94a3b8', letterSpacing: 0.5 }}>{m.l}</div>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: '#0f172a' }}>{m.wr}% win</div>
+                            <div style={{ fontSize: 9, color: (m.net ?? 0) >= 0 ? '#16a34a' : '#dc2626' }}>net {m.net ?? '—'}% / trade</div>
+                          </div>
+                        ))}
+                      </div>
+                      {d.shadow.byReason.map(r => (
+                        <div key={r.reason} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, padding: '5px 0', borderTop: '1px solid #f1f5f9' }}>
+                          <span style={{ fontWeight: 700, color: '#0f172a' }}>{r.reason}</span>
+                          <span style={{ color: '#64748b' }}>n={r.n} · {r.wr}% win · net {r.net ?? '—'}%</span>
+                        </div>
+                      ))}
+                      <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 8 }}>
+                        If a rejection reason keeps winning as often as accepted picks (with n of 20+), that filter is costing you good trades — loosen it. If rejected picks lose clearly more, the filter is working.
+                      </div>
+                    </>
+                  )}
+                </Section>
+              )}
             {/* CompositeScore */}
             {d.csRows.length >= 3 && (
-              <Section title="CompositeScore Calibration" accent="#fb923c">
+              <Section title="CompositeScore Calibration" summary={''} accent="#fb923c">
                 <CSArc rows={d.csRows} />
                 <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
                   Highest win rate bucket → raise that range weight in computeCtxFromCandles()
@@ -702,40 +934,32 @@ export default function AnalysisPane() {
               </Section>
             )}
 
-            <Section title="AI Backtest" accent="#0ea5e9">
+            <Section title="AI Backtest" summary={''} accent="#0ea5e9">
               <MlBacktestCards backtest={d.mlBacktest} />
             </Section>
 
-            <Section title="AI Feature Drivers" accent="#7c3aed">
-              <MlFeatureBoard mlModels={mlModels} />
-            </Section>
-
-            {/* Daily timeline */}
-            {d.dailyRows.length >= 3 && (
-              <Section title="Daily Performance" accent="#10b981">
-                <DailyTimeline
-                  rows={d.dailyRows}
-                  onDayClick={date => {
-                    const entry = d.dailyRows.find(([d]) => d === date);
-                    setDayPopup(entry ? { date, signals: entry[1].signals || [] } : null);
-                  }}
-                />
+            {/* Which model served each signal */}
+            {d.modelAttribution.length >= 2 && (
+              <Section title="Which Model Served You" summary={''} accent="#7c3aed">
+                <MetricBars items={d.modelAttribution} labelKey="label" labelWidth={110} />
+                <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
+                  "global" vs a named segment model — fills in as new signals log the field
+                </div>
               </Section>
             )}
 
-            <Section title="AI Version History" accent="#1d4ed8">
+            <Section title="AI Feature Drivers" summary={''} accent="#7c3aed">
+              <MlFeatureBoard mlModels={mlModels} />
+            </Section>
+
+            <Section title="AI Version History" summary={''} accent="#1d4ed8">
               <MlHistory mlSnapshots={mlSnapshots} />
             </Section>
-            {dayPopup && (
-              <DayDetailPopup
-                date={dayPopup.date}
-                signals={dayPopup.signals}
-                onClose={() => setDayPopup(null)}
-              />
-            )}
+            </Group>
 
+            <Group label="RECENT CLOSED SIGNALS">
             {/* Recent signals */}
-            <Section title="Recent Closed Signals" accent="#6366f1">
+            <Section title="Recent Closed Signals" summary={`${Math.min(15, d.closed.length)} of ${d.closed.length}`} defaultOpen accent="#6366f1">
               <SignalFeed signals={[...d.closed]
                 .sort((a, b) => {
                   // Sort by exit date+time descending (most recently closed first)
@@ -746,7 +970,18 @@ export default function AnalysisPane() {
                 .slice(0, 15)
               } />
             </Section>
+            </Group>
+
+            {dayPopup && (
+              <DayDetailPopup
+                date={dayPopup.date}
+                signals={dayPopup.signals}
+                onClose={() => setDayPopup(null)}
+              />
+            )}
+
           </div>
+          </ExpandCtx.Provider>
         );
       })()}
     </div>

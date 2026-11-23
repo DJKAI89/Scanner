@@ -23,6 +23,10 @@ export const DEF = {
   minOptConf:   65,
   minOptOI:     500,
   maxOptCapital: 0,
+  sectorRsPenalty: 10,      // stocks: confidence penalty when a long/short isn't leading its sector and the sector isn't leading Nifty (0 = off)
+  oiWallBufferPct: 0.5,     // options: block longs within this % of spot under the Call OI wall (shorts over the Put wall); 0 = off
+  maxSpreadPct: 2.5,        // options: skip contracts whose bid-ask spread is wider than this % of the mid price
+  minStockTurnoverCr: 5,    // stocks: skip names with < this average daily turnover (₹ crore, 20-day)
   portSize:     500000,
   riskPct:      2,
   optStockScanCount: 50,

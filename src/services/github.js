@@ -1,5 +1,7 @@
 // ── GitHub API service ── exact port from HTML ──
 
+import { optionTrigger } from './triggers.js';
+import { getISTDate } from '../utils/marketTime.js';
 import { splitModelForStorage, mergeModelFromStorage } from './mlRanking.js';
 
 
@@ -205,7 +207,7 @@ export async function pushVixHistoryToGH(gh, payload) {
 export async function appendAiHistoryToGH(gh, snapshot) {
   if (!gh.token || !gh.user || !gh.repo || !snapshot) return false;
   try {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getISTDate();
     const dayPath = getAiHistoryDayPath(today);
     const dayExisting = await _ghFetch(gh, dayPath);
     const dayR = await _ghPut(gh, dayPath, { date: today, snapshot, upstoxId: _uid() }, dayExisting?.sha || null, `SCANNER AI history · ${_uid()} · ${today}`);
@@ -446,6 +448,9 @@ export function buildStockSignal(p, vixVal) {
     compositeScore: p.compositeScore || null,
     momentumScore:  p.momentumScore  ?? null,
     mlProbability:  p.mlProbability ?? null,
+    mtfGrade: p.mtf?.grade ?? null, mtfScore: p.mtf?.score ?? null, mtfDirs: p.mtf?.dirs ?? null,
+    trigger: p.trigger ?? null, turnoverCr: p.turnoverCr ?? null, ema50: p.ema50 ?? null, ema200: p.ema200 ?? null, hi52: p.hi52 ?? null, lo52: p.lo52 ?? null,
+    mtfRoomATR: p.mtf?.roomATR ?? null, mtfSupport: p.mtf?.support ?? null, mtfResistance: p.mtf?.resistance ?? null,
     mlAdj:          p.mlAdj ?? null,
     // Persisted so training sees the same values live scoring does, and so the
     // Analysis page's regime-shift / which-model sections have data to read.
@@ -516,6 +521,9 @@ export function buildOptionSignal(p, vixVal) {
     compositeScore: p.compositeScore  ?? null,
     momentumScore:  p.momentumScore   ?? null,
     mlProbability:  p.mlProbability ?? null,
+    mtfGrade: p.mtf?.grade ?? null, mtfScore: p.mtf?.score ?? null, mtfDirs: p.mtf?.dirs ?? null,
+    trigger: p.trigger ?? optionTrigger(p), spreadPct: p.spreadPct ?? null, bid: p.bid ?? null, ask: p.ask ?? null,
+    mtfRoomATR: p.mtf?.roomATR ?? null, mtfSupport: p.mtf?.support ?? null, mtfResistance: p.mtf?.resistance ?? null,
     mlAdj:          p.mlAdj ?? null,
     // oi was on every pick but never logged, so estimateCostPct (mlRanking.js) saw
     // oi=0 for every closed option and charged the thin-liquidity cost to all of
@@ -615,7 +623,23 @@ export async function logSignals(gh, newSignals, vixVal, lg = () => {}) {
     const istDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     const { signals, sha } = await ghReadDay(gh, istDate);
     let added = 0, skipped = 0;
+    // One idea at a time: no new signal for an underlying+direction while one is still OPEN, and a
+    // cooldown after a stop-out. Previously several strikes / re-scans of the same view were logged as
+    // separate signals (10 copies of one wrong call = 10 "losses").
+    const nowMin = (() => { const p = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false }).split(':'); return (+p[0]) * 60 + (+p[1]); })();
+    const COOLDOWN_MIN = 45;
+    const view = (s) => (s.type === 'STOCK' ? (s.signal === 'SELL' ? -1 : 1) : (((s.action || s.signal) === 'BUY') === ((s.optType || s.type) === 'CE') ? 1 : -1));
+    let skippedIdea = 0;
     for (const ns of newSignals) {
+      const nv = view(ns);
+      const sameIdea = signals.filter(s => s.date === istDate && !s.shadow && s.stock === ns.stock && s.type === ns.type && view(s) === nv);
+      const hasOpen = sameIdea.some(s => s.status === 'OPEN');
+      const cooling = sameIdea.some(s => {
+        if (s.status !== 'SL_HIT' || !s.exitTime) return false;
+        const p = String(s.exitTime).split(':');
+        return nowMin - ((+p[0]) * 60 + (+p[1])) < COOLDOWN_MIN;
+      });
+      if (hasOpen || cooling) { skippedIdea++; continue; }
       const existing = signals.filter(s =>
         s.date === istDate && s.status === 'OPEN' &&
         (s.type === 'STOCK'
@@ -626,6 +650,7 @@ export async function logSignals(gh, newSignals, vixVal, lg = () => {}) {
       signals.push(ns);
       added++;
     }
+    if (skippedIdea) lg(`Signal log: ${skippedIdea} skipped (same idea already open / cooling down)`, 'o');
     if (!added) { lg(`Signal log: ${skipped} skipped (no change)`, 'o'); return; }
     const newSha = await ghWriteDay(gh, signals, sha, istDate);
     if (newSha) {
@@ -644,4 +669,97 @@ export async function logSignals(gh, newSignals, vixVal, lg = () => {}) {
       lg(`Signal log: ⚠ GitHub write failed (${_lastWriteFailReason || 'unknown reason'}) — ${added} signals NOT saved. Check ⚙ Settings.`, 'w');
     }
   } catch (e) { lg('logSignals: ' + e.message, 'w'); }
+}
+
+
+// ══════════════════════════════════════════════════════════
+// Shadow signals — picks the gate rejected, tracked to an outcome.
+// Stored apart from the real log (signal-logs/<uid>/shadow/<date>.json) so they
+// never pollute real stats, win-rate calibration or the open-signal count.
+// ══════════════════════════════════════════════════════════
+const SHADOW_MAX_PER_SCAN = 12;
+const SHADOW_MIN_CONF = 45; // ignore hopeless picks — only near-misses teach anything
+function getShadowPath(date) { return `${getLogFolder()}/shadow/${date}.json`; }
+
+export async function logShadowSignals(gh, items, vixVal, lg = () => {}) {
+  if (!gh?.token || !gh.user || !gh.repo || !items?.length) return;
+  try {
+    const { date } = _istNow();
+    const built = [];
+    const seen = new Set();
+    const ranked = [...items].sort((a, b) => ((b.p.confidence ?? b.p.conf ?? 0) - (a.p.confidence ?? a.p.conf ?? 0)));
+    for (const it of ranked) {
+      const conf = it.p.confidence ?? it.p.conf ?? 0;
+      if (conf < SHADOW_MIN_CONF) continue;
+      let s;
+      try { s = it.type === 'OPTION' ? buildOptionSignal(it.p, vixVal) : buildStockSignal(it.p, vixVal); }
+      catch (_) { continue; }
+      if (!(s.entry > 0) || !(s.sl > 0)) continue;
+      // one shadow per pick per day (first sighting), so repeated scans don't pile up duplicates
+      s.id = it.type === 'OPTION'
+        ? `shadow-${date}-${s.stock}-${s.strike}-${s.optType}`
+        : `shadow-${date}-${s.stock}-STOCK`;
+      if (seen.has(s.id)) continue;
+      seen.add(s.id);
+      s.shadow = true;
+      s.shadowReason = it.reason;
+      built.push(s);
+      if (built.length >= SHADOW_MAX_PER_SCAN) break;
+    }
+    if (!built.length) return;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const f = await _ghFetch(gh, getShadowPath(date));
+      const existing = f ? (_decode(f.content).signals || []) : [];
+      const have = new Set(existing.map(s => s.id));
+      const fresh = built.filter(s => !have.has(s.id));
+      if (!fresh.length) return;
+      const payload = { signals: [...existing, ...fresh], date, lastUpdated: new Date().toISOString() };
+      const r = await _ghPut(gh, getShadowPath(date), payload, f?.sha, `SCANNER shadow log · ${date}`);
+      if (r?.ok) { lg(`Shadow log: +${fresh.length} rejected picks tracked`, 'o'); return; }
+      if (!r || (r.status !== 409 && r.status !== 422)) return;
+      await new Promise(res => setTimeout(res, 600 + Math.random() * 600));
+    }
+  } catch (e) { lg('logShadowSignals: ' + e.message, 'w'); }
+}
+
+export async function ghReadShadow(gh, maxDays = 30) {
+  try {
+    const folder = await _ghFetch(gh, `${getLogFolder()}/shadow`);
+    if (!Array.isArray(folder)) return [];
+    const names = folder.map(i => i.name).filter(n => /^\d{4}-\d{2}-\d{2}\.json$/.test(n)).sort().slice(-maxDays);
+    const out = [];
+    for (let i = 0; i < names.length; i += 5) {
+      const chunk = await Promise.all(names.slice(i, i + 5).map(n => _ghFetch(gh, `${getLogFolder()}/shadow/${n}`)));
+      chunk.forEach(f => { if (f) { try { out.push(...(_decode(f.content).signals || [])); } catch (_) {} } });
+    }
+    return out;
+  } catch (_) { return []; }
+}
+
+// ══════════════════════════════════════════════════════════
+// Taken / skipped + actual fills (item 5). Patches ONE signal in its day file
+// with read-fresh → patch → write, retrying on conflict. Deliberately does not
+// go through ghWriteDay: its conflict merge only keeps resolved-status changes
+// and would silently drop this patch.
+// ══════════════════════════════════════════════════════════
+export async function ghPatchSignal(gh, date, id, patch) {
+  if (!gh?.token || !gh.user || !gh.repo) throw new Error('GitHub not configured');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const f = await _ghFetch(gh, getLogDayPath(date));
+    if (!f) throw new Error('Day file not found');
+    const wrapper = _decode(f.content);
+    const signals = wrapper.signals || [];
+    if (!signals.some(s => s.id === id)) throw new Error('Signal not found in day file');
+    const updated = signals.map(s => (s.id === id ? { ...s, ...patch } : s));
+    const payload = { ...wrapper, signals: updated, lastUpdated: new Date().toISOString() };
+    const r = await _ghPut(gh, getLogDayPath(date), payload, f.sha, `SCANNER trade journal · ${id}`);
+    if (r?.ok) {
+      const rd = await r.json();
+      _cachePut(date, updated, rd?.content?.sha || f.sha);
+      return true;
+    }
+    if (!r || (r.status !== 409 && r.status !== 422)) throw new Error('GitHub write failed' + (r ? ` (HTTP ${r.status})` : ''));
+    await new Promise(res => setTimeout(res, 500 + Math.random() * 500));
+  }
+  throw new Error('Write conflict — try again');
 }

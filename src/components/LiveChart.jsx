@@ -1,69 +1,78 @@
 /**
- * LiveChart — scrollable live candlestick chart like a trading platform
+ * LiveChart — scrollable live candlestick chart
  *
- * Features:
- * - Scrollable: drag/swipe left to see older candles, right for newer
- * - Pinch/button zoom: more or fewer candles visible
- * - Auto-loads historical data for any interval
- * - Live WS ticks update the last candle in real time
- * - EMA 9/21/50/200 · SuperTrend · Volume bars · Price axis · Date labels
- * - Entry/SL/Target lines with price badges
- *
- * Props:
- *   instrKey  {string}  Upstox instrument key for WS + historical fetch
- *   candles   {array}   Seed candles (optional, [[ts,o,h,l,c,v]])
- *   closes    {array}   Seed closes for EMA (optional)
- *   entry     {number}  Entry price line
- *   sl        {number}  Stop loss line
- *   target    {number}  Target line
- *   symbol    {string}  Display name
- *   interval  {string}  Default interval ('day')
- *   style     {object}  Outer container style
+ * - Candles normalised (sorted oldest→newest, de-duplicated) for any source
+ * - Upstox V3 candles for every interval (1m/5m/15m/30m/1H/1D) + today's intraday merge
+ * - Live ticks update the forming candle AND open a new candle at each interval boundary
+ * - Silent background refresh while market is open (no loading flicker, scroll kept)
+ * - EMA 9/21/50/200 + SuperTrend computed on the FULL series, then sliced to the view
  */
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useApp } from '../context/AppContext';
-import { resolveAccessToken, fetchCandles, fetchIntraday } from '../services/api';
+import { resolveAccessToken, fetchCandles, fetchCandlesV3, fetchIntradayV3 } from '../services/api';
 import { useMarketFeed } from '../hooks/useMarketFeed';
+import { localIsOpen, istYmd as _istYmd } from '../utils/marketTime';
 
 // ── Helpers ───────────────────────────────────────────────────
+const IST = { timeZone: 'Asia/Kolkata' };
+const istYmd = _istYmd;
+const istMidnight = (ms = Date.now()) => Date.parse(istYmd(ms) + 'T00:00:00+05:30');
+const SESSION_OPEN_MS = (9 * 60 + 15) * 60000;
+
+// Upstox candle rows → [tsMs, o, h, l, c, v], oldest first, unique by timestamp
+function normalize(raw) {
+  const m = new Map();
+  for (const c of raw || []) {
+    const t = typeof c?.[0] === 'number' ? c[0] : Date.parse(c?.[0]);
+    const o = +c?.[1], h = +c?.[2], l = +c?.[3], cl = +c?.[4];
+    if (!Number.isFinite(t) || !(h > 0) || !(l > 0) || !(cl > 0)) continue;
+    m.set(t, [t, o, h, l, cl, +c[5] || 0]);
+  }
+  return [...m.values()].sort((a, b) => a[0] - b[0]);
+}
+
 function ema(src, p) {
-  if (!src || src.length < p) return new Array(src?.length || 0).fill(null);
+  const n = src.length;
+  const out = new Array(n).fill(null);
+  if (n < p) return out;
   const k = 2 / (p + 1);
-  let v = src.slice(0, p).reduce((a, b) => a + b, 0) / p;
-  const out = new Array(p - 1).fill(null);
-  out.push(v);
-  for (let i = p; i < src.length; i++) { v = src[i] * k + v * (1 - k); out.push(v); }
+  let v = 0;
+  for (let i = 0; i < p; i++) v += src[i];
+  v /= p;
+  out[p - 1] = v;
+  for (let i = p; i < n; i++) { v = src[i] * k + v * (1 - k); out[i] = v; }
   return out;
 }
 
-function supertrend(nums, period = 10, mult = 3) {
-  if (nums.length < period + 1) return [];
-  const trs = [];
-  for (let i = 1; i < nums.length; i++) {
-    trs.push(Math.max(
-      nums[i][2] - nums[i][3],
-      Math.abs(nums[i][2] - nums[i - 1][4]),
-      Math.abs(nums[i][3] - nums[i - 1][4])
-    ));
+// Standard SuperTrend (Wilder ATR). Returns array aligned to candles: {st, bull} | null
+function supertrend(c, period = 10, mult = 3) {
+  const n = c.length;
+  const out = new Array(n).fill(null);
+  if (n <= period) return out;
+  const tr = new Array(n).fill(0);
+  for (let i = 1; i < n; i++) {
+    tr[i] = Math.max(c[i][2] - c[i][3], Math.abs(c[i][2] - c[i - 1][4]), Math.abs(c[i][3] - c[i - 1][4]));
   }
-  const atrMA = ema(trs, period);
-  const result = [];
-  for (let i = period; i < nums.length; i++) {
-    const a   = atrMA[i - 1] || 0;
-    const hl2 = (nums[i][2] + nums[i][3]) / 2;
-    const ub  = hl2 + mult * a, lb = hl2 - mult * a;
-    const cl  = nums[i][4];
-    const prev = result[result.length - 1];
-    let st, bull;
-    if (!prev) { bull = cl > hl2; st = bull ? lb : ub; }
+  let atr = 0;
+  for (let i = 1; i <= period; i++) atr += tr[i];
+  atr /= period;
+  let fu = 0, fl = 0, bull = true;
+  for (let i = period; i < n; i++) {
+    if (i > period) atr = (atr * (period - 1) + tr[i]) / period;
+    const hl2 = (c[i][2] + c[i][3]) / 2;
+    const bu = hl2 + mult * atr, bl = hl2 - mult * atr;
+    if (i === period) { fu = bu; fl = bl; bull = c[i][4] > hl2; }
     else {
-      bull = prev.bull ? cl > Math.max(lb, prev.st) : cl > ub;
-      st   = bull ? Math.max(lb, prev.bull ? prev.st : 0) : Math.min(ub, !prev.bull ? prev.st : 1e9);
+      const pc = c[i - 1][4];
+      fu = (bu < fu || pc > fu) ? bu : fu;
+      fl = (bl > fl || pc < fl) ? bl : fl;
+      if (bull && c[i][4] < fl) bull = false;
+      else if (!bull && c[i][4] > fu) bull = true;
     }
-    result.push({ st, bull, i });
+    out[i] = { st: bull ? fl : fu, bull };
   }
-  return result;
+  return out;
 }
 
 function fmtP(p) {
@@ -74,58 +83,100 @@ function fmtP(p) {
   return p.toFixed(2);
 }
 
-function fmtDate(ts, isIntraday) {
+function fmtDate(ts, isIntraday, showDate) {
   const d = new Date(ts);
   if (isNaN(d)) return '';
-  return isIntraday
-    ? `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
-    : `${d.getDate()}/${d.getMonth() + 1}`;
+  if (isIntraday && !showDate) return d.toLocaleTimeString('en-GB', { ...IST, hour: '2-digit', minute: '2-digit', hour12: false });
+  const [y, m, dd] = istYmd(ts).split('-');
+  return `${+dd}/${+m}`;
 }
 
 const INTERVALS = [
-  { key: 'day',      label: '1D',  days: 365, isIntra: false },
-  { key: '1minute',  label: '1m',  days: 1,   isIntra: true  },
-  { key: '5minute',  label: '5m',  days: 5,   isIntra: true  },
-  { key: '15minute', label: '15m', days: 7,   isIntra: true  },
-  { key: '30minute', label: '30m', days: 15,  isIntra: true  },
-  { key: '60minute', label: '1H',  days: 30,  isIntra: true  },
+  { key: 'day',      label: '1D',  days: 730, isIntra: false, unit: 'days',    n: 1,  durMin: 1440, poll: 60000, v2: true  },
+  { key: '1minute',  label: '1m',  days: 5,   isIntra: true,  unit: 'minutes', n: 1,  durMin: 1,    poll: 15000, v2: true  },
+  { key: '5minute',  label: '5m',  days: 10,  isIntra: true,  unit: 'minutes', n: 5,  durMin: 5,    poll: 20000, v2: false },
+  { key: '15minute', label: '15m', days: 30,  isIntra: true,  unit: 'minutes', n: 15, durMin: 15,   poll: 30000, v2: false },
+  { key: '30minute', label: '30m', days: 60,  isIntra: true,  unit: 'minutes', n: 30, durMin: 30,   poll: 30000, v2: true  },
+  { key: '60minute', label: '1H',  days: 85,  isIntra: true,  unit: 'hours',   n: 1,  durMin: 60,   poll: 45000, v2: false },
 ];
+
+// ── Candle cache (module-level: survives closing/reopening the sheet) ──
+const CACHE_FRESH_OPEN   = 30000;   // market open: reuse for 30 s
+const CACHE_FRESH_CLOSED = 600000;  // market closed: data can't change, 10 min
+const CACHE_MAX = 40;
+const _cache    = new Map();        // key -> { at, data }
+const _inflight = new Map();        // key -> Promise (share concurrent requests)
+const cacheKey  = (instrKey, ivl) => `${instrKey}|${ivl}`;
+
+async function loadCandles(instrKey, meta, token) {
+  const today = istYmd();
+  const from  = istYmd(Date.now() - meta.days * 86400000);
+  let hist = [];
+  try { hist = await fetchCandlesV3(instrKey, meta.unit, meta.n, from, today, token); } catch (_) {}
+  if (!hist.length && meta.v2) {
+    try { hist = await fetchCandles(instrKey, from, today, meta.key, token); } catch (_) {}
+  }
+  let intra = [];
+  if (localIsOpen()) {
+    try { intra = await fetchIntradayV3(instrKey, meta.unit, meta.n, token); } catch (_) {}
+  }
+  return normalize([...hist, ...intra]);
+}
+
+function getCandles(instrKey, meta, token, force) {
+  const k = cacheKey(instrKey, meta.key);
+  const hit = _cache.get(k);
+  if (!force && hit && Date.now() - hit.at < (localIsOpen() ? CACHE_FRESH_OPEN : CACHE_FRESH_CLOSED)) return Promise.resolve(hit.data);
+  if (_inflight.has(k)) return _inflight.get(k);
+  const p = loadCandles(instrKey, meta, token)
+    .then(data => {
+      if (data.length) {
+        _cache.delete(k);
+        _cache.set(k, { at: Date.now(), data });
+        while (_cache.size > CACHE_MAX) _cache.delete(_cache.keys().next().value);
+      }
+      return data;
+    })
+    .finally(() => _inflight.delete(k));
+  _inflight.set(k, p);
+  return p;
+}
 
 // ── Main component ────────────────────────────────────────────
 export default function LiveChart({
   instrKey = '',
   candles: seedCandles = [],
-  closes:  seedCloses  = [],
+  closes:  seedCloses  = [], // eslint-disable-line no-unused-vars
   entry  = 0,
   sl     = 0,
   target = 0,
   symbol = '',
   interval = 'day',
   style  = {},
-  livePrice = null,    // optional: parent already has a live tick — avoids duplicate WS subscription
-  liveChgPct = null,   // optional: parent's computed change % to keep header in sync with card
+  livePrice = null,    // fallback price when own live feed has no tick yet
+  liveChgPct = null,   // fallback change % when own feed has no tick yet
 }) {
   const { token, marketStatus } = useApp();
   const accessToken = resolveAccessToken(token);
 
   const containerRef = useRef(null);
-  const canvasRef    = useRef(null);
   const dragRef      = useRef({ dragging: false, startX: 0, startOffset: 0 });
+  const reqRef       = useRef(0);
+  const seedRef      = useRef(seedCandles);
+  seedRef.current = seedCandles;
 
-  // State
-  const [allCandles,   setAllCandles]   = useState(seedCandles);
+  const [allCandles,   setAllCandles]   = useState(() => normalize(seedCandles));
   const [selInterval,  setSelInterval]  = useState(interval);
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState('');
-  const [viewOffset,   setViewOffset]   = useState(0);   // how many candles from right we've scrolled
-  const [visibleCount, setVisibleCount] = useState(60);  // zoom: how many candles to show
+  const [viewOffset,   setViewOffset]   = useState(0);
+  const [visibleCount, setVisibleCount] = useState(60);
   const [containerW,   setContainerW]   = useState(360);
-  const [liveCandle,   setLiveCandle]   = useState(null);
   const [tickTime,     setTickTime]     = useState('');
 
   const intervalMeta = INTERVALS.find(i => i.key === selInterval) || INTERVALS[0];
+  const marketOpen = !!marketStatus?.open;
 
-  // Responsive width
   useEffect(() => {
     if (!containerRef.current) return;
     const obs = new ResizeObserver(([e]) => setContainerW(Math.floor(e.contentRect.width)));
@@ -133,78 +184,115 @@ export default function LiveChart({
     return () => obs.disconnect();
   }, []);
 
-  // ── Fetch candles ────────────────────────────────────────────
-  const fetchData = useCallback(async (iKey, ivl) => {
-    if (!iKey || !accessToken) return;
-    setLoading(true); setError(''); setLiveCandle(null);
-    try {
-      const today   = new Date().toISOString().split('T')[0];
-      const fromDate = d => new Date(Date.now() - d * 86400000).toISOString().split('T')[0];
-      const meta    = INTERVALS.find(i => i.key === ivl) || INTERVALS[0];
-      let raw = [];
-
-      if (ivl === 'day') {
-        raw = await fetchCandles(iKey, fromDate(365), today, 'day', accessToken);
+  // ── Fetch candles (cached + de-duplicated; see getCandles) ────
+  const fetchData = useCallback(async (silent = false) => {
+    if (!instrKey || !accessToken) return;
+    const meta  = INTERVALS.find(i => i.key === selInterval) || INTERVALS[0];
+    const reqId = ++reqRef.current;
+    let quiet = silent;
+    if (!silent) {
+      const hit = _cache.get(cacheKey(instrKey, meta.key));
+      if (hit) {
+        // Show cached candles instantly; only hit the API if they're stale
+        setAllCandles(hit.data); setViewOffset(0); setError(''); setLoading(false);
+        if (Date.now() - hit.at < (localIsOpen() ? CACHE_FRESH_OPEN : CACHE_FRESH_CLOSED)) return;
+        quiet = true;
       } else {
-        // Try intraday first (live data today)
-        if (marketStatus.open) {
-          try { raw = await fetchIntraday(iKey, ivl, accessToken); } catch (_) {}
-        }
-        // Fallback: historical for the date range
-        if (!raw?.length) {
-          raw = await fetchCandles(iKey, fromDate(meta.days), today, ivl, accessToken);
-        }
+        setAllCandles([]); setLoading(true); setError('');
       }
-
-      if (raw?.length) {
-        // Upstox returns newest first — reverse to get chronological
-        const sorted = [...raw].reverse();
-        setAllCandles(sorted);
-        setViewOffset(0); // reset scroll to latest
-      } else {
+    }
+    try {
+      const data = await getCandles(instrKey, meta, accessToken, silent);
+      if (reqId !== reqRef.current) return; // stale (interval switched)
+      if (data.length) {
+        setAllCandles(data);
+        setError('');
+      } else if (!quiet) {
         setError(`No ${meta.label} candle data available`);
-        if (seedCandles?.length) setAllCandles(seedCandles);
+        setAllCandles(meta.key === 'day' ? normalize(seedRef.current) : []);
       }
     } catch (e) {
-      setError('Fetch error: ' + e.message);
-      if (seedCandles?.length) setAllCandles(seedCandles);
+      if (reqId === reqRef.current && !quiet) {
+        setError('Fetch error: ' + e.message);
+        setAllCandles(selInterval === 'day' ? normalize(seedRef.current) : []);
+      }
     } finally {
-      setLoading(false);
+      if (!quiet && reqId === reqRef.current) setLoading(false);
     }
-  }, [accessToken, marketStatus.open, seedCandles]); // eslint-disable-line
+  }, [instrKey, selInterval, accessToken]);
 
-  // Fetch on mount and interval change
+  // Load on open / interval change
   useEffect(() => {
-    if (instrKey) fetchData(instrKey, selInterval);
-    else if (seedCandles?.length) setAllCandles(seedCandles);
-  }, [instrKey, selInterval]); // eslint-disable-line
+    if (instrKey) fetchData(false);
+    else setAllCandles(normalize(seedRef.current));
+  }, [fetchData, instrKey]);
 
-  // ── Live WS tick ─────────────────────────────────────────────
-  // Skip internal WS if parent already provides a live price — prevents duplicate
-  // subscriptions to the same instrument disagreeing with the parent card's price
-  const useOwnFeed = livePrice == null;
-  const wsKeys = useMemo(() => (useOwnFeed && instrKey) ? [instrKey] : [], [instrKey, useOwnFeed]);
-  const { lastPrices, connected } = useMarketFeed(
-    accessToken, wsKeys, wsKeys.length > 0 && !!marketStatus.open,
+  // Continuous refresh while market is open (silent: keeps scroll, no spinner)
+  useEffect(() => {
+    if (!instrKey || !marketOpen) return;
+    const id = setInterval(() => { if (!document.hidden && localIsOpen()) fetchData(true); }, intervalMeta.poll);
+    const onVis = () => { if (!document.hidden) fetchData(true); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
+  }, [instrKey, marketOpen, intervalMeta.poll, fetchData]);
+
+  // ── Live tick (own feed always; parent price only as fallback) ─
+  const wsKeys = useMemo(() => (instrKey ? [instrKey] : []), [instrKey]);
+  const { lastPrices, connected, wsMode } = useMarketFeed(
+    accessToken, wsKeys, wsKeys.length > 0 && marketOpen,
     { mode: 'ltpc', pollFallback: true }
   );
-  const tick = useOwnFeed ? (instrKey ? lastPrices[instrKey] : null) : { ltp: livePrice };
+  const tick  = instrKey ? lastPrices[instrKey] : null;
+  const price = tick?.ltp > 0 ? tick.ltp : (livePrice > 0 ? livePrice : 0);
+
+  // Feed health: tickAt = last time a price arrived; `now` re-evaluates staleness every 5 s
+  const tickAtRef = useRef(0);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!marketOpen) return;
+    const id = setInterval(() => setNow(Date.now()), 5000);
+    return () => clearInterval(id);
+  }, [marketOpen]);
+  useEffect(() => { if (tick?.ltp) tickAtRef.current = Date.now(); }, [tick?.ltp]);
+  const hasTick = !!tick?.ltp || tickAtRef.current > 0;
+  const feedStale = hasTick && now - tickAtRef.current > 20000;
+  const feedState = !marketOpen ? 'closed'
+    : (!connected || wsMode !== 'ws' || feedStale) ? (hasTick ? 'delayed' : 'connecting')
+    : 'live';
 
   useEffect(() => {
-    if (!tick?.ltp || !allCandles.length) return;
-    setTickTime(new Date().toLocaleTimeString('en-IN', { hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit' }));
-    const last = allCandles[allCandles.length - 1];
-    if (!last) return;
-    setLiveCandle([
-      last[0], +last[1],
-      Math.max(+last[2], tick.ltp),
-      Math.min(+last[3], tick.ltp),
-      tick.ltp, +last[5],
-    ]);
-  }, [tick?.ltp]); // eslint-disable-line
+    if (tick?.ltp) setTickTime(new Date().toLocaleTimeString('en-IN', { ...IST, hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+  }, [tick?.ltp]);
 
-  // ── Scroll / zoom handlers ────────────────────────────────────
-  const maxOffset = Math.max(0, allCandles.length - visibleCount);
+  // Merge the live price into the series: update forming candle or open a new one
+  const merged = useMemo(() => {
+    if (!allCandles.length || !(price > 0) || !marketOpen || !localIsOpen()) return allCandles;
+    const out  = allCandles.slice();
+    const last = out[out.length - 1];
+    const now  = Date.now();
+    const meta = intervalMeta;
+    const upd  = (c) => [c[0], c[1], Math.max(c[2], price), Math.min(c[3], price), price, c[5]];
+
+    if (!meta.isIntra) {
+      const dayStart = istMidnight(now);
+      if (last[0] >= dayStart) out[out.length - 1] = upd(last);
+      else {
+        const o = tick?.open > 0 ? tick.open : price;
+        out.push([dayStart, o, Math.max(o, price, tick?.high || 0), Math.min(o, price, tick?.low > 0 ? tick.low : price), price, 0]);
+      }
+      return out;
+    }
+    const open = istMidnight(now) + SESSION_OPEN_MS;
+    if (now < open) return out;
+    const dur = meta.durMin * 60000;
+    const bucketT = open + Math.floor((now - open) / dur) * dur;
+    if (last[0] >= bucketT) out[out.length - 1] = upd(last);
+    else out.push([bucketT, last[4], Math.max(last[4], price), Math.min(last[4], price), price, 0]);
+    return out;
+  }, [allCandles, price, marketOpen, intervalMeta, tick?.open, tick?.high, tick?.low]);
+
+  // ── Scroll / zoom ─────────────────────────────────────────────
+  const maxOffset = Math.max(0, merged.length - visibleCount);
 
   const onPointerDown = e => {
     dragRef.current = { dragging: true, startX: e.clientX, startOffset: viewOffset };
@@ -212,36 +300,31 @@ export default function LiveChart({
   };
   const onPointerMove = e => {
     if (!dragRef.current.dragging) return;
-    const PRICE_AX = 52, candleAreaW = containerW - PRICE_AX;
-    const slotW  = candleAreaW / visibleCount;
-    const deltaX = e.clientX - dragRef.current.startX;
-    const deltaC = Math.round(-deltaX / slotW);
+    const slot = (containerW - 52) / visibleCount;
+    const deltaC = Math.round((e.clientX - dragRef.current.startX) / slot);
     setViewOffset(Math.max(0, Math.min(maxOffset, dragRef.current.startOffset + deltaC)));
   };
   const onPointerUp = () => { dragRef.current.dragging = false; };
 
   const zoomIn  = () => setVisibleCount(v => Math.max(10, v - 10));
-  const zoomOut = () => setVisibleCount(v => Math.min(Math.min(200, allCandles.length), v + 10));
+  const zoomOut = () => setVisibleCount(v => Math.min(Math.min(300, merged.length), v + 10));
   const scrollLeft  = () => setViewOffset(v => Math.min(maxOffset, v + Math.floor(visibleCount / 3)));
   const scrollRight = () => setViewOffset(v => Math.max(0, v - Math.floor(visibleCount / 3)));
 
-  // ── Compute visible candles ───────────────────────────────────
-  const display = useMemo(() => {
-    if (!allCandles.length) return [];
-    const nums = allCandles.map(c => c.map(Number));
-    // Apply live candle to last position
-    if (liveCandle && viewOffset === 0) {
-      nums[nums.length - 1] = liveCandle.map(Number);
-    }
-    // Slice visible window from right: offset=0 means latest candles
-    const end   = nums.length - viewOffset;
-    const start = Math.max(0, end - visibleCount);
-    return nums.slice(start, end);
-  }, [allCandles, liveCandle, viewOffset, visibleCount]);
+  // ── Indicators on FULL series, then slice to view ────────────
+  const ind = useMemo(() => {
+    const closes = merged.map(c => c[4]);
+    return { e9: ema(closes, 9), e21: ema(closes, 21), e50: ema(closes, 50), e200: ema(closes, 200), st: supertrend(merged) };
+  }, [merged]);
 
-  const ltp = (useOwnFeed ? tick?.ltp : livePrice) || display[display.length - 1]?.[4] || 0;
-  const prevClose = display[display.length - 2]?.[4] || ltp;
-  const chgPct = liveChgPct != null ? liveChgPct : (prevClose > 0 ? (ltp - prevClose) / prevClose * 100 : 0);
+  const viewEnd   = merged.length - Math.min(viewOffset, maxOffset);
+  const viewStart = Math.max(0, viewEnd - visibleCount);
+  const display   = useMemo(() => merged.slice(viewStart, viewEnd), [merged, viewStart, viewEnd]);
+
+  const ltp = price || display[display.length - 1]?.[4] || 0;
+  const chgPct = tick?.chgPct != null ? tick.chgPct
+    : liveChgPct != null ? liveChgPct
+    : (() => { const pc = display[display.length - 2]?.[4] || ltp; return pc > 0 ? (ltp - pc) / pc * 100 : 0; })();
   const chgColor = chgPct >= 0 ? '#16a34a' : '#ef4444';
 
   // ── Chart dimensions ─────────────────────────────────────────
@@ -262,7 +345,11 @@ export default function LiveChart({
     if (!display.length) return { hi: 100, lo: 0 };
     let hi = Math.max(...display.map(c => c[2]));
     let lo = Math.min(...display.map(c => c[3]));
-    [entry, sl, target, ltp].forEach(v => { if (v > 0) { hi = Math.max(hi, v); lo = Math.min(lo, v); } });
+    const span = (hi - lo) || 1;
+    const cHi = hi, cLo = lo;
+    // Levels join the range only when reasonably close; far ones are pinned to the edge with an arrow
+    [entry, sl, target].forEach(v => { if (v > 0 && v <= cHi + span * 0.25 && v >= cLo - span * 0.25) { hi = Math.max(hi, v); lo = Math.min(lo, v); } });
+    if (ltp > 0) { hi = Math.max(hi, ltp); lo = Math.min(lo, ltp); }
     const pad = (hi - lo) * 0.07;
     return { hi: hi + pad, lo: lo - pad };
   }, [display, entry, sl, target, ltp]);
@@ -285,51 +372,61 @@ export default function LiveChart({
     return ticks;
   }, [hi, lo, range, MAIN_H]); // eslint-disable-line
 
-  // ── EMA lines ────────────────────────────────────────────────
-  const emaLines = useMemo(() => {
-    const closes = display.map(c => c[4]);
+  // ── EMA lines (from full-series values) ───────────────────────
+  const emaLines = (() => {
     return [
-      { p: 9,   col: '#0d9488', sw: 1.2 },
-      { p: 21,  col: '#0ea5e9', sw: 1.2 },
-      { p: 50,  col: '#2563eb', sw: 1.5, dash: '5,3' },
-      { p: 200, col: '#9333ea', sw: 1.5, dash: '3,3' },
-    ].map(({ p, col, sw, dash }) => {
-      const vals = ema(closes, p);
-      const pts  = vals.map((v, i) => v != null ? `${cx(i).toFixed(1)},${py(v).toFixed(1)}` : null).filter(Boolean);
+      { v: ind.e9,   col: '#0d9488', sw: 1.2 },
+      { v: ind.e21,  col: '#0ea5e9', sw: 1.2 },
+      { v: ind.e50,  col: '#2563eb', sw: 1.5, dash: '5,3' },
+      { v: ind.e200, col: '#9333ea', sw: 1.5, dash: '3,3' },
+    ].map(({ v, col, sw, dash }) => {
+      const pts = [];
+      for (let i = 0; i < N; i++) {
+        const val = v[viewStart + i];
+        if (val != null) pts.push(`${cx(i).toFixed(1)},${py(val).toFixed(1)}`);
+      }
       return pts.length > 1
-        ? `<polyline points="${pts.join(' ')}" fill="none" stroke="${col}" stroke-width="${sw}" stroke-linejoin="round" ${dash?`stroke-dasharray="${dash}"`:''}/>`
+        ? `<polyline points="${pts.join(' ')}" fill="none" stroke="${col}" stroke-width="${sw}" stroke-linejoin="round" ${dash ? `stroke-dasharray="${dash}"` : ''}/>`
         : '';
     }).join('');
-  }, [display, hi, lo]); // eslint-disable-line
+  })();
 
   // ── SuperTrend ────────────────────────────────────────────────
-  const stSvg = useMemo(() => {
-    const stData = supertrend(display);
-    let segs = [], cur = [], bull = null;
-    stData.forEach(({ st, bull: b, i }) => {
-      if (i >= N) return;
-      if (bull !== b && cur.length > 1) { segs.push({ pts: [...cur], bull }); cur = []; }
-      bull = b;
-      cur.push(`${cx(i).toFixed(1)},${py(st).toFixed(1)}`);
-    });
+  const stSvg = (() => {
+    const segs = [];
+    let cur = [], bull = null;
+    for (let i = 0; i < N; i++) {
+      const s = ind.st[viewStart + i];
+      if (!s) continue;
+      const pt = `${cx(i).toFixed(1)},${py(s.st).toFixed(1)}`;
+      if (bull !== null && bull !== s.bull) {
+        if (cur.length > 1) segs.push({ pts: cur, bull });
+        cur = [];
+      }
+      bull = s.bull;
+      cur.push(pt);
+    }
     if (cur.length > 1) segs.push({ pts: cur, bull });
     return segs.map(({ pts, bull: b }) =>
       `<polyline points="${pts.join(' ')}" fill="none" stroke="${b ? '#16a34a' : '#ef4444'}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`
     ).join('');
-  }, [display, hi, lo]); // eslint-disable-line
+  })();
 
-  // ── Date labels ───────────────────────────────────────────────
-  const dateLabels = useMemo(() => {
+  // ── Date labels (IST) ─────────────────────────────────────────
+  const dateLabels = (() => {
     if (!display.length) return '';
     const step = Math.max(1, Math.floor(N / 6));
     const idxs = [];
     for (let i = 0; i < N; i += step) idxs.push(i);
-    if (idxs[idxs.length - 1] !== N - 1) idxs.push(N - 1);
+    if (idxs[idxs.length - 1] !== N - 1 && N - 1 - idxs[idxs.length - 1] >= step / 2) idxs.push(N - 1);
+    let prevDay = '';
     return idxs.map(i => {
-      const lbl = fmtDate(display[i][0], intervalMeta.isIntra);
+      const day = istYmd(display[i][0]);
+      const lbl = fmtDate(display[i][0], intervalMeta.isIntra, day !== prevDay && prevDay !== '');
+      prevDay = day;
       return `<text x="${cx(i).toFixed(1)}" y="${(MAIN_H - 3).toFixed(1)}" text-anchor="middle" font-size="7.5" fill="#94a3b8" font-family="system-ui">${lbl}</text>`;
     }).join('');
-  }, [display, N, intervalMeta, MAIN_H]); // eslint-disable-line
+  })();
 
   // Candles, volume, levels SVGs
   const candleSvg = display.map((c, i) => {
@@ -357,12 +454,13 @@ export default function LiveChart({
     { p: sl,     col: '#ef4444', lbl: 'SL',    dash: '' },
     { p: ltp,    col: '#f59e0b', lbl: '',       dash: '2,2' },
   ].filter(x => x.p > 0).map(({ p, col, lbl, dash }) => {
-    const y = py(p);
-    if (y < 2 || y > MAIN_H - 2) return '';
+    let y = py(p), arrow = '';
+    if (y < 9)           { y = 9;          arrow = '▲'; }
+    else if (y > MAIN_H - 9) { y = MAIN_H - 9; arrow = '▼'; }
     const yt = y.toFixed(1);
-    return `<line x1="${LEFT}" y1="${yt}" x2="${W-PRICE_AX}" y2="${yt}" stroke="${col}" stroke-width="${!lbl?1.5:1}" stroke-dasharray="${dash}" opacity="0.9"/>` +
+    return `<line x1="${LEFT}" y1="${yt}" x2="${W-PRICE_AX}" y2="${yt}" stroke="${col}" stroke-width="${!lbl?1.5:1}" stroke-dasharray="${arrow ? '1,3' : dash}" opacity="${arrow ? 0.6 : 0.9}"/>` +
            `<rect x="${W-PRICE_AX+1}" y="${(y-7).toFixed(1)}" width="${PRICE_AX-2}" height="14" rx="3" fill="${col}"/>` +
-           `<text x="${W-PRICE_AX+4}" y="${(y+4).toFixed(1)}" font-size="9" font-weight="800" fill="#fff" font-family="monospace,system-ui">${fmtP(p)}</text>` +
+           `<text x="${W-PRICE_AX+4}" y="${(y+4).toFixed(1)}" font-size="9" font-weight="800" fill="#fff" font-family="monospace,system-ui">${arrow}${fmtP(p)}</text>` +
            (lbl ? `<rect x="${LEFT+1}" y="${(y-7).toFixed(1)}" width="30" height="12" rx="2" fill="${col}" opacity="0.85"/><text x="${LEFT+4}" y="${(y+3).toFixed(1)}" font-size="7.5" font-weight="700" fill="#fff" font-family="system-ui">${lbl}</text>` : '');
   }).join('');
 
@@ -377,10 +475,16 @@ export default function LiveChart({
           <span style={{ fontSize:17, fontWeight:900, color:'#0f172a' }}>₹{fmtP(ltp)}</span>
           <span style={{ fontSize:11, fontWeight:700, color:chgColor }}>{chgPct>=0?'+':''}{chgPct.toFixed(2)}%</span>
         </div>
-        {useOwnFeed && connected && marketStatus.open && (
+        {feedState === 'live' && (
           <div style={{ display:'flex', alignItems:'center', gap:3, fontSize:9, color:'#16a34a', fontWeight:700 }}>
             <div style={{ width:6, height:6, borderRadius:'50%', background:'#16a34a', animation:'pulse 1.5s infinite' }} />
             LIVE {tickTime}
+          </div>
+        )}
+        {(feedState === 'delayed' || feedState === 'connecting') && (
+          <div style={{ display:'flex', alignItems:'center', gap:3, fontSize:9, color:'#d97706', fontWeight:700 }}>
+            <div style={{ width:6, height:6, borderRadius:'50%', background:'#f59e0b' }} />
+            {feedState === 'connecting' ? 'Connecting…' : `Live data delayed${tickTime ? ' · ' + tickTime : ''}`}
           </div>
         )}
       </div>
@@ -474,9 +578,9 @@ export default function LiveChart({
             {/* Scroll position indicator */}
             {maxOffset > 0 && (
               <rect
-                x={LEFT + CW * (1 - (viewOffset + visibleCount) / allCandles.length)}
+                x={LEFT + CW * (1 - (viewOffset + visibleCount) / merged.length)}
                 y={TOTAL_H - 3}
-                width={CW * visibleCount / allCandles.length}
+                width={CW * visibleCount / merged.length}
                 height={3}
                 rx={1.5}
                 fill="#0ea5e9"
@@ -498,7 +602,7 @@ export default function LiveChart({
 
           {/* Candle info on drag */}
           <div style={{ fontSize:9, color:'#94a3b8', marginTop:4, textAlign:'center' }}>
-            {viewOffset > 0 ? `Showing ${N} candles · ${viewOffset} from latest (drag to scroll)` : `Latest ${N} of ${allCandles.length} candles`}
+            {viewOffset > 0 ? `Showing ${N} candles · ${viewOffset} from latest (drag to scroll)` : `Latest ${N} of ${merged.length} candles`}
           </div>
         </>
       )}

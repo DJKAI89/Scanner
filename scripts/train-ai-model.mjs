@@ -4,7 +4,12 @@ const GH_TOKEN = process.env.AI_GH_TOKEN || process.env.GH_TOKEN || '';
 const GH_USER = process.env.GH_USER || '';
 const GH_REPO = process.env.GH_REPO || '';
 const SCANNER_USER_ID = (process.env.SCANNER_USER_ID || '').replace(/[^a-zA-Z0-9_-]/g, '_');
-const LOOKBACK_DAYS = Number(process.env.AI_LOOKBACK_DAYS || 90);
+// AI_LOOKBACK_DAYS: a number of days, or 0 / "all" to train on EVERY logged signal.
+// All-data is the default: the log only grows, and a hard 90-day cut-off throws away
+// exactly the history the model needs. Walk-forward still tests on the newest slice,
+// so if old data stops helping, the walk-forward / drift numbers will show it.
+const _lb = String(process.env.AI_LOOKBACK_DAYS ?? 'all').trim().toLowerCase();
+const LOOKBACK_DAYS = (_lb === '' || _lb === 'all' || _lb === '0' || !Number.isFinite(Number(_lb))) ? 100000 : Math.max(1, Number(_lb));
 
 // ═══════════════════════════════════════════════════════════════════
 // CONFIGURATION VALIDATION
@@ -37,7 +42,7 @@ if (missingConfig.length > 0) {
 console.log('✅ Configuration OK');
 console.log(`  Repository: ${GH_USER}/${GH_REPO}`);
 console.log(`  Token length: ${GH_TOKEN.length} chars`);
-console.log(`  Lookback: ${LOOKBACK_DAYS} days`);
+console.log(`  Lookback: ${LOOKBACK_DAYS >= 100000 ? 'all available data' : LOOKBACK_DAYS + ' days'}`);
 if (SCANNER_USER_ID) console.log(`  Target user: ${SCANNER_USER_ID}`);
 console.log('');
 
@@ -208,6 +213,32 @@ async function readSignalHistory() {
     const payload = decodeContent(day.content);
     if (!payload) continue;
     signals.push(...(payload.signals || []));
+  }
+  // Shadow signals = picks the gate rejected, tracked to an outcome. Training only on
+  // signals that PASSED the filters teaches the model nothing about what the filters
+  // threw away (selection bias); adding resolved shadow rows fixes that.
+  //   AI_INCLUDE_SHADOW=1     always include
+  //   AI_INCLUDE_SHADOW=0     never include
+  //   AI_INCLUDE_SHADOW=auto  (default) include once >= SHADOW_AUTO_MIN resolved rows exist
+  const shadowMode = process.env.AI_INCLUDE_SHADOW ?? 'auto';
+  const SHADOW_AUTO_MIN = 200;
+  if (shadowMode !== '0') {
+    const sf = await ghFetch(`signal-logs/${SCANNER_USER_ID}/shadow`);
+    if (Array.isArray(sf)) {
+      const names = sf.map((i) => i.name).filter((n) => /^\d{4}-\d{2}-\d{2}\.json$/.test(n)).sort().slice(-LOOKBACK_DAYS);
+      const shadowRows = [];
+      for (const n of names) {
+        const f = await ghFetch(`signal-logs/${SCANNER_USER_ID}/shadow/${n}`);
+        const p = f && decodeContent(f.content);
+        shadowRows.push(...(p?.signals || []).filter((s) => s.status === 'TARGET_HIT' || s.status === 'SL_HIT'));
+      }
+      if (shadowMode === '1' || shadowRows.length >= SHADOW_AUTO_MIN) {
+        signals.push(...shadowRows);
+        console.log(`  Included ${shadowRows.length} resolved shadow signals in training (mode=${shadowMode})`);
+      } else {
+        console.log(`  Shadow signals: ${shadowRows.length}/${SHADOW_AUTO_MIN} resolved — not included yet`);
+      }
+    }
   }
   return signals;
 }

@@ -4,6 +4,7 @@ import { DEF } from '../constants/config';
 import { sanitiseGH, testGitHubConnection, pushLocalSettingsToGH } from '../services/settingsService';
 import { getIST } from '../utils/marketTime';
 import Icon from '../components/Icon.jsx';
+import MtfDiagnostics from '../components/MtfDiagnostics.jsx';
 
 function SetRow({ label, sub, children }) {
   return (
@@ -577,6 +578,9 @@ export default function SettingsPane() {
           <h4>🤖 ML Ranker</h4>
           <MlRankerSection mlModels={mlModels} mlSnapshots={mlSnapshots} gh={gh} loadConfCalibration={loadConfCalibration} lg={lg} />
         </div>
+
+        {/* ── Multi-timeframe data check ── */}
+        <MtfDiagnostics />
 
         {/* ── Stock Universe ── */}
         <div className="setting-card">

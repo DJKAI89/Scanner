@@ -3,11 +3,13 @@
 // All calculation, scoring, and API-call logic for the Options tab lives here.
 
 import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api.js';
-import { getIST, sleep } from '../utils/marketTime.js';
+import { getIST, sleep, getISTDate, istDaysAgo } from '../utils/marketTime.js';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config.js';
 import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, buildOptionConfluence, buildOptionIndSnap, candleOrder, interpretFIIDII, computeVixPercentile, vixRegimeShiftScore } from './technical.js';
 import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
-import { logSignals, buildOptionSignal } from './github.js';
+import { pushShadow, drainShadow } from './shadowLog.js';
+import { getMtf, gradeMtf } from './mtf.js';
+import { logSignals, logShadowSignals, buildOptionSignal } from './github.js';
 
 export const VIX_KEY = 'NSE_INDEX|India VIX';
 
@@ -17,13 +19,9 @@ export const VIX_KEY = 'NSE_INDEX|India VIX';
 // trading days of the month when only next-month expiries remain).
 export function expiriesInCurrentMonth(allExpiries) {
   const unique = [...new Set(allExpiries)].sort();
-  const now = new Date();
-  const y = now.getFullYear(), m = now.getMonth();
-  const todayStr = now.toISOString().slice(0, 10);
-  const inMonth = unique.filter(e => {
-    const d = new Date(e);
-    return d.getFullYear() === y && d.getMonth() === m && e >= todayStr;
-  });
+  const todayStr = getISTDate();
+  const ym = todayStr.slice(0, 7);
+  const inMonth = unique.filter(e => e.slice(0, 7) === ym && e >= todayStr);
   return inMonth.length ? inMonth : (unique[0] ? [unique[0]] : []);
 }
 
@@ -90,7 +88,23 @@ export function calcStructure(chain) {
 // fed into applyAdaptWeights below, same as the stock scan path, so their
 // actual confidence impact is learned from closed-signal win rates instead of
 // a hardcoded magnitude.
-function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, adaptWeights, mlModels, confCalibration, regime, volRegimeShift = 0, cfg, maxPain = 0, spot = 0 }) {
+// One signal per underlying + direction. Several strikes (and repeat scans) of the same view are ONE idea:
+// keep the strongest so the page, the log and the win rate stop counting copies. WATCH rows are untouched.
+export function onePerIdea(picks) {
+  const best = new Map();
+  const rest = [];
+  for (const p of picks || []) {
+    if (p.action !== 'BUY' && p.action !== 'SELL') { rest.push(p); continue; }
+    const view = ((p.action === 'BUY') === (p.type === 'CE')) ? 1 : -1;
+    const k = `${p.und}|${view}`;
+    const cur = best.get(k);
+    const score = (p.confidence || 0) * 1e6 + (p.oi || 0) / 1e3;   // confidence first, liquidity breaks ties
+    if (!cur || score > cur.score) best.set(k, { p, score });
+  }
+  return [...[...best.values()].map((x) => x.p), ...rest];
+}
+
+function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, adaptWeights, mlModels, confCalibration, regime, volRegimeShift = 0, cfg, maxPain = 0, spot = 0, oiWalls = null }) {
   const fiiInterp = fiiInterpIn || interpretFIIDII(fiiData || null);
   return picks.map(p => {
     const base = p.confidence;
@@ -130,10 +144,31 @@ function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, ad
     // subtype threshold resolution, RR floor, and the capital ceiling (which
     // only ever tightens past Settings' Max Capital, never loosens it) all
     // live there now instead of being hand-rewritten per pipeline.
-    evaluateSignalGate({
-      type: 'OPTION', aiBlock: p.aiBlock, conf: p.confidence, rr: p.rr,
-      amtRequired: p.amtRequired, mlModels, cfg, sigForThresholds: p,
-    }).passes
+    {
+      // Higher timeframes against the trade: no signal. Kept in the shadow log so the
+      // veto's value can be measured (do rejected trades really lose more?).
+      if (p.mtf?.veto) { pushShadow(p, 'mtf_avoid: ' + (p.mtf.why || 'higher timeframes against'), 'OPTION'); return false; }
+      // Liquidity: a wide bid-ask spread is a cost paid on entry AND exit, so a trade can be right and still
+      // lose. Unknown spread (null bid/ask from the API) never blocks.
+      const maxSpread = cfg?.maxSpreadPct ?? 2.5;
+      if (p.spreadPct != null && p.spreadPct > maxSpread) { pushShadow(p, `spread: ${p.spreadPct}% > ${maxSpread}%`, 'OPTION'); return false; }
+      // OI wall proximity: a bullish-underlying trade (BUY CE / SELL PE) entering just below the dominant
+      // Call OI wall, or a bearish one (BUY PE / SELL CE) just above the dominant Put OI wall, has
+      // heavy writer supply right in its path. Buffer is % of spot (0 disables).
+      const wallBuf = cfg?.oiWallBufferPct ?? 0.5;
+      if (wallBuf > 0 && oiWalls && spot > 0) {
+        const bullish = (p.type === 'CE' && p.action === 'BUY') || (p.type === 'PE' && p.action === 'SELL');
+        const cw = oiWalls.callWall, pw = oiWalls.putWall;
+        if (bullish && cw > spot && (cw - spot) / spot * 100 <= wallBuf) { pushShadow(p, `oi_wall: spot ${spot} within ${wallBuf}% under Call wall ${cw}`, 'OPTION'); return false; }
+        if (!bullish && pw > 0 && pw < spot && (spot - pw) / spot * 100 <= wallBuf) { pushShadow(p, `oi_wall: spot ${spot} within ${wallBuf}% over Put wall ${pw}`, 'OPTION'); return false; }
+      }
+      const gate = evaluateSignalGate({
+        type: 'OPTION', aiBlock: p.aiBlock, conf: p.confidence, rr: p.rr,
+        amtRequired: p.amtRequired, mlModels, cfg, sigForThresholds: p,
+      });
+      if (!gate.passes) pushShadow(p, gate.reason, 'OPTION'); // tracked as a shadow signal
+      return gate.passes;
+    }
   );
 }
 
@@ -171,8 +206,8 @@ export async function scanStockOptions({ inst, spot, spotChg, deps, env, expirie
   let stkCandles = [];
   let stkDailyCandles = [];
   try {
-    const today = new Date().toISOString().split('T')[0];
-    const from365 = new Date(Date.now() - 365*86400000).toISOString().split('T')[0];
+    const today = getISTDate();
+    const from365 = istDaysAgo(365);
     [stkCandles, stkDailyCandles] = await Promise.all([
       fetchIntraday(inst.key, '5minute', accessToken, onTokenExpired).catch(() => []),
       fetchCandles(inst.key, from365, today, 'day', accessToken, onTokenExpired).catch(() => []),
@@ -186,6 +221,11 @@ export async function scanStockOptions({ inst, spot, spotChg, deps, env, expirie
   stkCtx.spot = spot; stkCtx.dayChange = spotChg;
   stkCtx.bullish = stkCtx.compositeScore > 0;
   stkCtx.neutral = Math.abs(stkCtx.compositeScore || 0) < 0.5;
+  // Multi-timeframe view of the underlying stock (daily candles already fetched above are reused).
+  try {
+    const mtfCtx = await getMtf({ key: inst.key, price: spot, token: accessToken, onTokenExpired, daily: stkDailyCandles, m5: stkCandles, lg });
+    stkCtx.mtf = mtfCtx ? { bull: gradeMtf(mtfCtx, 1), bear: gradeMtf(mtfCtx, -1) } : null;
+  } catch (_) { stkCtx.mtf = null; }
 
   let allExpiries = preExpiries;
   if (!allExpiries) {
@@ -225,7 +265,7 @@ export async function scanStockOptions({ inst, spot, spotChg, deps, env, expirie
 
   const stkRegime = classifyMarketRegime(Math.abs(stkCtx.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
   const stkVolRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
-  const picks = scoreAndFilterPicks(allStkPicks, { fiiData, fiiInterp, adaptWeights, mlModels, confCalibration, regime: stkRegime, volRegimeShift: stkVolRegimeShift, cfg, maxPain: stkMaxPain, spot });
+  const picks = onePerIdea(scoreAndFilterPicks(allStkPicks, { fiiData, fiiInterp, adaptWeights, mlModels, confCalibration, regime: stkRegime, volRegimeShift: stkVolRegimeShift, cfg, maxPain: stkMaxPain, spot, oiWalls: calcOIWalls(chain) }));
   // Always report the raw → final count, so a stock whose picks were all filtered out
   // (RR / capital / confidence gate) is visible in the log instead of vanishing silently.
   if (!picks.length) lg(`${inst.s}: ${allStkPicks.length} raw → 0 signals (all filtered by gate/thresholds)`, 'w');
@@ -347,6 +387,13 @@ export async function runOptionsScan(ctx, caches, callbacks) {
 
     // Enrich marketCtx with PCR trend + IV trend
     const richCtx = { ...marketCtx, pcr, pcrTrend, ivTrend, avgIV, prevAvgIV };
+    // Multi-timeframe view of the index (weekly/daily/60-min/15-min + today's 5-min). scanChain
+    // uses it to veto trades against the higher timeframes and to grade the rest.
+    try {
+      const mtfCtx = await getMtf({ key: idx.key, price: spot, token: accessToken, onTokenExpired, m5: idxCandles[idx.key], lg });
+      richCtx.mtf = mtfCtx ? { bull: gradeMtf(mtfCtx, 1), bear: gradeMtf(mtfCtx, -1) } : null;
+      if (richCtx.mtf) lg(`MTF ${idx.name}: long ${richCtx.mtf.bull.grade} / short ${richCtx.mtf.bear.grade} (${richCtx.mtf.bull.dirs})`, 'o');
+    } catch (e) { lg(`MTF ${idx.name}: ${e.message}`, 'w'); }
 
     // ATM strike
     const atm  = Math.round(spot / idx.step) * idx.step;
@@ -365,7 +412,7 @@ export async function runOptionsScan(ctx, caches, callbacks) {
     // Apply FII bias + adaptive weights + ML ranking, then filter
     const idxRegime = classifyMarketRegime(Math.abs(richCtx.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
     const idxVolRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
-    const picksWithFII = scoreAndFilterPicks(allIdxPicks, { fiiData, adaptWeights, mlModels, confCalibration, regime: idxRegime, volRegimeShift: idxVolRegimeShift, cfg, maxPain, spot });
+    const picksWithFII = onePerIdea(scoreAndFilterPicks(allIdxPicks, { fiiData, adaptWeights, mlModels, confCalibration, regime: idxRegime, volRegimeShift: idxVolRegimeShift, cfg, maxPain, spot, oiWalls }));
 
     lg(`${idx.name}: ${expiriesToScan.length} expiry(s) → ${allIdxPicks.length} raw → ${picksWithFII.length} ≥${cfg.minOptConf}% | composite=${richCtx.compositeScore} pcr=${pcr}`, 'o');
     built.push({ name: idx.name, spot, spotChg, picks: picksWithFII, expiry, expiries: expiriesToScan, chain, maxPain, oiWalls, pcr, pcrTrend, ivTrend });
@@ -454,6 +501,7 @@ export async function runOptionsScan(ctx, caches, callbacks) {
   // Don't log WATCH options — no direction conviction, contaminates calibration
   const loggableOpts = allPicks.filter(p => p.action !== 'WATCH');
   if (loggableOpts.length && gh?.token) logSignals(gh, loggableOpts.map(p => buildOptionSignal(p, vixVal)), vixVal, lg);
+  if (gh?.token) logShadowSignals(gh, drainShadow(), vixVal, lg);
   lg(`✅ Options: ${total} signals (${withTrend} with-trend)`, 'o');
 
   return { groups: nextGroups, scanId, vixVal, withTrend, total };

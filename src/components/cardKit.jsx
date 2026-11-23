@@ -263,3 +263,71 @@ export function FooterNote({ children }) {
     </div>
   );
 }
+
+// ── Regime / confluence / AI-probability tags ───────────────────────────────
+// The Stocks, Breakout and Options cards each carried (or lacked) their own copy of this, so a
+// stock pick showed none of it while an option pick showed all of it. One builder, used by all.
+// mlProbability is the model's calibrated win-probability for this pick; null/absent before any
+// model exists, in which case no chip is shown rather than a made-up one.
+export function contextTags(p) {
+  const tags = [];
+  const regimeMap = {
+    CHOPPY_HIGH_VOL: { txt: '🌊 CHOPPY + HIGH VIX', tone: 'red' },
+    CHOPPY:          { txt: '🌊 CHOPPY', tone: 'amber' },
+    TRENDING_CALM:   { txt: '📈 CALM TREND', tone: 'green' },
+    TRENDING:        { txt: '📈 TRENDING', tone: 'green' },
+  };
+  if (p?.regime && regimeMap[p.regime]) tags.push({ label: regimeMap[p.regime].txt, tone: regimeMap[p.regime].tone });
+  if (p?.confluence?.total > 0) {
+    const cf = p.confluence;
+    if (cf.conflicting >= 2) tags.push({ label: `🧩 CONFLICTING (${cf.agree}✓ ${cf.conflicting}✗)`, tone: 'red' });
+    else if (cf.ratio >= 0.8 && cf.agree >= 5) tags.push({ label: `🧩 FULL CONFLUENCE ${cf.agree}/${cf.total}`, tone: 'green' });
+    else if (cf.ratio >= 0.65 && cf.agree >= 4) tags.push({ label: `🧩 STRONG CONFLUENCE ${cf.agree}/${cf.total}`, tone: 'green' });
+    else if (cf.ratio < 0.5) tags.push({ label: `🧩 WEAK (${cf.agree}/${cf.total})`, tone: 'amber' });
+  }
+  if (typeof p?.mlProbability === 'number') {
+    tags.push({ label: `🤖 AI win-prob ${p.mlProbability}%`, tone: p.mlProbability >= 60 ? 'green' : p.mlProbability >= 50 ? 'amber' : 'red' });
+  }
+  return tags;
+}
+
+// Caution chips shown before context tags. Only fires on fields that exist; returns [] otherwise.
+export function riskFlags(p) {
+  const tags = [];
+  if (typeof p?.rsi === 'number') {
+    if (p.rsi >= 75) tags.push({ label: `⚠ RSI ${p.rsi.toFixed(0)} overbought`, tone: 'amber' });
+    else if (p.rsi <= 25) tags.push({ label: `⚠ RSI ${p.rsi.toFixed(0)} oversold`, tone: 'amber' });
+  }
+  if (typeof p?.pot?.rr === "number" && p.pot.rr > 0 && p.pot.rr < 1.5) {
+    tags.push({ label: `⚠ Low R:R ${p.pot.rr.toFixed(1)}`, tone: 'red' });
+  }
+  return tags;
+}
+
+// ── KpiStrip — row of MetricMini tiles; items: [{label,value,color,sub}] (falsy entries skipped) ──
+export function KpiStrip({ items = [] }) {
+  const list = items.filter(Boolean);
+  return (
+    <MetricGrid cols={list.length || 1}>
+      {list.map((it, i) => <MetricMini key={i} {...it} />)}
+    </MetricGrid>
+  );
+}
+
+
+// Multi-timeframe grade + liquidity tags shown under a card header. mtf = pick.mtf (null = data was not
+// available for this pick, shown as "MTF n/a" so it never looks graded when it is not).
+export function MtfTags({ mtf, spreadPct }) {
+  const tone = !mtf ? 'slate' : mtf.grade === 'A' ? 'green' : mtf.grade === 'B' ? 'blue' : 'amber';
+  return (
+    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', margin: '6px 0' }}>
+      {mtf
+        ? <Tag tone={tone} title={mtf.why || ''}>MTF {mtf.grade} · {mtf.dirs}{mtf.partial ? ' · partial' : ''}</Tag>
+        : <Tag tone="slate" title="Weekly/daily/60-min/15-min history could not be loaded for this pick, so no timeframe check was applied">MTF n/a</Tag>}
+      {mtf?.roomATR != null && <Tag tone="slate">{mtf.roomATR} ATR to next level</Tag>}
+      {mtf?.resistance && <Tag tone="red">R {Math.round(mtf.resistance).toLocaleString('en-IN')}</Tag>}
+      {mtf?.support && <Tag tone="green">S {Math.round(mtf.support).toLocaleString('en-IN')}</Tag>}
+      {spreadPct != null && <Tag tone={spreadPct > 1.5 ? 'amber' : 'slate'}>spread {spreadPct}%</Tag>}
+    </div>
+  );
+}

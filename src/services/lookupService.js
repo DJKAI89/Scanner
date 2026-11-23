@@ -3,6 +3,7 @@
 // All calculation, scoring, and API-call logic for the Lookup tab lives here.
 
 import { fetchQ, fetchCandles, fetchIntraday, fetchOptions, fetchOptionContracts } from './api';
+import { getMtf, gradeMtf } from './mtf';
 import { scanStockOptions, effectiveOptionCfg } from './optionScan';
 import {
   calcRSI, calcEMACrossover, calcATR, calcBBSqueeze, calcSR, calcVWAP, calcVWAPBands,
@@ -273,6 +274,24 @@ export async function lookupInstrument(ctx, callbacks) {
         tech.rec = getRec(tech.conf, tech.pot?.base ?? 0, tech.risk ?? 50, tech.pot?.rr ?? 0);
       }
     }
+  }
+
+  // -- Higher-timeframe grade (weekly / daily / 60-min / 15-min), the same rules the scanners use --
+  // Daily indicators alone set conf/rec above; here the top-down view can raise it, lower it, or block the
+  // call when the higher timeframes are against it. The full breakdown is shown by the MtfPanel on the page
+  // (it reads the same cache, so no extra calls).
+  if (tech && (tech.rec === 'STRONG BUY' || tech.rec === 'BUY' || tech.rec === 'MODERATE')) {
+    try {
+      setProgress('Checking higher timeframes...');
+      const ctx = await getMtf({ key: inst.key, price: ltp, token, onTokenExpired, lg });
+      const g = gradeMtf(ctx, 1);
+      if (g) {
+        tech.conf = Math.min(99, Math.max(1, Math.round(tech.conf + g.adj)));
+        tech.mtf = { grade: g.grade, score: g.score, dirs: g.dirs, roomATR: g.roomATR, veto: g.veto, why: g.why, partial: g.partial };
+        if (g.veto) { tech.mtfVeto = true; tech.mtfWhy = g.why; tech.rec = 'WATCH'; }
+        else tech.rec = getRec(tech.conf, tech.pot?.base ?? 0, tech.risk ?? 50, tech.pot?.rr ?? 0);
+      }
+    } catch (e) { lg('Lookup MTF: ' + e.message, 'w'); }
   }
 
   setProgress('Checking option contracts...');

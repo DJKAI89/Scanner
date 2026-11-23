@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useApp } from '../context/AppContext';
+import MtfPanel, { GradePill } from '../components/MtfPanel.jsx';
 import { Spinner, ErrorBanner, StatCard, EmptyState } from '../components/common.jsx';
+import ScanProgress from '../components/ScanProgress';
 import LiveChart from '../components/LiveChart';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import { lookupInstrument } from '../services/lookupService';
@@ -8,7 +10,7 @@ import { fmt, fmtVol } from '../utils/formatters';
 import { getIST } from '../utils/marketTime';
 import { QUICK_STOCKS } from '../constants/config';
 import {
-  AccentCard, Tag, RecPill, LevelsStrip, Banner, FooterNote,
+  AccentCard, Tag, RecPill, LevelsStrip, Banner, FooterNote, MtfTags,
 } from '../components/cardKit';
 
 // ── SectionCard — accent-header card shell, consistent with Analysis/Stocks pages ──
@@ -194,7 +196,14 @@ function OptionSuggestionCard({ pick, cfg, showTools = true }) {
             🧩 {pick.confluence.agree}/{pick.confluence.total} modules agree
           </Tag>
         )}
+        {typeof pick.mlProbability === 'number' && (
+          <Tag tone={pick.mlProbability >= 60 ? 'green' : pick.mlProbability >= 50 ? 'amber' : 'red'}>
+            🤖 AI win-prob {pick.mlProbability}%
+          </Tag>
+        )}
       </div>
+
+      <MtfTags mtf={pick.mtf} spreadPct={pick.spreadPct} />
 
       <LevelsStrip
         entry={fmt(pick.entry)}
@@ -353,7 +362,9 @@ export default function LookupPane() {
       </div>
 
       {error && <ErrorBanner title="Lookup Error" message={error} onRetry={() => lookup()} />}
-      {loading && <Spinner label={'Analysing ' + sym + '...'} progress={progress} sub="Quote · Candles · Intraday · Indicators · Options chain" />}
+      {loading && <ScanProgress title={'Analysing ' + sym} message={progress} accent="#16a34a" accentDark="#15803d"
+          phases={[{ label: 'Quote', re: /searching/i }, { label: 'Daily', re: /90-day/i }, { label: '30-min', re: /30-min/i }, { label: 'Intraday', re: /intraday/i }, { label: 'Options', re: /option/i }]}
+          weights={[0.08, 0.20, 0.12, 0.12, 0.48]} hint="Quote · Candles · Intraday · Indicators · Options chain" />}
 
       {r && !loading && (
         <div>
@@ -458,8 +469,19 @@ export default function LookupPane() {
             </div>
           </SectionCard>
 
+          {r.tech.mtfVeto && (
+            <Banner tone="red" icon="!" title="Higher timeframes are against this trade" detail={`${r.tech.mtfWhy || ''} The call is held at WATCH: wait for the weekly/daily trend to turn, or for a clean pullback.`} />
+          )}
+          {r.tech.mtf && !r.tech.mtfVeto && (
+            <div style={{ margin: '0 0 8px', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <GradePill label="Timeframes" g={{ grade: r.tech.mtf.grade, veto: false, why: '' }} />
+              <span style={{ fontSize: 10, color: '#64748b' }}>{r.tech.mtf.dirs}{r.tech.mtf.roomATR != null ? ` · ${r.tech.mtf.roomATR} ATR to next level` : ''}{r.tech.mtf.partial ? ' · partial data' : ''}</span>
+            </div>
+          )}
+          <MtfPanel instrumentKey={r.inst.key} price={r.ltp} title="Weekly / Daily / 60-min / 15-min" />
+
           {(r.tf30?.rsi || r.tf5?.rsi) && (
-            <SectionCard title="Multi-Timeframe Analysis" accent="#7c3aed">
+            <SectionCard title="Intraday Detail (30-min / 5-min)" accent="#7c3aed">
               <div className="stats-g" style={{ marginBottom: 0 }}>
                 {r.tech.rsi && <StatCard label="DAILY RSI" value={r.tech.rsi?.toFixed(1)} sub="Daily" valClass={r.tech.rsi < (cfg.rsiOS||35) ? 'up' : r.tech.rsi > (cfg.rsiOB||65) ? 'dn' : 'bl'} />}
                 {r.tf30?.rsi && <StatCard label="30-MIN RSI" value={r.tf30.rsi.toFixed(1)} sub={`30m · ${r.tf30.trend}`} valClass={r.tf30.trend === 'UP' ? 'up' : 'dn'} />}

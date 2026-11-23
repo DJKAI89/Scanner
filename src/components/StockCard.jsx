@@ -1,9 +1,11 @@
 import React from 'react';
 import { fmt, fmtVol } from '../utils/formatters';
 import { getSignalStrength } from '../services/technical';
+import { calculatePositionSize } from '../services/tradeManagement';
 import {
   AccentCard, CardHeader, VerdictRow, LevelsStrip, StatusTag,
   MetricGrid, MetricMini, ProgressStat, TargetTiers, SignalTags, Banner, FooterNote,
+  contextTags, KpiStrip, riskFlags,
 } from './cardKit';
 import { ConfidenceBreakdown } from './ConfidenceBreakdown';
 
@@ -62,13 +64,16 @@ export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
   if (p.aboveVWAP===true && p.vwap>0) tags.push({ label: `▲ VWAP ₹${fmt(p.vwap,0)}`, tone: 'green' });
   if (p.aboveVWAP===false && p.vwap>0) tags.push({ label: `▼ VWAP ₹${fmt(p.vwap,0)}`, tone: 'red' });
   if (p.vwapBands?.nearLowerBand) tags.push({ label: '📊 VWAP Zone', tone: 'amber' });
-  if (p.mtfBoost>0) tags.push({ label: `⚡ MTF +${p.mtfBoost}pts`, tone: 'blue' });
+  if (p.mtf) tags.push({ label: `MTF ${p.mtf.grade} · ${p.mtf.dirs}${p.mtf.roomATR != null ? ` · ${p.mtf.roomATR} ATR room` : ''}`, tone: p.mtf.grade === 'A' ? 'green' : p.mtf.grade === 'B' ? 'blue' : 'amber' });
+  else if (p.mtfUnavailable) tags.push({ label: 'MTF n/a', tone: 'slate' });
+  else if (p.mtfBoost>0) tags.push({ label: `⚡ MTF +${p.mtfBoost}pts`, tone: 'blue' });
   // intraday enrichment
   if (p.stockVWAP) tags.push({ label: `${p.stockVWAP.aboveVWAP?'↑':'↓'} 5m VWAP`, tone: p.stockVWAP.aboveVWAP ? 'green' : 'red' });
   if (p.intraVolRatio >= 2) tags.push({ label: `🔥 Vol ${p.intraVolRatio}× intraday`, tone: 'purple' });
   else if (p.intraVolRatio >= 1.5) tags.push({ label: `📊 Vol ${p.intraVolRatio}× 5m`, tone: 'blue' });
   if (typeof p.intraBull === 'boolean') tags.push({ label: p.intraBull ? '⚡ 5m EMA↑' : '⚡ 5m EMA↓', tone: p.intraBull ? 'green' : 'red' });
   if (p.intraAccel) tags.push({ label: '🚀 Accelerating', tone: 'amber' });
+  tags.push(...riskFlags(p), ...contextTags(p)); // caution notes first, then regime · confluence · AI win-probability
 
   return (
     <AccentCard dir={dir}>
@@ -88,12 +93,13 @@ export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
         onPopup={onPopup}
       />
 
-      <VerdictRow items={[
-        { label: `${str.label} SIGNAL`, color: str.color },
-        { label: `${p.numInds||0}/7 indicators` },
-        { label: `R:R ${p.pot?.rr||0}:1` },
-        { label: `Win ~${p.pot?.wr||0}%` },
-        { label: `Conf ${p.conf||0}%`, color: (p.conf||0)>=minConf ? '#16a34a' : (p.conf||0)>=(minConf-10) ? '#d97706' : '#dc2626' },
+      <KpiStrip items={[
+        { label: 'CONF', value: `${p.conf || 0}%`, color: (p.conf || 0) >= minConf ? '#16a34a' : (p.conf || 0) >= minConf - 15 ? '#d97706' : '#dc2626', sub: `min ${minConf}%` },
+        typeof p.mlProbability === 'number'
+          ? { label: 'AI WIN', value: `${p.mlProbability}%`, color: p.mlProbability >= 60 ? '#16a34a' : p.mlProbability >= 50 ? '#d97706' : '#dc2626', sub: 'model' }
+          : { label: 'EST. WIN', value: `~${p.pot?.wr || 0}%`, sub: 'rule-based' },
+        { label: 'R:R', value: `${p.pot?.rr || 0}:1`, color: (p.pot?.rr || 0) >= 2 ? '#16a34a' : (p.pot?.rr || 0) >= 1.5 ? '#d97706' : '#dc2626' },
+        { label: 'SIGNAL', value: str.label, color: str.color, sub: `${p.numInds || 0}/7 indicators` },
       ]} />
 
       {p.reversal && p.reversal.type !== 'NONE' && (
@@ -141,6 +147,22 @@ export default function StockCard({ pick: p, rank, cfg = {}, onPopup }) {
 
       <SignalTags tags={tags} totalCount={indLbls.length} activeCount={activeCount} />
 
+      {isBuy && p.sl > 0 && ltp > p.sl && (() => {
+        const portSz = cfg.portSize || 500000, riskPct = cfg.riskPct || 2;
+        const pos = calculatePositionSize({ accountCapital: portSz, maxRiskPerTradePct: riskPct, entryPrice: ltp, stopLossPrice: p.sl, type: 'STOCK', maxCapital: portSz });
+        const budget = Math.round(portSz * riskPct / 100);
+        return (
+          <div style={{background: pos.riskTooHigh ? '#fef2f2' : '#eff6ff', border: '1px solid #e2e8f0', borderRadius: 9, padding: '8px 10px', margin: '8px 0'}}>
+            <div style={{fontSize: 8, color: '#64748b', fontWeight: 700, marginBottom: 3}}>POSITION SIZING ({'\u20B9'}{(portSz / 100000).toFixed(1)}L, {riskPct}% risk = {'\u20B9'}{fmt(budget, 0)} max)</div>
+            {pos.riskTooHigh
+              ? <div style={{fontSize: 12, fontWeight: 800, color: '#b91c1c'}}>Skip: stop is {'\u20B9'}{fmt(ltp - p.sl, 2)} away per share</div>
+              : <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                  <div><span style={{fontSize: 17, fontWeight: 800, color: '#1d4ed8'}}>{pos.shares} shares</span><span style={{fontSize: 9, color: '#64748b', marginLeft: 6}}>recommended</span></div>
+                  <div style={{textAlign: 'right', fontSize: 9, color: '#64748b'}}>Capital: {'\u20B9'}{fmt(pos.totalCapitalAllocated, 0)}<br />Max loss: {'\u20B9'}{fmt(pos.maxLossRupees, 0)}</div>
+                </div>}
+          </div>
+        );
+      })()}
       <FooterNote>
         {str.label} signal · {p.numInds||0}/7 indicators · R:R {p.pot?.rr||0}:1 · Win ~{p.pot?.wr||0}%
         {p.reversal?.type!=='NONE' ? ` · ${p.reversal?.type==='BULLISH_REVERSAL'?'🔄 Reversal UP':'🔄 Reversal DOWN'}` : ''}

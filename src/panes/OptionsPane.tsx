@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
+import ScanProgress from '../components/ScanProgress';
 import { resolveAccessToken } from '../services/api';
 import { fmt, fmtC, interpVIX } from '../utils/formatters';
 import { getIST, getISTDate } from '../utils/marketTime';
 import { isWeeklyExpiryDay } from '../constants/config';
 import { useMarketFeed } from '../hooks/useMarketFeed';
-import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote, Banner } from '../components/cardKit';
+import { AccentCard, CardHeader, LevelsStrip, ProgressStat, MetricGrid, MetricMini, SignalTags, FooterNote, Banner, contextTags, KpiStrip, MtfTags } from '../components/cardKit';
 import Icon from '../components/Icon.jsx';
 import { ConfidenceBreakdown } from '../components/ConfidenceBreakdown';
 import { runOptionsScan, getOptionKey, withLiveOI, calcStructure, VIX_KEY } from '../services/optionScan';
@@ -43,7 +44,10 @@ function OptionCard({ pick, cfg: cardCfg }) {
   const portSz = cardCfg?.portSize || 500000, riskPct2 = cardCfg?.riskPct || 2;
   const maxRisk = portSz * riskPct2 / 100;
   const lossPerLot = pick.maxLoss || 0;
-  const recLots = lossPerLot > 0 ? Math.max(1, Math.floor(maxRisk / lossPerLot)) : 0;
+  // 0 = even ONE lot would risk more than your per-trade limit (previously forced to at least 1 lot,
+  // which recommended trades that broke the risk rule).
+  const recLots = lossPerLot > 0 ? Math.floor(maxRisk / lossPerLot) : 0;
+  const tooBig = lossPerLot > 0 && recLots < 1;
   const recCapital = recLots > 0 ? recLots * (pick.entry || 0) * (pick.lot || 1) : 0;
   const sizeColor = recLots <= 1 ? '#92400e' : recLots >= 3 ? '#15803d' : '#1d4ed8';
   const sizeBg    = recLots <= 1 ? '#fffbeb' : recLots >= 3 ? '#f0fdf4' : '#eff6ff';
@@ -68,20 +72,7 @@ function OptionCard({ pick, cfg: cardCfg }) {
   if (dte != null && dte <= 3) {
     tags.push({ label: dte <= 0 ? '⏰ EXPIRES TODAY' : dte === 1 ? '⏰ 1 DTE' : `⏰ ${dte} DTE`, tone: dte <= 1 ? 'red' : 'amber' });
   }
-  const regimeMap = {
-    CHOPPY_HIGH_VOL: { txt: '🌊 CHOPPY + HIGH VIX', tone: 'red' },
-    CHOPPY:          { txt: '🌊 CHOPPY', tone: 'amber' },
-    TRENDING_CALM:   { txt: '📈 CALM TREND', tone: 'green' },
-    TRENDING:        { txt: '📈 TRENDING', tone: 'green' },
-  };
-  if (pick.regime && regimeMap[pick.regime]) tags.push({ label: regimeMap[pick.regime].txt, tone: regimeMap[pick.regime].tone });
-  if (pick.confluence?.total > 0) {
-    const cf = pick.confluence;
-    if (cf.conflicting >= 2) tags.push({ label: `🧩 CONFLICTING (${cf.agree}✓ ${cf.conflicting}✗)`, tone: 'red' });
-    else if (cf.ratio >= 0.8 && cf.agree >= 5) tags.push({ label: `🧩 FULL CONFLUENCE ${cf.agree}/${cf.total}`, tone: 'green' });
-    else if (cf.ratio >= 0.65 && cf.agree >= 4) tags.push({ label: `🧩 STRONG CONFLUENCE ${cf.agree}/${cf.total}`, tone: 'green' });
-    else if (cf.ratio < 0.5) tags.push({ label: `🧩 WEAK (${cf.agree}/${cf.total})`, tone: 'amber' });
-  }
+  tags.push(...contextTags(pick)); // regime · confluence · AI win-probability (shared builder in cardKit)
   if (!pick.trendAligned) tags.push({ label: `⚠ AGAINST TREND (${pick.trendDir})`, tone: 'amber' });
   if (pick.atm) tags.push({ label: 'ATM', tone: 'blue' });
   if (pick.emaCross==='bullish_cross'&&pick.type==='CE') tags.push({ label: `📶 EMA CROSS ↑ ${(pick.emaCrossCandles||0)<=1?'FRESH':pick.emaCrossCandles+'c ago'}`, tone:'green' });
@@ -122,12 +113,15 @@ function OptionCard({ pick, cfg: cardCfg }) {
         chgPct={null}
         rec={pick.action}
         dir={dir}
-        rightExtra={
-          <div style={{ fontSize: 10, fontWeight: 700, color: pick.confidence>=minConf?'#16a34a':pick.confidence>=minConf-15?'#d97706':'#dc2626', marginTop: 2 }}>
-            {pick.confidence}% conf
-          </div>
-        }
       />
+      <MtfTags mtf={pick.mtf} spreadPct={pick.spreadPct} />
+
+      <KpiStrip items={[
+        { label: 'CONF', value: `${pick.confidence}%`, color: pick.confidence >= minConf ? '#16a34a' : pick.confidence >= minConf - 15 ? '#d97706' : '#dc2626', sub: `min ${minConf}%` },
+        typeof pick.mlProbability === 'number' ? { label: 'AI WIN', value: `${pick.mlProbability}%`, color: pick.mlProbability >= 60 ? '#16a34a' : pick.mlProbability >= 50 ? '#d97706' : '#dc2626', sub: 'model' } : null,
+        { label: 'R:R', value: `${pick.rr || 0}:1`, color: (pick.rr || 0) >= 2 ? '#16a34a' : (pick.rr || 0) >= 1.5 ? '#d97706' : '#dc2626' },
+        { label: 'EXPIRY', value: dte == null ? '—' : dte === 0 ? 'TODAY' : `${dte}d`, color: dte != null && dte <= 1 ? '#dc2626' : dte != null && dte <= 3 ? '#d97706' : '#0f172a', sub: pick.expiry },
+      ]} />
 
       {/* Capital required */}
       <div style={{background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:9,padding:'8px 10px',marginBottom:9,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
@@ -171,6 +165,13 @@ function OptionCard({ pick, cfg: cardCfg }) {
       </MetricGrid>
 
       {/* Position sizing */}
+      {tooBig && (
+        <div style={{background:'#fef2f2',border:'1px solid #fecaca',borderRadius:9,padding:'8px 10px',marginBottom:9}}>
+          <div style={{fontSize:8,color:'#b91c1c',fontWeight:700,marginBottom:3}}>POSITION SIZING</div>
+          <div style={{fontSize:12,fontWeight:800,color:'#b91c1c'}}>Skip: 1 lot risks {'\u20B9'}{fmt(lossPerLot,0)}</div>
+          <div style={{fontSize:9,color:'#64748b',marginTop:2}}>Your limit is {'\u20B9'}{fmt(maxRisk,0)} per trade ({riskPct2}% of {'\u20B9'}{(portSz/100000).toFixed(1)}L). Take it only if you accept the bigger loss.</div>
+        </div>
+      )}
       {recLots > 0 && (
         <div style={{background:sizeBg,border:'1px solid #e2e8f0',borderRadius:9,padding:'8px 10px',marginBottom:9}}>
           <div style={{fontSize:8,color:'#64748b',fontWeight:700,marginBottom:4}}>💰 POSITION SIZING (₹{(portSz/100000).toFixed(1)}L · {riskPct2}% risk = ₹{fmt(maxRisk,0)} max)</div>
@@ -369,8 +370,15 @@ export default function OptionsPane() {
       {!marketStatus.open && <MarketClosedBanner msg={marketStatus.msg || '🔔 NSE Market Closed'} />}
       {error && <ErrorBanner title="⚠ Options Error" message={error} onRetry={() => loadOptions(true)} />}
       {loading ? (
-        <Spinner label="Scanning F&O options..." progress={progress}
-          sub="5-min intraday · EMA 9/21 · Composite Score · PCR trend · IV trend · Max Pain · OI Walls · Smart SL/Target" />
+        <ScanProgress title="Scanning F&O options" message={progress} accent="#f59e0b" accentDark="#b45309"
+          steps={{ 3: ['Market', 'Indices', 'Signals'], 4: ['Market', 'Indices', 'F&O stocks', 'Signals'] }}
+          weights={{ 3: [0.15, 0.55, 0.30], 4: [0.10, 0.30, 0.50, 0.10] }}
+          subRules={[
+            { re: /expiry \d+\/\d+/i, ignore: true },               // step 2: expiry counter is not index progress
+            { re: /Ranking F&O universe/i, from: 0, to: 0.12 },      // step 3, first slice: ranking batches
+            { re: /options \(\d+\/\d+\)/i, from: 0.12, to: 1 },     // step 3, rest: scanning each stock
+          ]}
+          hint="5-min intraday · EMA 9/21 · Composite Score · PCR trend · IV trend · Max Pain · OI Walls · Smart SL/Target" />
       ) : (
         <div>
           {updTime && <LastUpdated time={updTime} />}

@@ -3,6 +3,7 @@ const STOCK_FEATURES = [
   'composite', 'momentum', 'bullish', 'reversal', 'aboveVWAP', 'nearSupport',
   'deliveryHigh', 'deliveryLow', 'macdBullCross', 'adxBull', 'rsiBullDiv', 'bbSqueeze',
   'weekday', 'phase', 'regime', 'volRegimeShift', 'sectorStrength', 'newsSentiment', 'gapType',
+  'mtfScore', 'mtfGrade', 'mtfRoom',
 ];
 
 const OPTION_FEATURES = [
@@ -11,10 +12,11 @@ const OPTION_FEATURES = [
   'deltaAbs', 'iv', 'thetaAbs', 'atm', 'capitalLoad', 'nearPDH', 'nearPDL',
   'weekday', 'phase', 'regime', 'volRegimeShift', 'expiryDay', 'sectorStrength', 'newsSentiment',
   'maxPainDist', 'counterTrend',
+  'mtfScore', 'mtfGrade', 'mtfRoom', 'spread',
 ];
 
 const BASE_COST_PCT = {
-  STOCK: 0.18,
+  STOCK: 0.28, // statutory friction + ~0.15% slippage
   OPTION: 0.45,
 };
 
@@ -24,15 +26,68 @@ const BASE_COST_PCT = {
 // ATM contract with 10k+ OI — the EV/threshold math was quietly optimistic
 // on exactly the trades most likely to bleed to spread. Scales the flat
 // baseline by open interest, which is already logged on every option pick.
+// Cost model (percent of turnover, round trip). Options: flat brokerage on BOTH legs
+// (~₹20/order) spread over the real turnover (premium × lot), plus statutory charges
+// (STT on the sell leg, exchange fees, SEBI, GST), plus adverse market-order slippage
+// scaled by open interest. Capped so one tiny-premium contract can't dominate averages.
 export function estimateCostPct(row, type) {
   if (type !== 'OPTION') return BASE_COST_PCT.STOCK;
   const oi = toNum(row?.signal?.oi ?? row?.oi, 0);
-  const base = BASE_COST_PCT.OPTION;
-  if (oi <= 0)     return base * 2.5; // no OI on record — treat conservatively
-  if (oi >= 10000) return base;
-  if (oi >= 3000)  return base * 1.3;
-  if (oi >= 1000)  return base * 1.8;
-  return base * 2.5; // near the liquidity floor
+  const premium = toNum(row?.signal?.entry ?? row?.entry, 0);
+  const lot = toNum(row?.signal?.lot ?? row?.lot, 0);
+  const turnover = premium * lot;
+  // Missing premium/lot (older logged signals) → fall back to the flat baseline.
+  const statFeePct = turnover > 0 ? (40 / turnover) * 100 + 0.12 : BASE_COST_PCT.OPTION * 0.5;
+  let slippagePct = 0.50;               // liquid (10k+ OI)
+  if (oi <= 0) slippagePct = 1.80;      // no OI on record — treat conservatively
+  else if (oi < 1000) slippagePct = 1.80;
+  else if (oi < 3000) slippagePct = 1.10;
+  else if (oi < 10000) slippagePct = 0.70;
+  // A measured bid-ask spread beats the OI-based guess: crossing the spread costs about one
+  // full spread across entry + exit.
+  const spreadPct = toNum(row?.signal?.spreadPct ?? row?.spreadPct, 0);
+  if (spreadPct > 0) slippagePct = Math.max(0.2, spreadPct);
+  return +Math.min(4, statFeePct + slippagePct).toFixed(2);
+}
+
+
+// A signal "wins" when it made money AFTER estimated costs, not merely when the
+// status flag says TARGET_HIT. With partial exits + break-even/trailing stops,
+// TARGET_HIT can net out tiny and SL_HIT can still be break-even/positive, so a
+// binary status label taught the models the wrong thing. Falls back to status
+// when no realized P&L is recorded.
+export function signalWin(sig) {
+  const p = sig?.pnlPct;
+  if (p == null || !Number.isFinite(+p)) return sig?.status === 'TARGET_HIT';
+  return (+p - estimateCostPct(sig, sig.type)) > 0;
+}
+
+// Collapse near-identical signals into one "idea". The scanner often logs the same call
+// several times (several strikes of one index, repeat scans) within a few minutes. Each
+// copy has the same outcome, so counting them separately makes the model overconfident
+// and inflates every sample size. Idea key = day + underlying + direction + 30-min block.
+// Real (non-shadow) signals win over shadow ones, then the earliest logged.
+export function ideaKey(s) {
+  const hm = String(s?.time || '').slice(0, 5).split(':');
+  const mins = hm.length === 2 ? (+hm[0]) * 60 + (+hm[1]) : 0;
+  const dir = s?.type === 'OPTION' ? (s.optType || s.signal || '') : (s?.signal || s?.rec || '');
+  return `${s?.date}|${s?.stock}|${s?.type}|${dir}|${Math.floor(mins / 30)}`;
+}
+
+export function dedupeIdeas(signals = []) {
+  const ordered = [...signals].sort((a, b) =>
+    (a.shadow ? 1 : 0) - (b.shadow ? 1 : 0)
+    || String(a.date).localeCompare(String(b.date))
+    || String(a.time).localeCompare(String(b.time)));
+  const seen = new Set();
+  const out = [];
+  for (const s of ordered) {
+    const k = ideaKey(s);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
 }
 
 function clamp(v, min, max) {
@@ -174,6 +229,24 @@ function getStockFeatureVector(sig) {
     sectorStrength: getSectorStrength(sig),
     newsSentiment: getNewsSentiment(sig),
     gapType: getGapType(sig),
+    ...mtfFeatures(sig),
+  };
+}
+
+
+// Multi-timeframe features. Read from the pick at scan time (sig.mtf) or the logged signal (sig.mtfScore /
+// mtfGrade / mtfRoomATR). Unknown (older signals logged before this existed, or no timeframe data) is encoded
+// as a typical B-grade value, NOT 0 and not C: the trees split on thresholds, and an encoding that sits next
+// to the weak grades would make "no data" look like a weak setup (and old history look weak) to the model.
+function mtfFeatures(sig) {
+  const m = sig?.mtf || null;
+  const score = toNum(m?.score ?? sig?.mtfScore, NaN);
+  const room = toNum(m?.roomATR ?? sig?.mtfRoomATR, NaN);
+  const grade = m?.grade ?? sig?.mtfGrade;
+  return {
+    mtfScore: Number.isFinite(score) ? clamp(score / 8, -1.5, 1.5) : 3 / 8,
+    mtfGrade: grade === 'A' ? 1 : grade === 'B' ? 0.5 : grade === 'C' ? -0.5 : 0.5,
+    mtfRoom: Number.isFinite(room) ? clamp(room / 5, 0, 1.5) : 0.4,
   };
 }
 
@@ -213,6 +286,8 @@ function getOptionFeatureVector(sig) {
     newsSentiment: getNewsSentiment(sig),
     maxPainDist: clamp(maxPainDist * 20, 0, 2),
     counterTrend: asBool(sig?.trendAligned === false),
+    ...mtfFeatures(sig),
+    spread: Number.isFinite(toNum(sig?.spreadPct, NaN)) ? clamp(toNum(sig?.spreadPct, 0) / 5, 0, 2) : 0,
   };
 }
 
@@ -419,7 +494,7 @@ function buildBacktestRows(signals, model, type) {
         signal: sig,
         mlProb,
         baseConf: clamp(preMlConfidence(sig) / 100, 0, 1),
-        y: sig.status === 'TARGET_HIT' ? 1 : 0,
+        y: signalWin(sig) ? 1 : 0,
         pnlPct: toNum(sig.pnlPct, 0),
       };
     });
@@ -459,10 +534,10 @@ function calibrateRegimePenalties(closedSignals) {
   const buckets = { CHOPPY_HIGH_VOL: [], CHOPPY: [], TRENDING_CALM: [], TRENDING: [], NEUTRAL: [] };
   for (const s of closedSignals) {
     const r = s.regime;
-    if (r && buckets[r]) buckets[r].push(s.status === 'TARGET_HIT' ? 1 : 0);
+    if (r && buckets[r]) buckets[r].push(signalWin(s) ? 1 : 0);
   }
   const overall = closedSignals.length
-    ? closedSignals.filter((s) => s.status === 'TARGET_HIT').length / closedSignals.length
+    ? closedSignals.filter((s) => signalWin(s)).length / closedSignals.length
     : 0.5;
 
   const out = {};
@@ -486,7 +561,7 @@ function calibrateExpectedWR(closedSignals) {
   for (const s of closedSignals) {
     const rec = s?.rec;
     if (!rec) continue;
-    (buckets[rec] || (buckets[rec] = [])).push(s.status === 'TARGET_HIT' ? 1 : 0);
+    (buckets[rec] || (buckets[rec] = [])).push(signalWin(s) ? 1 : 0);
   }
   const out = {};
   for (const [rec, results] of Object.entries(buckets)) {
@@ -533,7 +608,7 @@ function optimizeThresholds(dataset, model, type) {
         for (const v of candidates) {
           const f = withGreeks.filter((s) => Math.abs(s[field] ?? 0) >= v);
           if (f.length < Math.max(10, withGreeks.length * 0.1)) continue;
-          const wr = f.filter((s) => s.status === 'TARGET_HIT').length / f.length;
+          const wr = f.filter((s) => signalWin(s)).length / f.length;
           if (wr > bestG.score) bestG = { v, score: wr };
         }
         return bestG.v;
@@ -687,7 +762,7 @@ function buildDataset(signals, type, featureNames, label = null) {
       const features = getFeatureVector(sig, type);
       return {
         signal: sig,
-        y: sig.status === 'TARGET_HIT' ? 1 : 0,
+        y: signalWin(sig) ? 1 : 0,
         x: vectorize(features, featureNames),
       };
     });
@@ -710,6 +785,13 @@ function buildDataset(signals, type, featureNames, label = null) {
   return rows;
 }
 
+// Purge + embargo helpers: a training row is only usable for test row `t` if its
+// trade had already closed before `t` was entered (purge), and it is not among the
+// last few rows right before `t` (embargo) — otherwise outcome windows overlap and leak.
+const WF_EMBARGO_FRAC = 0.01;
+const entryKey = (s) => `${s?.date || ''} ${s?.time || '00:00'}`;
+const exitKey = (s) => `${s?.exitDate || s?.date || ''} ${s?.exitDate ? (s?.exitTime || '23:59') : '23:59'}`;
+
 function trainWalkForward(dataset, featureNames, type, label) {
   if (dataset.length < 40) return null;
   const sorted = [...dataset].sort((a, b) => `${a.signal.date}${a.signal.time || ''}`.localeCompare(`${b.signal.date}${b.signal.time || ''}`));
@@ -727,7 +809,11 @@ function trainWalkForward(dataset, featureNames, type, label) {
   let tested = 0;
   let brier = 0;
   for (let i = minTrain; i < sorted.length; i += stride) {
-    const train = sorted.slice(0, i);
+    const embargo = Math.max(1, Math.floor(sorted.length * WF_EMBARGO_FRAC));
+    const testEntry = entryKey(sorted[i].signal);
+    const train = sorted.slice(0, Math.max(0, i - embargo))
+      .filter((r) => exitKey(r.signal) < testEntry);
+    if (train.length < 25) continue;
     const model = trainLightGbmStyleModel(train, featureNames, type, label, true);
     if (!model) continue;
     const raw = sigmoid(predictScore(model, sorted[i].x));
@@ -823,7 +909,9 @@ function trainFamily(signals, type, featureNames) {
 }
 
 export function trainSignalMlModels(closedSignals = []) {
-  const usable = closedSignals.filter((sig) => sig.status === 'TARGET_HIT' || sig.status === 'SL_HIT');
+  const closed = closedSignals.filter((sig) => !sig.planned && (sig.status === 'TARGET_HIT' || sig.status === 'SL_HIT'));
+  // One sample per idea, not per logged copy (see dedupeIdeas).
+  const usable = dedupeIdeas(closed);
   const stockFamily = trainFamily(usable, 'STOCK', STOCK_FEATURES);
   const optionFamily = trainFamily(usable, 'OPTION', OPTION_FEATURES);
   if (!stockFamily && !optionFamily) return null;
