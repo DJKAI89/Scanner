@@ -785,6 +785,13 @@ function buildDataset(signals, type, featureNames, label = null) {
   return rows;
 }
 
+// Purge + embargo helpers: a training row is only usable for test row `t` if its
+// trade had already closed before `t` was entered (purge), and it is not among the
+// last few rows right before `t` (embargo) — otherwise outcome windows overlap and leak.
+const WF_EMBARGO_FRAC = 0.01;
+const entryKey = (s) => `${s?.date || ''} ${s?.time || '00:00'}`;
+const exitKey = (s) => `${s?.exitDate || s?.date || ''} ${s?.exitDate ? (s?.exitTime || '23:59') : '23:59'}`;
+
 function trainWalkForward(dataset, featureNames, type, label) {
   if (dataset.length < 40) return null;
   const sorted = [...dataset].sort((a, b) => `${a.signal.date}${a.signal.time || ''}`.localeCompare(`${b.signal.date}${b.signal.time || ''}`));
@@ -802,7 +809,11 @@ function trainWalkForward(dataset, featureNames, type, label) {
   let tested = 0;
   let brier = 0;
   for (let i = minTrain; i < sorted.length; i += stride) {
-    const train = sorted.slice(0, i);
+    const embargo = Math.max(1, Math.floor(sorted.length * WF_EMBARGO_FRAC));
+    const testEntry = entryKey(sorted[i].signal);
+    const train = sorted.slice(0, Math.max(0, i - embargo))
+      .filter((r) => exitKey(r.signal) < testEntry);
+    if (train.length < 25) continue;
     const model = trainLightGbmStyleModel(train, featureNames, type, label, true);
     if (!model) continue;
     const raw = sigmoid(predictScore(model, sorted[i].x));

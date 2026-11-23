@@ -104,7 +104,7 @@ export function onePerIdea(picks) {
   return [...[...best.values()].map((x) => x.p), ...rest];
 }
 
-function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, adaptWeights, mlModels, confCalibration, regime, volRegimeShift = 0, cfg, maxPain = 0, spot = 0 }) {
+function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, adaptWeights, mlModels, confCalibration, regime, volRegimeShift = 0, cfg, maxPain = 0, spot = 0, oiWalls = null }) {
   const fiiInterp = fiiInterpIn || interpretFIIDII(fiiData || null);
   return picks.map(p => {
     const base = p.confidence;
@@ -152,6 +152,16 @@ function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, ad
       // lose. Unknown spread (null bid/ask from the API) never blocks.
       const maxSpread = cfg?.maxSpreadPct ?? 2.5;
       if (p.spreadPct != null && p.spreadPct > maxSpread) { pushShadow(p, `spread: ${p.spreadPct}% > ${maxSpread}%`, 'OPTION'); return false; }
+      // OI wall proximity: a bullish-underlying trade (BUY CE / SELL PE) entering just below the dominant
+      // Call OI wall, or a bearish one (BUY PE / SELL CE) just above the dominant Put OI wall, has
+      // heavy writer supply right in its path. Buffer is % of spot (0 disables).
+      const wallBuf = cfg?.oiWallBufferPct ?? 0.5;
+      if (wallBuf > 0 && oiWalls && spot > 0) {
+        const bullish = (p.type === 'CE' && p.action === 'BUY') || (p.type === 'PE' && p.action === 'SELL');
+        const cw = oiWalls.callWall, pw = oiWalls.putWall;
+        if (bullish && cw > spot && (cw - spot) / spot * 100 <= wallBuf) { pushShadow(p, `oi_wall: spot ${spot} within ${wallBuf}% under Call wall ${cw}`, 'OPTION'); return false; }
+        if (!bullish && pw > 0 && pw < spot && (spot - pw) / spot * 100 <= wallBuf) { pushShadow(p, `oi_wall: spot ${spot} within ${wallBuf}% over Put wall ${pw}`, 'OPTION'); return false; }
+      }
       const gate = evaluateSignalGate({
         type: 'OPTION', aiBlock: p.aiBlock, conf: p.confidence, rr: p.rr,
         amtRequired: p.amtRequired, mlModels, cfg, sigForThresholds: p,
@@ -255,7 +265,7 @@ export async function scanStockOptions({ inst, spot, spotChg, deps, env, expirie
 
   const stkRegime = classifyMarketRegime(Math.abs(stkCtx.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
   const stkVolRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
-  const picks = onePerIdea(scoreAndFilterPicks(allStkPicks, { fiiData, fiiInterp, adaptWeights, mlModels, confCalibration, regime: stkRegime, volRegimeShift: stkVolRegimeShift, cfg, maxPain: stkMaxPain, spot }));
+  const picks = onePerIdea(scoreAndFilterPicks(allStkPicks, { fiiData, fiiInterp, adaptWeights, mlModels, confCalibration, regime: stkRegime, volRegimeShift: stkVolRegimeShift, cfg, maxPain: stkMaxPain, spot, oiWalls: calcOIWalls(chain) }));
   // Always report the raw → final count, so a stock whose picks were all filtered out
   // (RR / capital / confidence gate) is visible in the log instead of vanishing silently.
   if (!picks.length) lg(`${inst.s}: ${allStkPicks.length} raw → 0 signals (all filtered by gate/thresholds)`, 'w');
@@ -402,7 +412,7 @@ export async function runOptionsScan(ctx, caches, callbacks) {
     // Apply FII bias + adaptive weights + ML ranking, then filter
     const idxRegime = classifyMarketRegime(Math.abs(richCtx.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
     const idxVolRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
-    const picksWithFII = onePerIdea(scoreAndFilterPicks(allIdxPicks, { fiiData, adaptWeights, mlModels, confCalibration, regime: idxRegime, volRegimeShift: idxVolRegimeShift, cfg, maxPain, spot }));
+    const picksWithFII = onePerIdea(scoreAndFilterPicks(allIdxPicks, { fiiData, adaptWeights, mlModels, confCalibration, regime: idxRegime, volRegimeShift: idxVolRegimeShift, cfg, maxPain, spot, oiWalls }));
 
     lg(`${idx.name}: ${expiriesToScan.length} expiry(s) → ${allIdxPicks.length} raw → ${picksWithFII.length} ≥${cfg.minOptConf}% | composite=${richCtx.compositeScore} pcr=${pcr}`, 'o');
     built.push({ name: idx.name, spot, spotChg, picks: picksWithFII, expiry, expiries: expiriesToScan, chain, maxPain, oiWalls, pcr, pcrTrend, ivTrend });

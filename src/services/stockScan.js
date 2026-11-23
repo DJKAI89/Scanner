@@ -29,6 +29,19 @@ export function getDeliveryPct(q) {
   return null;
 }
 
+// Sector relative-strength alignment. A long wants: stock >= its sector's average move AND sector >= Nifty
+// (mirrored for shorts). Returns a confidence penalty (<=0) and a short flag. Needs >=3 stocks in the sector
+// and known numbers, otherwise it stays neutral (never penalises on missing data).
+export function sectorRsAdj(stockChg, secAvgChg, secCount, niftyChg, isBull, cfg) {
+  const pen = cfg?.sectorRsPenalty ?? 10;
+  if (!(pen > 0) || secCount < 3 || ![stockChg, secAvgChg, niftyChg].every(Number.isFinite)) return { adj: 0, aligned: null };
+  const d = isBull ? 1 : -1;
+  const stockLeads = (stockChg - secAvgChg) * d >= 0;
+  const sectorLeads = (secAvgChg - niftyChg) * d >= 0;
+  if (stockLeads && sectorLeads) return { adj: 0, aligned: true };
+  return { adj: -(stockLeads || sectorLeads ? Math.round(pen / 2) : pen), aligned: false };
+}
+
 export function getChgPct(q) {
   if (!q) return 0;
   const ltp = q.last_price || 0;
@@ -264,9 +277,11 @@ export async function runPicksScan(ctx, callbacks) {
   const secMap = {};
   for (const item of byVol) {
     const sec = getSector(item.s);
-    if (!secMap[sec]) secMap[sec]={g:0,c:0};
+    if (!secMap[sec]) secMap[sec]={g:0,c:0,sum:0,n:0};
     if (getChgPct(item._q)>0) secMap[sec].g++;
     secMap[sec].c++;
+    const _cp = getChgPct(item._q);
+    if (Number.isFinite(_cp)) { secMap[sec].sum += _cp; secMap[sec].n++; }
   }
 
   // Multi-timeframe context for every candidate that has candle data. Fetched BEFORE scoring so the grade is
@@ -416,6 +431,10 @@ export async function runPicksScan(ctx, callbacks) {
       regimeAdj: Math.round(_regimeAdj),
       adaptAdj: Math.round(_adaptAdj), mtfAdj: _mtfAdj, mlAdj: Math.round(mlRank.mlAdj || 0), final: conf,
     };
+    // Sector RS alignment (stock vs sector vs Nifty) — soft confidence penalty when a long isn't leading.
+    const _sm = secMap[sec];
+    const _srs = sectorRsAdj(chgPct, _sm?.n ? _sm.sum/_sm.n : NaN, _sm?.n || 0, nChgPct, true, cfg);
+    if (_srs.adj) { conf = Math.max(1, conf + _srs.adj); confBreakdown.sectorRsAdj = _srs.adj; confBreakdown.final = conf; }
     let rec = getRec(conf, pot.base, risk, pot.rr);
     // Volume-climax invalidation: a >=3.5x volume spike that closes with a heavy upper
     // rejection wick is usually exhaustion, not breakout confirmation → downgrade a BUY.
@@ -508,11 +527,13 @@ export async function runPicksScan(ctx, callbacks) {
   const topSec=Object.entries(secMap).filter(([,v])=>v.c>0).sort((a,b)=>(b[1].g/b[1].c)-(a[1].g/a[1].c))[0]?.[0]||'Mixed';
   const scanId = Date.now();
   const nextPicks = finalPicks.map((pick) => ({ ...pick, _scanId: scanId }));
+  const secChgAvg = {};
+  for (const [sec, v] of Object.entries(secMap)) if (v.n > 0) secChgAvg[sec] = { avg: +(v.sum / v.n).toFixed(2), n: v.n };
   const secMapNormalized = {};
   for (const [sec, v] of Object.entries(secMap)) {
     if (v.c > 0) secMapNormalized[sec] = +(((v.g / v.c) - 0.5) * 2).toFixed(2);
   }
-  const scanStats = {pcr,pcrTxt,sent,sentSc,topSec,cnt:finalPicks.length,totalScanned:byVol.length,secMap:secMapNormalized};
+  const scanStats = {pcr,pcrTxt,sent,sentSc,topSec,cnt:finalPicks.length,totalScanned:byVol.length,secMap:secMapNormalized,secChg:secChgAvg};
 
   lg(`✅ Picks: ${finalPicks.length} from ${byVol.length} stocks`,'o');
   if (!finalPicks.length) lg(`⚠ 0 picks — lower Conf(${cfg.minStockConf}%)/Pot(${cfg.pot}%)/Risk(${cfg.risk}%) in ⚙ Settings`,'w');
@@ -689,7 +710,11 @@ export async function runBreakoutScan(ctx, callbacks) {
       :pdhl?.bullBreakout?'PDH_BREAK':pdhl?.bearBreakout?'PDL_BREAK'
       :st?.crossed?(st.trend==='UP'?'ST_CROSS_UP':'ST_CROSS_DOWN'):'GENERIC';
     const boRec = isBull?(score>=7?'STRONG BUY':'BUY'):(score>=7?'SELL':'WATCH');
-    const boBaseConf = applyConfluenceAdjustment(applyRegimeAdjustment(Math.min(95,score*10), marketRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties), boConfluence, cfg);
+    const _boSec = scanStats?.secChg?.[item.sec] ?? scanStats?.secChg?.[getSector(item.s)];
+    const _boNiftyChg = Number.isFinite(ctx.niftyChgPct) ? ctx.niftyChgPct
+      : (niftyCloses.length >= 2 ? (niftyCloses.at(-1) - niftyCloses.at(-2)) / niftyCloses.at(-2) * 100 : NaN);
+    const _boSrs = sectorRsAdj(secChgPct, _boSec?.avg, _boSec?.n || 0, _boNiftyChg, isBull, cfg);
+    const boBaseConf = Math.max(1, applyConfluenceAdjustment(applyRegimeAdjustment(Math.min(95,score*10), marketRegime, cfg, mlModels?.thresholds?.stock?.regimePenalties), boConfluence, cfg) + _boSrs.adj);
     // Previously this pipeline stopped at heuristic regime+confluence
     // adjustment — no ML probability, no learned threshold, no aiBlock veto,
     // unlike the main Stocks scan. A breakout pick's confidence came from a
