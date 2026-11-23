@@ -587,7 +587,7 @@ export default function SettingsPane() {
         </div>
 
         {/* ── Multi-timeframe data check ── */}
-        <MtfDiagnostics />
+        <div hidden={sec !== 'data'}><MtfDiagnostics /></div>
 
         {/* ── Stock Universe ── */}
         <div className="setting-card" data-sec="data" hidden={sec !== 'data'}>
