@@ -1,8 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import MtfPanel, { GradePill } from '../components/MtfPanel.jsx';
 import { Spinner, ErrorBanner, StatCard, EmptyState } from '../components/common.jsx';
 import ScanProgress from '../components/ScanProgress';
+import FundamentalsTab from '../components/FundamentalsTab.jsx';
+import StockOptionsTab from '../components/StockOptionsTab.jsx';
 import LiveChart from '../components/LiveChart';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import { lookupInstrument } from '../services/lookupService';
@@ -246,6 +248,9 @@ export default function LookupPane() {
   const [ddOpen, setDdOpen] = useState(false);
   const [ddItems, setDdItems] = useState([]);
   const [chartOpen, setChartOpen] = useState(false);
+  const [tab, setTab] = useState('overview');
+  // True right after a stock is picked, so the suggestion list stays closed once analysis starts
+  const ddSuppress = useRef(false);
 
   const activeKey = result?.inst?.key ? [result.inst.key] : [];
 
@@ -269,6 +274,7 @@ export default function LookupPane() {
       setDdOpen(false);
       return;
     }
+    if (ddSuppress.current) { ddSuppress.current = false; setDdItems([]); setDdOpen(false); return; }
     const q = sym.toUpperCase();
     const matches = (stocks || []).filter((s) => s.s.startsWith(q) || s.n?.toUpperCase().includes(q)).slice(0, 12);
     setDdItems(matches);
@@ -300,8 +306,11 @@ export default function LookupPane() {
     const s = (symbol || sym).trim().toUpperCase();
     if (!s) return;
 
+    ddSuppress.current = true;
     setSym(s);
     setDdOpen(false);
+    setDdItems([]);
+    setTab('overview');
     setLoading(true);
     setError('');
     setResult(null);
@@ -333,14 +342,14 @@ export default function LookupPane() {
           <input
             type="text"
             value={sym}
-            onChange={(e) => setSym(e.target.value.toUpperCase())}
+            onChange={(e) => { ddSuppress.current = false; setSym(e.target.value.toUpperCase()); }}
             onKeyDown={(e) => { if (e.key === 'Enter') lookup(); if (e.key === 'Escape') setDdOpen(false); }}
             placeholder="Symbol e.g. RELIANCE, HDFCBANK..."
             style={{ width:'100%', border:'1.5px solid #e2e8f0', borderRadius:8, padding:'9px 12px', fontSize:13, outline:'none' }}
             onFocus={(e) => { e.target.style.borderColor = '#16a34a'; }}
             onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; setTimeout(() => setDdOpen(false), 200); }}
           />
-          {ddOpen && ddItems.length > 0 && (
+          {ddOpen && !loading && ddItems.length > 0 && (
             <div className="lkp-dd open">
               {ddItems.map((item) => (
                 <div key={item.s} className="lkp-dd-item" onMouseDown={() => lookup(item.s)}>
@@ -411,6 +420,14 @@ export default function LookupPane() {
             )}
           </div>
 
+          {/* Tabs */}
+          <div className="tabs-row" role="tablist">
+            {[['overview', 'Overview'], ['fundamentals', 'Fundamentals'], ['options', 'Options']].map(([id, lbl]) => (
+              <button key={id} role="tab" aria-selected={tab === id} className={'tab-btn' + (tab === id ? ' on' : '')} onClick={() => setTab(id)}>{lbl}</button>
+            ))}
+          </div>
+
+          {tab === 'overview' && (<>
           {/* Recommendation banner */}
           {r.tech?.rec && (
             <div style={{
@@ -517,6 +534,14 @@ export default function LookupPane() {
             </SectionCard>
           )}
 
+          </>)}
+
+          {tab === 'fundamentals' && <FundamentalsTab key={r.inst?.key} inst={r.inst} />}
+
+          {tab === 'options' && (<>
+          {r.foData && !r.foData.unsupported && !r.foData.empty && !r.foData.error && (
+            <StockOptionsTab key={r.inst?.key} inst={r.inst} ltp={r.ltp} chgPct={r.chgPct} chgPts={r.chgPts} foChain={r.foData.chain} />
+          )}
           {r.foData && !r.foData.error && (
             <SectionCard
               title={r.foData.unsupported
@@ -599,6 +624,7 @@ export default function LookupPane() {
           {r.foData?.error && (
             <Banner tone="red" icon="⛔" title="Options error" detail={r.foData.error} />
           )}
+          </>)}
 
           <FooterNote>Analysis for educational purposes only. Not SEBI-registered advice. Always DYODD.</FooterNote>
         </div>
