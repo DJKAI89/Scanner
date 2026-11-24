@@ -342,7 +342,7 @@ export async function lookupInstrument(ctx, callbacks) {
             lg('Multi-expiry: ' + e.message, 'w');
           }
         }
-        foData = { chain, picks: r.picks, maxPain, oiWalls, pcr, expiry, nextExp, atm, multiExpiry };
+        foData = { chain, picks: r.picks, maxPain, oiWalls, pcr, expiry, nextExp, atm, multiExpiry, stkCtx: r.stkCtx, niftyBull, vixVal: vixVal > 0 ? vixVal : 15 };
       }
     }
   } catch (e) {
