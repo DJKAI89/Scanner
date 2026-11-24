@@ -540,7 +540,8 @@ export default function LookupPane() {
 
           {tab === 'options' && (<>
           {r.foData && !r.foData.unsupported && !r.foData.empty && !r.foData.error && (
-            <StockOptionsTab key={r.inst?.key} inst={r.inst} ltp={r.ltp} chgPct={r.chgPct} chgPts={r.chgPts} foChain={r.foData.chain} />
+            <StockOptionsTab key={r.inst?.key} inst={r.inst} ltp={r.ltp} chgPct={r.chgPct} chgPts={r.chgPts} foChain={r.foData.chain} picks={r.foData.picks}
+              foCtx={{ stkCtx: r.foData.stkCtx, niftyBull: r.foData.niftyBull, vixVal: r.foData.vixVal }} />
           )}
           {r.foData && !r.foData.error && (
             <SectionCard
