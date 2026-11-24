@@ -104,7 +104,9 @@ export function onePerIdea(picks) {
   return [...[...best.values()].map((x) => x.p), ...rest];
 }
 
-function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, adaptWeights, mlModels, confCalibration, regime, volRegimeShift = 0, cfg, maxPain = 0, spot = 0, oiWalls = null }) {
+// Confidence pipeline shared by the Options page, the Analyse Stock suggestions and the Analyse Stock
+// option grid: calibration -> regime -> learned weights -> ML ranking. Does NOT gate/filter.
+export function scoreOptionPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, adaptWeights, mlModels, confCalibration, regime, volRegimeShift = 0, cfg, maxPain = 0, spot = 0, oiWalls = null }) {
   const fiiInterp = fiiInterpIn || interpretFIIDII(fiiData || null);
   return picks.map(p => {
     const base = p.confidence;
@@ -139,7 +141,12 @@ function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, ad
       aiBlock: mlRank.aiBlock,
       aiModel: mlRank.mlSegment,
     };
-  }).filter(p =>
+  });
+}
+
+function scoreAndFilterPicks(picks, opts) {
+  const { mlModels, cfg, spot = 0, oiWalls = null } = opts;
+  return scoreOptionPicks(picks, opts).filter(p =>
     // Shared gate (mlRanking.evaluateSignalGate) — aiBlock veto, index-vs-stock
     // subtype threshold resolution, RR floor, and the capital ceiling (which
     // only ever tightens past Settings' Max Capital, never loosens it) all
@@ -270,6 +277,23 @@ export async function scanStockOptions({ inst, spot, spotChg, deps, env, expirie
   // (RR / capital / confidence gate) is visible in the log instead of vanishing silently.
   if (!picks.length) lg(`${inst.s}: ${allStkPicks.length} raw → 0 signals (all filtered by gate/thresholds)`, 'w');
   return { ok:true, picks, rawCount: allStkPicks.length, expiry, expiries: expiriesToScan, allExpiries, chain, maxPain: stkMaxPain, pcr, ivTrend, atm, stkCtx };
+}
+
+// Final (Options-page) confidence for EVERY strike of one chain, for the Analyse Stock option grid.
+// Same scanChain -> scoreOptionPicks path the Options page uses; only the gates (min signals, min OI,
+// consolidation, RR/capital/AI block) are skipped so each strike gets a number.
+// Returns Map keyed "strike|CE" / "strike|PE" -> scored pick.
+export function scoreChainForGrid({ chain, atm, spot, name, expiry, lot, maxPain, pcr, stkCtx, env, deps }) {
+  const { niftyBull, vixVal } = env;
+  const { fiiData = null, fiiInterp = null, adaptWeights, mlModels, confCalibration, cfg: cfgIn, vixHistorySeries } = deps;
+  const cfg = { ...effectiveOptionCfg(cfgIn, mlModels), includeAll: true };
+  const raw = scanChain(chain, atm, spot, name, expiry, lot, niftyBull, vixVal, maxPain, pcr, stkCtx, cfg);
+  const regime = classifyMarketRegime(Math.abs(stkCtx?.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
+  const volRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
+  const scored = scoreOptionPicks(raw, { fiiData, fiiInterp, adaptWeights, mlModels, confCalibration, regime, volRegimeShift, cfg, maxPain, spot });
+  const out = new Map();
+  for (const p of scored) out.set(`${p.strike}|${p.type}`, p);
+  return out;
 }
 
 export async function runOptionsScan(ctx, caches, callbacks) {
