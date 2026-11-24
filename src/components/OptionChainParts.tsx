@@ -35,7 +35,7 @@ export function fmtOI(v) {
   if (v >= 1e3) return Math.round(v / 1e3) + 'K';
   return String(Math.round(v));
 }
-const signed = (n, d = 1) => (n >= 0 ? '+' : '') + n.toFixed(d);
+const signed = (n, d = 1) => { const v = Number.isFinite(Number(n)) ? Number(n) : 0; return (v >= 0 ? '+' : '') + v.toFixed(d); };
 
 // "Favourable" = the build-up direction helps this option's holder (matches the scan's OI_BONUS)
 const BUILD_TAG = {
@@ -150,7 +150,7 @@ export function SnapshotCard({ s, filter, accent, spot, spotPts, spotChg, vix, v
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5 }}>
           <span style={{ fontSize: 10, fontWeight: 800, padding: '3px 9px', borderRadius: 20, background: vix < 16 ? '#f0fdf4' : vix > 22 ? '#fef2f2' : '#fffbeb', color: vix < 16 ? GREEN : vix > 22 ? RED : AMBER }}>
-            VIX {vix.toFixed(2)} · {vixTxt}
+            VIX {(Number(vix) || 0).toFixed(2)} · {vixTxt}
           </span>
           <span style={{ fontSize: 10, fontWeight: 800, color: wsMode === 'ws' ? GREEN : AMBER }}>
             ● {wsMode === 'ws' ? 'LIVE' : wsMode === 'poll' ? 'POLLING' : wsMode === 'static' ? 'SNAPSHOT' : '...'}{wsMode === 'static' ? '' : ` · ${feedCount} strikes`}
@@ -160,7 +160,7 @@ export function SnapshotCard({ s, filter, accent, spot, spotPts, spotChg, vix, v
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 7, marginTop: 12 }}>
-        <Tile label="PCR" value={s.pcr.toFixed(2)} sub={s.pcrLabel} color={pcrColor} />
+        <Tile label="PCR" value={(Number(s.pcr) || 0).toFixed(2)} sub={s.pcrLabel} color={pcrColor} />
         <Tile label="Max Pain" value={fmt(s.maxPain, 0)} sub={`${signed(s.maxPainDistPct, 2)}% vs spot`} color="#7c3aed" />
         <Tile label="ATM IV" value={s.atmIv ? s.atmIv + '%' : '—'} sub={s.skewLabel + (s.skew != null ? ` ${signed(s.skew)}` : '')} color={skewColor} />
         <Tile label="Resistance" value={fmt(s.callWall, 0)} sub={`${signed(s.callWallDistPct, 2)}% · ${fmtOI(s.callWallOI)}`} color={RED} />

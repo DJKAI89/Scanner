@@ -21,7 +21,10 @@ function strikeStep(chainRaw, spot) {
 const nearestStrike = (rows, spot) => rows.reduce((a, r) => (Math.abs(r.strike - spot) < Math.abs(a - spot) ? r.strike : a), rows[0]?.strike || 0);
 
 /** Full option chain with per-strike confidence for the analysed stock (same engine as the Option Analysis page). */
-export default function StockOptionsTab({ inst, ltp, chgPct, chgPts, foChain }) {
+const n0 = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+
+export default function StockOptionsTab({ inst, ltp: ltpIn, chgPct: chgPctIn, chgPts: chgPtsIn, foChain }) {
+  const ltp = n0(ltpIn), chgPct = n0(chgPctIn), chgPts = n0(chgPtsIn);
   const { token, cfg: cfgBase, mlModels, lg, onTokenExpired } = useApp();
   const accessToken = resolveAccessToken(token);
   const cfg = effectiveOptionCfg(cfgBase, mlModels);
@@ -84,7 +87,7 @@ export default function StockOptionsTab({ inst, ltp, chgPct, chgPts, foChain }) 
   return (
     <div>
       {error && <ErrorBanner title="Option chain error" message={error} onRetry={() => switchExpiry(expiry)} />}
-      <SnapshotCard s={summary} filter={inst.s} accent={ACCENT} spot={spot} spotPts={chgPts ?? 0} spotChg={chgPct ?? 0}
+      <SnapshotCard s={summary} filter={inst.s} accent={ACCENT} spot={spot} spotPts={chgPts} spotChg={chgPct}
         vix={vix} vixTxt={interpVIX(vix).txt} wsMode="static" feedCount={shownRows.length} />
       {upd && <div className="m" style={{ margin: '0 0 8px' }}>{upd}</div>}
       <div style={{ display: 'flex', gap: 6, marginBottom: 10, overflowX: 'auto', paddingBottom: 2 }}>
