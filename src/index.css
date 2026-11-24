@@ -357,22 +357,12 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#f1f5f9;color:#0f172
 .cb-s,.ts-s,.bar-val,.ind,.ind-pill,.c-rank,.c-rec,.nav-badge,.logo-sub,.nav-logo-sub,.nav-footer,.last-upd,.sc-note{font-size:max(10px,var(--fs-xs))!important}
 
 @media(min-width:1024px){
-  /* Persistent sidebar replaces the slide-out drawer; hamburger hidden */
+  /* Sidebar: fixed to the top-left corner, full height. Header, ticker and
+     index strip start to its right (body is shifted by the sidebar width). */
+  body:has(.nav-drawer){padding-left:260px}
   .menu-btn{display:none}
-  .app-body{display:flex;align-items:flex-start}
-  .app-main{flex:1;min-width:0}
-  .nav-overlay{display:none}
-  .nav-drawer{position:sticky;top:56px;left:auto;transform:none;width:200px;max-width:none;height:calc(100vh - 56px);flex-shrink:0;z-index:50;box-shadow:none;border-right:1px solid #e2e8f0;transition:none}
-  .nav-drawer{width:210px}
-  .nav-hdr{padding:10px 12px;gap:8px;background:#f8fafc}
-  .nav-logo-ic{width:30px;height:30px;border-radius:8px}
-  .nav-logo-ic span{font-size:13px}
-  .nav-logo-txt{font-size:12px;line-height:1.25;max-width:140px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-  .nav-logo-sub{letter-spacing:.3px;white-space:nowrap;font-size:10px}
-  .nav-mkt{display:none}
-  .nav-items{padding:6px 0}
-  .nav-item{padding:9px 14px;font-size:13px;gap:10px}
-  .nav-item .nav-icon{font-size:15px;width:20px}
+  .nav-overlay{display:none!important}
+  .nav-drawer{position:fixed;top:0;left:0;transform:none;width:260px;max-width:none;height:100dvh;z-index:300;box-shadow:none;border-right:1px solid #e2e8f0;transition:none}
   .pane{max-width:1500px}
 
   /* Detail popups become a right-hand side panel */
