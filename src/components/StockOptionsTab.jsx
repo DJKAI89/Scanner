@@ -5,7 +5,7 @@ import { resolveAccessToken } from '../services/api';
 import { interpVIX } from '../utils/formatters';
 import { getIST } from '../utils/marketTime';
 import { loadOptionMeta, loadChainForExpiry, selectStrikesAroundATM, summarizeChain } from '../services/optionAnalysisService';
-import { effectiveOptionCfg } from '../services/optionScan';
+import { effectiveOptionCfg, scoreChainForGrid } from '../services/optionScan';
 import { SnapshotCard, ChainSection, expiryLabel } from './OptionChainParts';
 
 const PAGE_SIZE = 20;
@@ -23,9 +23,9 @@ const nearestStrike = (rows, spot) => rows.reduce((a, r) => (Math.abs(r.strike -
 /** Full option chain with per-strike confidence for the analysed stock (same engine as the Option Analysis page). */
 const n0 = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-export default function StockOptionsTab({ inst, ltp: ltpIn, chgPct: chgPctIn, chgPts: chgPtsIn, foChain, picks = [], foCtx = null }) {
+export default function StockOptionsTab({ inst, ltp: ltpIn, chgPct: chgPctIn, chgPts: chgPtsIn, foChain, foCtx = null }) {
   const ltp = n0(ltpIn), chgPct = n0(chgPctIn), chgPts = n0(chgPtsIn);
-  const { token, cfg: cfgBase, mlModels, lg, onTokenExpired } = useApp();
+  const { token, cfg: cfgBase, mlModels, lg, onTokenExpired, fiiData, fiiInterp, adaptWeights, confCalibration, vixHistorySeries } = useApp();
   const accessToken = resolveAccessToken(token);
   const cfg = effectiveOptionCfg(cfgBase, mlModels);
 
@@ -45,21 +45,33 @@ export default function StockOptionsTab({ inst, ltp: ltpIn, chgPct: chgPctIn, ch
     () => ({ token: accessToken, indexKey: inst.key, step, lot: inst.lot || 1, cfg, onTokenExpired, lg }),
     [accessToken, inst.key, inst.lot, step, cfg, onTokenExpired, lg]
   );
-  // Strikes that also appear in the Options Suggestions list show that list's final confidence,
-  // so the same contract never carries two different numbers on this page.
-  const withAtm = (c, spot) => {
+  // Every strike gets the SAME final confidence the Options page / Options Suggestions use
+  // (scanChain -> calibration -> regime -> learned weights -> ML ranking), computed with the same
+  // market context (NIFTY bias, real VIX, the stock's daily/MTF context).
+  const withAtm = (c, spot, m) => {
+    const nearest = nearestStrike(c.rows, spot);
+    let scored = new Map();
+    try {
+      scored = scoreChainForGrid({
+        chain: c.chain, atm: nearest, spot, name: inst.s, expiry: c.expiry, lot: inst.lot || 1,
+        maxPain: c.maxPain, pcr: c.pcr, stkCtx: foCtx?.stkCtx || m.marketCtx,
+        env: { niftyBull: foCtx?.niftyBull ?? m.niftyBullish, vixVal: foCtx?.vixVal || m.vixVal },
+        deps: { fiiData, fiiInterp, adaptWeights, mlModels, confCalibration, cfg: cfgBase, vixHistorySeries },
+      });
+    } catch (e) { lg('Option grid scoring failed: ' + e.message, 'w'); }
     const rows = c.rows.map((row) => {
       let next = row;
       for (const side of ['CE', 'PE']) {
-        const pick = picks.find((p) => p.expiry === c.expiry && p.strike === row.strike && p.type === side);
-        if (pick && row[side] && typeof pick.confidence === 'number') {
+        const p = scored.get(`${row.strike}|${side}`);
+        if (p && row[side] && typeof p.confidence === 'number') {
           if (next === row) next = { ...row };
-          next[side] = { ...row[side], confidence: pick.confidence, baseConfidence: pick.confidence, fromPick: true };
+          next[side] = { ...row[side], confidence: p.confidence, baseConfidence: p.confBreakdown?.base ?? p.confidence,
+            ...(p.oiBuildType ? { oiBuildType: p.oiBuildType, oiBuildBonus: p.oiBuildBonus ?? 0 } : {}) };
         }
       }
       return next;
     });
-    return { ...c, rows, atm: nearestStrike(rows, spot) };
+    return { ...c, rows, atm: nearest };
   };
 
   const load = useCallback(async () => {
@@ -78,7 +90,7 @@ export default function StockOptionsTab({ inst, ltp: ltpIn, chgPct: chgPctIn, ch
       const e0 = m.expiryList[0];
       setExpiry(e0);
       setProgress(`Fetching chain (${e0})...`);
-      setChain(withAtm(await loadChainForExpiry(ctx, e0, m), m.spot));
+      setChain(withAtm(await loadChainForExpiry(ctx, e0, m), m.spot, m));
       setUpd('Updated: ' + getIST());
     } catch (e) {
       setError(e.message); lg('Stock options tab: ' + e.message, 'e');
@@ -91,7 +103,7 @@ export default function StockOptionsTab({ inst, ltp: ltpIn, chgPct: chgPctIn, ch
     if (!meta || next === expiry) return;
     setExpiry(next); setChainLoading(true); setError(''); setVisible(PAGE_SIZE);
     try {
-      setChain(withAtm(await loadChainForExpiry(ctx, next, meta), meta.spot));
+      setChain(withAtm(await loadChainForExpiry(ctx, next, meta), meta.spot, meta));
       setUpd('Updated: ' + getIST());
     } catch (e) { setError(e.message); } finally { setChainLoading(false); }
   };
