@@ -345,3 +345,14 @@ export async function fetchMarketStatus(token) {
   } catch (e) { /* fallback */ }
   return null;
 }
+
+// ── Fundamentals (Upstox /v2/fundamentals/:isin/<endpoint>) ──
+// endpoint: profile | key-ratios | share-holdings | income-statement | balance-sheet | cash-flow | ...
+export async function fetchFundamental(isin, endpoint, token, onTokenExpired, query = '') {
+  const d = await withRetry(
+    () => apiGet(`/v2/fundamentals/${encodeURIComponent(isin)}/${endpoint}${query}`, token, onTokenExpired),
+    'fundamentals-' + endpoint,
+    1
+  );
+  return d?.data ?? null;
+}
