@@ -23,7 +23,7 @@ const nearestStrike = (rows, spot) => rows.reduce((a, r) => (Math.abs(r.strike -
 /** Full option chain with per-strike confidence for the analysed stock (same engine as the Option Analysis page). */
 const n0 = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-export default function StockOptionsTab({ inst, ltp: ltpIn, chgPct: chgPctIn, chgPts: chgPtsIn, foChain }) {
+export default function StockOptionsTab({ inst, ltp: ltpIn, chgPct: chgPctIn, chgPts: chgPtsIn, foChain, picks = [], foCtx = null }) {
   const ltp = n0(ltpIn), chgPct = n0(chgPctIn), chgPts = n0(chgPtsIn);
   const { token, cfg: cfgBase, mlModels, lg, onTokenExpired } = useApp();
   const accessToken = resolveAccessToken(token);
@@ -45,12 +45,35 @@ export default function StockOptionsTab({ inst, ltp: ltpIn, chgPct: chgPctIn, ch
     () => ({ token: accessToken, indexKey: inst.key, step, lot: inst.lot || 1, cfg, onTokenExpired, lg }),
     [accessToken, inst.key, inst.lot, step, cfg, onTokenExpired, lg]
   );
-  const withAtm = (c, spot) => ({ ...c, atm: nearestStrike(c.rows, spot) });
+  // Strikes that also appear in the Options Suggestions list show that list's final confidence,
+  // so the same contract never carries two different numbers on this page.
+  const withAtm = (c, spot) => {
+    const rows = c.rows.map((row) => {
+      let next = row;
+      for (const side of ['CE', 'PE']) {
+        const pick = picks.find((p) => p.expiry === c.expiry && p.strike === row.strike && p.type === side);
+        if (pick && row[side] && typeof pick.confidence === 'number') {
+          if (next === row) next = { ...row };
+          next[side] = { ...row[side], confidence: pick.confidence, baseConfidence: pick.confidence, fromPick: true };
+        }
+      }
+      return next;
+    });
+    return { ...c, rows, atm: nearestStrike(rows, spot) };
+  };
 
   const load = useCallback(async () => {
     setLoading(true); setError(''); setChain(null); setMeta(null); setVisible(PAGE_SIZE);
     try {
-      const m = await loadOptionMeta(ctx, { setProgress });
+      const m0 = await loadOptionMeta(ctx, { setProgress });
+      // Score the grid with the same market context the Options Suggestions use
+      // (NIFTY bias, real VIX, the stock's daily/MTF context) instead of the stock's own day-change.
+      const m = foCtx ? {
+        ...m0,
+        marketCtx: foCtx.stkCtx || m0.marketCtx,
+        niftyBullish: foCtx.niftyBull ?? m0.niftyBullish,
+        vixVal: foCtx.vixVal || m0.vixVal,
+      } : m0;
       setMeta(m);
       const e0 = m.expiryList[0];
       setExpiry(e0);
