@@ -153,7 +153,7 @@ export function SnapshotCard({ s, filter, accent, spot, spotPts, spotChg, vix, v
             VIX {vix.toFixed(2)} · {vixTxt}
           </span>
           <span style={{ fontSize: 10, fontWeight: 800, color: wsMode === 'ws' ? GREEN : AMBER }}>
-            ● {wsMode === 'ws' ? 'LIVE' : wsMode === 'poll' ? 'POLLING' : '...'} · {feedCount} strikes
+            ● {wsMode === 'ws' ? 'LIVE' : wsMode === 'poll' ? 'POLLING' : wsMode === 'static' ? 'SNAPSHOT' : '...'}{wsMode === 'static' ? '' : ` · ${feedCount} strikes`}
           </span>
           {s.dte != null && <span style={{ fontSize: 10, fontWeight: 700, color: SLATE }}>{s.dte === 0 ? 'Expires today' : `${s.dte}d to expiry`}</span>}
         </div>

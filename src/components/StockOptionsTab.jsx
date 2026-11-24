@@ -1,0 +1,113 @@
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useApp } from '../context/AppContext';
+import { Spinner, ErrorBanner } from './common.jsx';
+import { resolveAccessToken } from '../services/api';
+import { interpVIX } from '../utils/formatters';
+import { getIST } from '../utils/marketTime';
+import { loadOptionMeta, loadChainForExpiry, selectStrikesAroundATM, summarizeChain } from '../services/optionAnalysisService';
+import { effectiveOptionCfg } from '../services/optionScan';
+import { SnapshotCard, ChainSection, expiryLabel } from './OptionChainParts';
+
+const PAGE_SIZE = 20;
+const ACCENT = '#d97706';
+
+// Smallest gap between listed strikes — used to find the ATM row for this stock.
+function strikeStep(chainRaw, spot) {
+  const s = [...new Set((chainRaw || []).map((x) => x.strike_price).filter((n) => n > 0))].sort((a, b) => a - b);
+  let step = Infinity;
+  for (let i = 1; i < s.length; i++) step = Math.min(step, s[i] - s[i - 1]);
+  return Number.isFinite(step) && step > 0 ? step : Math.max(0.05, Math.round(spot * 0.01));
+}
+const nearestStrike = (rows, spot) => rows.reduce((a, r) => (Math.abs(r.strike - spot) < Math.abs(a - spot) ? r.strike : a), rows[0]?.strike || 0);
+
+/** Full option chain with per-strike confidence for the analysed stock (same engine as the Option Analysis page). */
+export default function StockOptionsTab({ inst, ltp, chgPct, chgPts, foChain }) {
+  const { token, cfg: cfgBase, mlModels, lg, onTokenExpired } = useApp();
+  const accessToken = resolveAccessToken(token);
+  const cfg = effectiveOptionCfg(cfgBase, mlModels);
+
+  const [loading, setLoading] = useState(true);
+  const [chainLoading, setChainLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [progress, setProgress] = useState('');
+  const [meta, setMeta] = useState(null);
+  const [chain, setChain] = useState(null);
+  const [expiry, setExpiry] = useState('');
+  const [visible, setVisible] = useState(PAGE_SIZE);
+  const [upd, setUpd] = useState('');
+
+  const spot0 = ltp || 0;
+  const step = useMemo(() => strikeStep(foChain, spot0), [foChain, spot0]);
+  const ctx = useMemo(
+    () => ({ token: accessToken, indexKey: inst.key, step, lot: inst.lot || 1, cfg, onTokenExpired, lg }),
+    [accessToken, inst.key, inst.lot, step, cfg, onTokenExpired, lg]
+  );
+  const withAtm = (c, spot) => ({ ...c, atm: nearestStrike(c.rows, spot) });
+
+  const load = useCallback(async () => {
+    setLoading(true); setError(''); setChain(null); setMeta(null); setVisible(PAGE_SIZE);
+    try {
+      const m = await loadOptionMeta(ctx, { setProgress });
+      setMeta(m);
+      const e0 = m.expiryList[0];
+      setExpiry(e0);
+      setProgress(`Fetching chain (${e0})...`);
+      setChain(withAtm(await loadChainForExpiry(ctx, e0, m), m.spot));
+      setUpd('Updated: ' + getIST());
+    } catch (e) {
+      setError(e.message); lg('Stock options tab: ' + e.message, 'e');
+    } finally { setLoading(false); }
+  }, [ctx, lg]); // eslint-disable-line
+
+  useEffect(() => { if (accessToken && inst?.key) load(); }, [inst?.key, accessToken]); // eslint-disable-line
+
+  const switchExpiry = async (next) => {
+    if (!meta || next === expiry) return;
+    setExpiry(next); setChainLoading(true); setError(''); setVisible(PAGE_SIZE);
+    try {
+      setChain(withAtm(await loadChainForExpiry(ctx, next, meta), meta.spot));
+      setUpd('Updated: ' + getIST());
+    } catch (e) { setError(e.message); } finally { setChainLoading(false); }
+  };
+
+  const spot = ltp || meta?.spot || 0;
+  const shownRows = useMemo(() => selectStrikesAroundATM(chain?.rows || [], chain?.atm, visible), [chain, visible]);
+  const summary = useMemo(() => summarizeChain(chain, spot, chain?.rows || []), [chain, spot]);
+  const walls = summary ? { callWall: summary.callWall, putWall: summary.putWall, maxPain: summary.maxPain } : null;
+  const maxOi = summary ? Math.max(summary.callWallOI || 0, summary.putWallOI || 0) : 0;
+  const vix = meta?.vixVal || 0;
+
+  if (loading) return <Spinner label={progress || 'Loading option chain...'} />;
+  if (error && !chain) return <ErrorBanner title="Option chain error" message={error} onRetry={load} />;
+  if (!meta || !chain) return null;
+
+  return (
+    <div>
+      {error && <ErrorBanner title="Option chain error" message={error} onRetry={() => switchExpiry(expiry)} />}
+      <SnapshotCard s={summary} filter={inst.s} accent={ACCENT} spot={spot} spotPts={chgPts ?? 0} spotChg={chgPct ?? 0}
+        vix={vix} vixTxt={interpVIX(vix).txt} wsMode="static" feedCount={shownRows.length} />
+      {upd && <div className="m" style={{ margin: '0 0 8px' }}>{upd}</div>}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 10, overflowX: 'auto', paddingBottom: 2 }}>
+        {meta.expiryList.map((e) => {
+          const { date, dte } = expiryLabel(e);
+          const on = expiry === e;
+          return (
+            <button key={e} onClick={() => switchExpiry(e)} disabled={chainLoading} style={{
+              whiteSpace: 'nowrap', padding: '6px 12px', borderRadius: 20, lineHeight: 1.25, cursor: chainLoading ? 'default' : 'pointer',
+              border: on ? 'none' : '1px solid #e2e8f0', background: on ? ACCENT : '#fff', color: on ? '#fff' : '#374151',
+              opacity: chainLoading && !on ? 0.5 : 1,
+            }}>
+              <span style={{ fontSize: 12, fontWeight: 800 }}>{date}</span>
+              <span style={{ fontSize: 11, fontWeight: 700, opacity: 0.85, marginLeft: 5 }}>{dte === 0 ? 'today' : dte + 'd'}</span>
+            </button>
+          );
+        })}
+      </div>
+      {chainLoading ? <Spinner label={`Loading ${expiry}...`} /> : (
+        <ChainSection chain={chain} shownRows={shownRows} totalStrikes={chain.rows.length} spot={spot}
+          accentColor={ACCENT} walls={walls} maxOi={maxOi} onLoadMore={() => setVisible((v) => v + PAGE_SIZE)} />
+      )}
+      <div className="disc">⚠ Strike confidence uses the same model as the Option Analysis page. Prices and OI are a snapshot from the last load, not live. Margin = lot size × LTP.</div>
+    </div>
+  );
+}
