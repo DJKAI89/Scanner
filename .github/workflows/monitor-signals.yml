@@ -5,9 +5,9 @@ on:
   # routinely delayed or skipped (often leaving only a couple per day). Kept only as
   # a fallback. The reliable cadence comes from an external scheduler calling the
   # workflow_dispatch API every 15 minutes — see the setup notes.
-  schedule:
-    - cron: '*/15 10-14 * * 1-5'
-      timezone: "Asia/Kolkata"
+   # schedule:
+     # - cron: '*/15 10-14 * * 1-5'
+       # timezone: "Asia/Kolkata"
   workflow_dispatch: {}
 
 # Only one monitor run at a time. If an external trigger fires while a run is still
