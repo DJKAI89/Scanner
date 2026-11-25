@@ -2,8 +2,8 @@ name: AI Retrain
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "45 12 * * 1-5"
+   # schedule:
+     # - cron: "45 12 * * 1-5"
 
 jobs:
   retrain:
