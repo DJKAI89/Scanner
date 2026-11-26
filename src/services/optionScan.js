@@ -6,7 +6,7 @@ import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api.js';
 import { getIST, sleep, getISTDate, istDaysAgo } from '../utils/marketTime.js';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config.js';
 import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, buildOptionConfluence, buildOptionIndSnap, candleOrder, interpretFIIDII, computeVixPercentile, vixRegimeShiftScore } from './technical.js';
-import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
+import { applyMlRanking, evaluateSignalGate, limitLearnedAdj } from './mlRanking.js';
 import { pushShadow, drainShadow } from './shadowLog.js';
 import { getMtf, gradeMtf } from './mtf.js';
 import { logSignals, logShadowSignals, buildOptionSignal } from './github.js';
@@ -122,20 +122,27 @@ export function scoreOptionPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null
     const indSnap = buildOptionIndSnap(p, confluence, fiiInterp, isBuyLean);
     c = applyAdaptWeights(c, adaptWeights?.option || null, indSnap);
     const adaptAdj = c - prev;
-    const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, regime, volRegimeShift, _indSnap: indSnap });
-    const finalConf = Math.min(99, Math.max(1, Math.round(mlRank.confidence)));
+    const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, regime, volRegimeShift, _indSnap: indSnap, maxPain, spot: p.spot ?? spot });
+    // Calibration + regime + learned weights + ML all learn from the same outcomes; cap their combined
+    // effect so they cannot stack into a runaway swing. The capped amount is taken out of mlAdj so
+    // the logged (confidence - mlAdj) still equals the pre-ML value the model trains on.
+    const learnedRaw = mlRank.confidence - base;
+    const capDelta = limitLearnedAdj(learnedRaw) - learnedRaw;
+    const mlAdjEff = (mlRank.mlAdj || 0) + capDelta;
+    const finalConf = Math.min(99, Math.max(1, Math.round(mlRank.confidence + capDelta)));
     return {
       ...p,
       confidence: finalConf,
       regime,
       volRegimeShift,
       confluence,
-      confBreakdown: { base, calAdj, regimeAdj, adaptAdj, mlAdj: mlRank.mlAdj, final: finalConf },
+      confBreakdown: { base, calAdj, regimeAdj, adaptAdj, mlAdj: mlAdjEff, learnedCapped: capDelta !== 0, final: finalConf },
+      maxPain: maxPain > 0 ? maxPain : null,
       _indSnap: indSnap,
       _dte: p._dte ?? null,
       nearMaxPain: maxPain > 0 && spot > 0 && Math.abs(p.strike - maxPain) / spot < 0.01,
       mlProbability: mlRank.mlProbability,
-      mlAdj: mlRank.mlAdj,
+      mlAdj: mlAdjEff,
       mlSegment: mlRank.mlSegment,
       mlExplain: mlRank.explanation,
       aiBlock: mlRank.aiBlock,

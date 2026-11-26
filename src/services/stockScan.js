@@ -14,7 +14,7 @@ import {
   calcMACD, isNearSupport, calcRSIDivergence, getSector, calcConfidence, calcVWAP,
   calcVWAPBands, applyCalibration, applyAdaptWeights, calcEMA, calcIVPercentile,
   applyIntradayBoost, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, applyConfluenceAdjustment, computeVixPercentile, vixRegimeShiftScore, calcRecentCross } from './technical.js';
-import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
+import { applyMlRanking, evaluateSignalGate, limitLearnedAdj } from './mlRanking.js';
 import { pushShadow, drainShadow } from './shadowLog.js';
 import { getMtf, gradeMtf } from './mtf.js';
 import { stockTrigger } from './triggers.js';
@@ -423,13 +423,21 @@ export async function runPicksScan(ctx, callbacks) {
       regime: stockRegime,
       volRegimeShift,
       _indSnap,
+      // Inputs the model trains on (logged on every signal) — passed so live scoring sees them too.
+      entry: ltp, atr: t.atr||0, ema50: t.ema50, ema200: t.ema200, hi52: sr?.week52H||0, lo52: sr?.week52L||0, dayChg: chgPct,
     });
-    conf = mlRank.confidence;
+    // Cap the combined learned effect (calibration + regime + learned weights + ML). Rule-based steps
+    // (MTF, sector RS, confluence) are not part of it. The cut comes out of mlAdj so the logged
+    // (confidence - mlAdj) is still the pre-ML value the model trains on.
+    const _learnedRaw = _calAdj + _regimeAdj + _adaptAdj + (mlRank.mlAdj || 0);
+    const _capDelta = limitLearnedAdj(_learnedRaw) - _learnedRaw;
+    const _mlAdjEff = (mlRank.mlAdj || 0) + _capDelta;
+    conf = mlRank.confidence + _capDelta;
     conf=Math.min(99,Math.max(1,Math.round(conf)));
     const confBreakdown = {
       base: Math.round(_confBase), calAdj: Math.round(_calAdj),
       regimeAdj: Math.round(_regimeAdj),
-      adaptAdj: Math.round(_adaptAdj), mtfAdj: _mtfAdj, mlAdj: Math.round(mlRank.mlAdj || 0), final: conf,
+      adaptAdj: Math.round(_adaptAdj), mtfAdj: _mtfAdj, mlAdj: Math.round(_mlAdjEff), learnedCapped: _capDelta !== 0, final: conf,
     };
     // Sector RS alignment (stock vs sector vs Nifty) — soft confidence penalty when a long isn't leading.
     const _sm = secMap[sec];
@@ -480,7 +488,7 @@ export async function runPicksScan(ctx, callbacks) {
       trigger, turnoverCr: t.turnoverCr ?? null, ema50: t.ema50 ?? null, ema200: t.ema200 ?? null,
       hi52: sr?.week52H||null, lo52: sr?.week52L||null,
       mlProbability: mlRank.mlProbability,
-      mlAdj: mlRank.mlAdj,
+      mlAdj: _mlAdjEff,
       mlExplain: mlRank.explanation,
       aiBlock: mlRank.aiBlock,
       aiModel: mlRank.mlSegment,
@@ -745,6 +753,7 @@ export async function runBreakoutScan(ctx, callbacks) {
       risk: 50, pot: { rr: trade.rr, wr: 0, base: 0, adj: 0, ev: 0 },
       rec: boRec, reversal: false, vix: vixVal,
       regime: marketRegime, volRegimeShift: boVolRegimeShift, _indSnap: boIndSnap,
+      entry: ltp, atr: t.atr||0, ema50: ema?.ema50, ema200: ema?.ema200, dayChg: secChgPct,
     });
     const boConf = Math.min(99, Math.max(1, Math.round(boMlRank.confidence)));
     // boPotBase was previously a hardcoded 0 in the pushed pot object below

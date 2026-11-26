@@ -13,7 +13,7 @@ import {
   calcOIWalls, computeCtxFromCandles,
   applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX, computeVixPercentile, vixRegimeShiftScore,
 } from './technical';
-import { applyMlRanking } from './mlRanking';
+import { applyMlRanking, limitLearnedAdj } from './mlRanking';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
 import { interpVIXSc, interpPCR, getDeliveryPct } from './stockScan';
 
@@ -128,6 +128,7 @@ export async function lookupInstrument(ctx, callbacks) {
       const numInds = countIndicatorsEx(rsi, macd.bull, a50, a200, volOk, nearS, pats, preRec, macd, bb, adx, rsiDiv);
       const rec = numInds >= 4 ? 'BUY' : numInds >= 3 ? 'MODERATE' : numInds >= 2 ? 'WATCH' : 'AVOID';
       let conf = calcConfidence(null, vixSc, pcrSc, chgPct > 0, 0, q.volume || 0, volObj?.avgVol || 1, pats, preRec, numInds);
+      const _confBase = conf;
       conf=applyCalibration(conf, confCalibration||null);
       const stockRegime = classifyMarketRegime(Math.min(1, Math.abs(chgPct) / 1.0), vixVal, computeVixPercentile(vixHistorySeries, vixVal));
       const volRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
@@ -186,8 +187,13 @@ export async function lookupInstrument(ctx, callbacks) {
         fiiAgainst: !!(fiiInterp && ((fiiInterp.bias>0) !== isBuyLean) && fiiInterp.bias!==0),
       };
       conf = applyAdaptWeights(conf, adaptWeights?.stock || null, _indSnap);
-      const mlRank = applyMlRanking(conf, mlModels || null, { type:'STOCK', confidence: conf, numInds, risk, pot, rec: preRec, reversal, vix: vixVal, regime: stockRegime, volRegimeShift, _indSnap });
-      conf = mlRank.confidence;
+      const _preMl = conf;
+      const mlRank = applyMlRanking(conf, mlModels || null, { type:'STOCK', confidence: conf, numInds, risk, pot, rec: preRec, reversal, vix: vixVal, regime: stockRegime, volRegimeShift, _indSnap,
+        entry: ltp, atr, ema50: ema?.ema50, ema200: ema?.ema200, hi52: sr?.week52H||0, lo52: sr?.week52L||0, dayChg: chgPct });
+      // Same cap on the combined learned effect as the scanner (stockScan.js).
+      const _learnedRaw = (_preMl - _confBase) + (mlRank.mlAdj || 0);
+      const _capDelta = limitLearnedAdj(_learnedRaw) - _learnedRaw;
+      conf = Math.min(99, Math.max(1, mlRank.confidence + _capDelta));
       const finalRec = getRec(conf, pot.base, risk, pot.rr);
       const strength = getSignalStrength(numInds, conf, reversal);
       const entry = calcEntryTrigger(ltp, q.ohlc?.high || ltp, sr, atr, finalRec, vwap, chgPct);
