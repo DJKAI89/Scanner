@@ -582,6 +582,52 @@ function MlFeatureBoard({ mlModels }) {
   );
 }
 
+// Honest check of the model: what it scored on signals it was trained on vs on signals it had not
+// seen (out-of-fold), whether its probabilities are calibrated, and whether it is drifting.
+function MlReliabilityBoard({ mlModels }) {
+  const blocks = [
+    { key: 'stock', label: 'Stock model', m: mlModels?.stock, drift: mlModels?.drift?.stock },
+    { key: 'option', label: 'Option model', m: mlModels?.option, drift: mlModels?.drift?.option },
+  ];
+  const pct = (v) => (v == null ? '—' : Math.round(v * 100) + '%');
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 10 }}>
+      {blocks.map(({ key, label, m, drift }) => (
+        <div key={key} style={{ background: '#fff', border: '1px solid #cbd5e1', borderRadius: 12, padding: '12px 14px' }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: '#0f172a', marginBottom: 8 }}>{label}</div>
+          {!m ? <div style={{ fontSize: 11, color: '#64748b' }}>No trained model yet</div> : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: 11, color: '#475569', marginBottom: 8 }}>
+                <span>Signals trained on: <b style={{ color: '#0f172a' }}>{m.trainedOn}</b></span>
+                <span>Seen-signal accuracy: <b style={{ color: '#0f172a' }}>{pct(m.accuracy)}</b></span>
+                <span>Unseen accuracy: <b style={{ color: '#0f172a' }}>{pct(m.walkForward?.accuracy)}</b></span>
+                <span>Unseen edge: <b style={{ color: (m.oof?.edge ?? 0) > 0 ? '#15803d' : '#b91c1c' }}>{m.oof?.edge ?? '—'}</b></span>
+                <span>Calibration: <b style={{ color: '#0f172a' }}>{m.calibrationSource === 'walk-forward' ? 'on unseen signals' : 'on trained signals'}</b></span>
+                <span>Drift: <b style={{ color: drift?.degraded ? '#b91c1c' : '#15803d' }}>{drift?.degraded ? 'recent results worse' : 'stable'}</b></span>
+              </div>
+              {m.reliability?.length ? (
+                <div style={{ fontSize: 11 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.6fr 1fr 1fr', fontWeight: 700, color: '#475569', borderBottom: '1px solid #e2e8f0', padding: '4px 0' }}>
+                    <span>Model said</span><span>Signals</span><span>Avg said</span><span>Really won</span>
+                  </div>
+                  {m.reliability.map((b) => (
+                    <div key={b.lo} style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.6fr 1fr 1fr', padding: '4px 0', borderBottom: '1px solid #f1f5f9' }}>
+                      <span>{Math.round(b.lo * 100)}–{Math.round(b.hi * 100)}%</span>
+                      <span>{b.n}</span>
+                      <span>{pct(b.pred)}</span>
+                      <b style={{ color: Math.abs(b.pred - b.actual) <= 0.1 ? '#15803d' : '#b91c1c' }}>{pct(b.actual)}</b>
+                    </div>
+                  ))}
+                </div>
+              ) : <div style={{ fontSize: 11, color: '#64748b' }}>Reliability table appears once enough unseen-signal predictions exist.</div>}
+            </>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MlHistory({ mlSnapshots }) {
   if (!mlSnapshots?.length) return <div style={{ fontSize: 10, color: '#94a3b8' }}>No model history yet</div>;
   return (
@@ -958,6 +1004,13 @@ export default function AnalysisPane() {
                 </div>
               </Section>
             )}
+
+            <Section title="AI Reliability (honest check)" summary={''} accent="#7c3aed">
+              <MlReliabilityBoard mlModels={mlModels} />
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 8 }}>
+                "Unseen" = signals the model had not learned from when it predicted them. Seen-signal accuracy is always flattering; trust the unseen figures. Green rows: the model's stated chance matched what happened within 10 points.
+              </div>
+            </Section>
 
             <Section title="AI Feature Drivers" summary={''} accent="#7c3aed">
               <MlFeatureBoard mlModels={mlModels} />
