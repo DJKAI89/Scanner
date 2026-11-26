@@ -3,11 +3,20 @@ name: AI Retrain
 on:
   workflow_dispatch:
   schedule:
-    - cron: "45 12 * * 1-5"
+    # 11:30 UTC = 17:00 IST, Mon-Fri: well after the 15:30 market close, so each trading day
+    # is trained on the same evening. GitHub may start a scheduled run some minutes late;
+    # that is fine.
+    - cron: "30 11 * * 1-5"
+
+# Never run two retrains at once (a manual run during the midnight run would race on the model files).
+concurrency:
+  group: ai-retrain
+  cancel-in-progress: false
 
 jobs:
   retrain:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: write
     steps:
@@ -19,11 +28,28 @@ jobs:
         with:
           node-version: 24
 
+      # Close out the day first: resolve every still-open real and shadow signal against the
+      # latest prices so tonight's training sees today's outcomes. Failure here must not block
+      # training (the retrainer simply uses whatever is already resolved).
+      - name: Resolve open signals
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
+          GH_USER: ${{ secrets.AI_GH_USER }}
+          GH_REPO: ${{ secrets.AI_GH_REPO }}
+          UPSTOX_ACCESS_TOKEN: ${{ secrets.UPSTOX_ACCESS_TOKEN }}
+        run: node scripts/monitorSignals.mjs
+
       - name: Run AI retrainer
         env:
           GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
           GH_USER: ${{ secrets.AI_GH_USER }}
           GH_REPO: ${{ secrets.AI_GH_REPO }}
+          # Every logged signal is used (no day cut-off). Recency weighting inside the model makes
+          # newer signals count more without discarding old ones.
           AI_LOOKBACK_DAYS: ${{ vars.AI_LOOKBACK_DAYS || 'all' }}
+          # Resolved shadow signals (rejected picks followed to an outcome) are included by default;
+          # set the repository variable AI_INCLUDE_SHADOW to 0 to turn that off.
+          AI_INCLUDE_SHADOW: ${{ vars.AI_INCLUDE_SHADOW || '1' }}
           NODE_OPTIONS: "--max-old-space-size=2048"
         run: npm run ai:train
