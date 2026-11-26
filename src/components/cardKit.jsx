@@ -27,7 +27,7 @@ export function Tag({ tone = 'slate', children, title }) {
   return (
     <span title={title} style={{
       display: 'inline-flex', alignItems: 'center', gap: 3,
-      fontSize: 9.5, fontWeight: 700, lineHeight: 1.3,
+      fontSize: 10, fontWeight: 700, lineHeight: 1.3,
       background: t.bg, color: t.fg, border: `1px solid ${t.bd}`,
       borderRadius: 6, padding: '3px 7px', whiteSpace: 'nowrap',
     }}>{children}</span>
@@ -52,7 +52,7 @@ export function RankBadge({ n }) {
   return (
     <span style={{
       width: 18, height: 18, borderRadius: '50%', background: '#f1f5f9', color: '#64748b',
-      fontSize: 8.5, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: 10, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
       flexShrink: 0,
     }}>{n}</span>
   );
@@ -63,7 +63,7 @@ export function RecPill({ label, dir = 'neutral' }) {
   const accent = DIR_COLOR[dir] || DIR_COLOR.neutral;
   return (
     <span style={{
-      background: accent, color: '#fff', fontSize: 9.5, fontWeight: 800,
+      background: accent, color: '#fff', fontSize: 10, fontWeight: 800,
       letterSpacing: '.3px', borderRadius: 20, padding: '3px 9px', whiteSpace: 'nowrap', flexShrink: 0,
     }}>{label}</span>
   );
@@ -81,9 +81,9 @@ export function CardHeader({ rank, symbol, sector, name, ltp, chgPct, onPopup, r
         <div style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 16, fontWeight: 800, color: '#0f172a', lineHeight: 1.15 }}>{symbol}</span>
-            {sector && <span style={{ fontSize: 9, color: '#94a3b8', fontWeight: 500 }}>{sector}</span>}
+            {sector && <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 500 }}>{sector}</span>}
             {onPopup && (
-              <span style={{ fontSize: 8.5, color: '#1d4ed8', fontWeight: 700, background: '#eff6ff', padding: '1px 6px', borderRadius: 7, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+              <span style={{ fontSize: 10, color: '#1d4ed8', fontWeight: 700, background: '#eff6ff', padding: '1px 6px', borderRadius: 7, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
                 <Icon name="trendUp" size={9}/>Chart
               </span>
             )}
@@ -147,9 +147,9 @@ export function LevelsStrip({ entry, sl, target, slSub, tgtSub, entrySub, status
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 1, background: '#e2e8f0', borderRadius: 9, overflow: 'hidden' }}>
         {cols.map(x => (
           <div key={x.l} style={{ background: x.bg, padding: '8px 7px', textAlign: 'center', minWidth: 0 }}>
-            <div style={{ fontSize: 7.5, color: '#64748b', letterSpacing: '.3px', marginBottom: 2 }}>{x.l}</div>
+            <div style={{ fontSize: 10, color: '#64748b', letterSpacing: '.3px', marginBottom: 2 }}>{x.l}</div>
             <div style={{ fontSize: 13.5, fontWeight: 800, color: x.c, overflow: 'hidden', textOverflow: 'ellipsis' }}>₹{x.v}</div>
-            {x.sub && <div style={{ fontSize: 8.5, color: x.c, marginTop: 1, opacity: .85 }}>{x.sub}</div>}
+            {x.sub && <div style={{ fontSize: 10, color: x.c, marginTop: 1, opacity: .85 }}>{x.sub}</div>}
           </div>
         ))}
       </div>
@@ -168,9 +168,9 @@ export function StatusTag({ triggered }) {
 export function MetricMini({ label, value, color = '#0f172a', sub }) {
   return (
     <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 7, padding: '6px 8px', minWidth: 0 }}>
-      <div style={{ fontSize: 7.5, color: '#94a3b8', letterSpacing: '.3px', marginBottom: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
+      <div style={{ fontSize: 10, color: '#94a3b8', letterSpacing: '.3px', marginBottom: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
       <div style={{ fontSize: 12.5, fontWeight: 700, color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>
-      {sub && <div style={{ fontSize: 8.5, color: '#64748b', marginTop: 1 }}>{sub}</div>}
+      {sub && <div style={{ fontSize: 10, color: '#64748b', marginTop: 1 }}>{sub}</div>}
     </div>
   );
 }
@@ -188,7 +188,7 @@ export function MetricGrid({ cols = 4, children }) {
 export function ProgressStat({ label, pct, color, valueLabel }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 5 }}>
-      <span style={{ fontSize: 9.5, color: '#64748b', width: 72, flexShrink: 0 }}>{label}</span>
+      <span style={{ fontSize: 10, color: '#64748b', width: 72, flexShrink: 0 }}>{label}</span>
       <div style={{ flex: 1, height: 6, background: '#eef2f6', borderRadius: 3, overflow: 'hidden', minWidth: 0, boxShadow: 'inset 0 1px 2px rgba(15,23,42,.06)' }}>
         <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, pct))}%`, background: color, borderRadius: 3, transition: 'width .5s' }} />
       </div>
@@ -208,7 +208,7 @@ export function TargetTiers({ cons, mod, agg }) {
     <div style={{ display: 'flex', gap: 5, marginBottom: 9 }}>
       {items.map(t => (
         <div key={t.l} style={{ flex: 1, background: t.bg, border: `1px solid ${t.bd}`, borderRadius: 7, padding: '5px 4px', textAlign: 'center', minWidth: 0 }}>
-          <div style={{ fontSize: 7, color: '#94a3b8' }}>{t.l}</div>
+          <div style={{ fontSize: 10, color: '#94a3b8' }}>{t.l}</div>
           <div style={{ fontSize: 11.5, fontWeight: 700, color: t.c }}>₹{t.v}</div>
         </div>
       ))}
@@ -225,7 +225,7 @@ export function SignalTags({ tags, totalCount, activeCount }) {
         {tags.map((t, i) => <Tag key={i} tone={t.tone}>{t.label}</Tag>)}
       </div>
       {totalCount != null && (
-        <div style={{ fontSize: 8.5, color: '#94a3b8', marginTop: 4 }}>{activeCount}/{totalCount} indicators confirmed</div>
+        <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 4 }}>{activeCount}/{totalCount} indicators confirmed</div>
       )}
     </div>
   );
@@ -237,7 +237,7 @@ export function Banner({ tone = 'slate', icon, title, detail }) {
   return (
     <div style={{ background: t.bg, border: `1px solid ${t.bd}`, borderRadius: 8, padding: '7px 10px', marginBottom: 9 }}>
       <div style={{ fontWeight: 800, fontSize: 10.5, color: t.fg, marginBottom: detail ? 2 : 0 }}>{icon} {title}</div>
-      {detail && <div style={{ fontSize: 9.5, color: t.fg, opacity: .85 }}>{detail}</div>}
+      {detail && <div style={{ fontSize: 10, color: t.fg, opacity: .85 }}>{detail}</div>}
     </div>
   );
 }
@@ -247,7 +247,7 @@ export function WhyBox({ title = 'SIGNAL ANALYSIS', lines }) {
   if (!lines?.length) return null;
   return (
     <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 9, padding: '9px 10px', marginBottom: 9 }}>
-      <div style={{ fontSize: 8.5, fontWeight: 800, color: '#64748b', letterSpacing: '.4px', marginBottom: 5 }}>{title}</div>
+      <div style={{ fontSize: 10, fontWeight: 800, color: '#64748b', letterSpacing: '.4px', marginBottom: 5 }}>{title}</div>
       {lines.map((w, i) => (
         <div key={i} style={{ fontSize: 10, color: '#475569', lineHeight: 1.65 }}>→ {w}</div>
       ))}

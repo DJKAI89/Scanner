@@ -471,6 +471,7 @@ export function buildStockSignal(p, vixVal) {
     status:         'OPEN',
     holdDays,
     atr:            p.atr || 0,
+    dayChg:         p.chgPct ?? null,     // the stock's own move today, at signal time
     // ── Trade management: multi-target partial exits + ATR trailing stop ──
     targetT1:       +(p.pot?.cons || p.target || 0).toFixed(2),
     targetT2:       +(p.target   || p.pot?.mod || 0).toFixed(2),
@@ -532,6 +533,11 @@ export function buildOptionSignal(p, vixVal) {
     oi:             p.oi ?? null,
     oiChg:          p.oiChg ?? null,
     dte:            p._dte ?? null,
+    // Underlying price and max pain at signal time: the model needs them for strike distance
+    // (otmPct / moveRatio) and max-pain distance; neither was logged before.
+    spot:           p.spot ?? null,
+    maxPain:        p.maxPain ?? null,
+    atm:            !!p.atm,
     volRegimeShift: p.volRegimeShift ?? null,
     mlSegment:      p.mlSegment ?? null,
     emaCross:       p.emaCross        ?? null,
@@ -677,8 +683,12 @@ export async function logSignals(gh, newSignals, vixVal, lg = () => {}) {
 // Stored apart from the real log (signal-logs/<uid>/shadow/<date>.json) so they
 // never pollute real stats, win-rate calibration or the open-signal count.
 // ══════════════════════════════════════════════════════════
-const SHADOW_MAX_PER_SCAN = 12;
-const SHADOW_MIN_CONF = 45; // ignore hopeless picks — only near-misses teach anything
+// Every scored candidate the gate rejected is worth tracking: the model can only learn what the
+// filters threw away if those picks are followed to an outcome. Keep the floor low and the caps
+// high; the per-day cap keeps one day file well under GitHub's 1 MB inline-read limit.
+const SHADOW_MAX_PER_SCAN = 60;
+const SHADOW_MIN_CONF = 25;
+const SHADOW_MAX_PER_DAY = 350;
 function getShadowPath(date) { return `${getLogFolder()}/shadow/${date}.json`; }
 
 export async function logShadowSignals(gh, items, vixVal, lg = () => {}) {
@@ -711,7 +721,8 @@ export async function logShadowSignals(gh, items, vixVal, lg = () => {}) {
       const f = await _ghFetch(gh, getShadowPath(date));
       const existing = f ? (_decode(f.content).signals || []) : [];
       const have = new Set(existing.map(s => s.id));
-      const fresh = built.filter(s => !have.has(s.id));
+      const room = Math.max(0, SHADOW_MAX_PER_DAY - existing.length);
+      const fresh = built.filter(s => !have.has(s.id)).slice(0, room);
       if (!fresh.length) return;
       const payload = { signals: [...existing, ...fresh], date, lastUpdated: new Date().toISOString() };
       const r = await _ghPut(gh, getShadowPath(date), payload, f?.sha, `SCANNER shadow log · ${date}`);

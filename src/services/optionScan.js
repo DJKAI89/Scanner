@@ -6,7 +6,7 @@ import { fetchQ, fetchOptions, fetchIntraday, fetchCandles } from './api.js';
 import { getIST, sleep, getISTDate, istDaysAgo } from '../utils/marketTime.js';
 import { INDEX_OPTS, TOP_FO_SYMBOLS, SECTOR_CTX_MAP, NIFTY50_FALLBACK } from '../constants/config.js';
 import { calcMaxPain, calcOIWalls, computeCtxFromCandles, scanChain, applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, buildOptionConfluence, buildOptionIndSnap, candleOrder, interpretFIIDII, computeVixPercentile, vixRegimeShiftScore } from './technical.js';
-import { applyMlRanking, evaluateSignalGate } from './mlRanking.js';
+import { applyMlRanking, evaluateSignalGate, limitLearnedAdj } from './mlRanking.js';
 import { pushShadow, drainShadow } from './shadowLog.js';
 import { getMtf, gradeMtf } from './mtf.js';
 import { logSignals, logShadowSignals, buildOptionSignal } from './github.js';
@@ -104,7 +104,9 @@ export function onePerIdea(picks) {
   return [...[...best.values()].map((x) => x.p), ...rest];
 }
 
-function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, adaptWeights, mlModels, confCalibration, regime, volRegimeShift = 0, cfg, maxPain = 0, spot = 0, oiWalls = null }) {
+// Confidence pipeline shared by the Options page, the Analyse Stock suggestions and the Analyse Stock
+// option grid: calibration -> regime -> learned weights -> ML ranking. Does NOT gate/filter.
+export function scoreOptionPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, adaptWeights, mlModels, confCalibration, regime, volRegimeShift = 0, cfg, maxPain = 0, spot = 0, oiWalls = null }) {
   const fiiInterp = fiiInterpIn || interpretFIIDII(fiiData || null);
   return picks.map(p => {
     const base = p.confidence;
@@ -120,26 +122,38 @@ function scoreAndFilterPicks(picks, { fiiData, fiiInterp: fiiInterpIn = null, ad
     const indSnap = buildOptionIndSnap(p, confluence, fiiInterp, isBuyLean);
     c = applyAdaptWeights(c, adaptWeights?.option || null, indSnap);
     const adaptAdj = c - prev;
-    const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, regime, volRegimeShift, _indSnap: indSnap });
-    const finalConf = Math.min(99, Math.max(1, Math.round(mlRank.confidence)));
+    const mlRank = applyMlRanking(c, mlModels || null, { ...p, confidence: c, regime, volRegimeShift, _indSnap: indSnap, maxPain, spot: p.spot ?? spot });
+    // Calibration + regime + learned weights + ML all learn from the same outcomes; cap their combined
+    // effect so they cannot stack into a runaway swing. The capped amount is taken out of mlAdj so
+    // the logged (confidence - mlAdj) still equals the pre-ML value the model trains on.
+    const learnedRaw = mlRank.confidence - base;
+    const capDelta = limitLearnedAdj(learnedRaw) - learnedRaw;
+    const mlAdjEff = (mlRank.mlAdj || 0) + capDelta;
+    const finalConf = Math.min(99, Math.max(1, Math.round(mlRank.confidence + capDelta)));
     return {
       ...p,
       confidence: finalConf,
       regime,
       volRegimeShift,
       confluence,
-      confBreakdown: { base, calAdj, regimeAdj, adaptAdj, mlAdj: mlRank.mlAdj, final: finalConf },
+      confBreakdown: { base, calAdj, regimeAdj, adaptAdj, mlAdj: mlAdjEff, learnedCapped: capDelta !== 0, final: finalConf },
+      maxPain: maxPain > 0 ? maxPain : null,
       _indSnap: indSnap,
       _dte: p._dte ?? null,
       nearMaxPain: maxPain > 0 && spot > 0 && Math.abs(p.strike - maxPain) / spot < 0.01,
       mlProbability: mlRank.mlProbability,
-      mlAdj: mlRank.mlAdj,
+      mlAdj: mlAdjEff,
       mlSegment: mlRank.mlSegment,
       mlExplain: mlRank.explanation,
       aiBlock: mlRank.aiBlock,
       aiModel: mlRank.mlSegment,
     };
-  }).filter(p =>
+  });
+}
+
+function scoreAndFilterPicks(picks, opts) {
+  const { mlModels, cfg, spot = 0, oiWalls = null } = opts;
+  return scoreOptionPicks(picks, opts).filter(p =>
     // Shared gate (mlRanking.evaluateSignalGate) — aiBlock veto, index-vs-stock
     // subtype threshold resolution, RR floor, and the capital ceiling (which
     // only ever tightens past Settings' Max Capital, never loosens it) all
@@ -270,6 +284,23 @@ export async function scanStockOptions({ inst, spot, spotChg, deps, env, expirie
   // (RR / capital / confidence gate) is visible in the log instead of vanishing silently.
   if (!picks.length) lg(`${inst.s}: ${allStkPicks.length} raw → 0 signals (all filtered by gate/thresholds)`, 'w');
   return { ok:true, picks, rawCount: allStkPicks.length, expiry, expiries: expiriesToScan, allExpiries, chain, maxPain: stkMaxPain, pcr, ivTrend, atm, stkCtx };
+}
+
+// Final (Options-page) confidence for EVERY strike of one chain, for the Analyse Stock option grid.
+// Same scanChain -> scoreOptionPicks path the Options page uses; only the gates (min signals, min OI,
+// consolidation, RR/capital/AI block) are skipped so each strike gets a number.
+// Returns Map keyed "strike|CE" / "strike|PE" -> scored pick.
+export function scoreChainForGrid({ chain, atm, spot, name, expiry, lot, maxPain, pcr, stkCtx, env, deps }) {
+  const { niftyBull, vixVal } = env;
+  const { fiiData = null, fiiInterp = null, adaptWeights, mlModels, confCalibration, cfg: cfgIn, vixHistorySeries } = deps;
+  const cfg = { ...effectiveOptionCfg(cfgIn, mlModels), includeAll: true };
+  const raw = scanChain(chain, atm, spot, name, expiry, lot, niftyBull, vixVal, maxPain, pcr, stkCtx, cfg);
+  const regime = classifyMarketRegime(Math.abs(stkCtx?.compositeScore || 0) / 3.5, vixVal, computeVixPercentile(vixHistorySeries, vixVal));
+  const volRegimeShift = vixRegimeShiftScore(vixHistorySeries, vixVal);
+  const scored = scoreOptionPicks(raw, { fiiData, fiiInterp, adaptWeights, mlModels, confCalibration, regime, volRegimeShift, cfg, maxPain, spot });
+  const out = new Map();
+  for (const p of scored) out.set(`${p.strike}|${p.type}`, p);
+  return out;
 }
 
 export async function runOptionsScan(ctx, caches, callbacks) {

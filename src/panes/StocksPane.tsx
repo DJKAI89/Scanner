@@ -3,6 +3,7 @@ import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
 import ScanProgress from '../components/ScanProgress';
 import StockCard from '../components/StockCard.jsx';
+import { PicksTable, useIsDesktop } from '../components/DataTables.jsx';
 import { fmt, interpVIX, fmtVol } from '../utils/formatters';
 import LiveChart from '../components/LiveChart';
 import { AccentCard, CardHeader, LevelsStrip, ProgressStat, SignalTags, WhyBox, contextTags, KpiStrip, riskFlags } from '../components/cardKit';
@@ -66,6 +67,7 @@ function BoChartPopup({ r, onClose }) {
 
   return (
     <div
+      className="sheet-ov"
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
       style={{
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
@@ -73,7 +75,7 @@ function BoChartPopup({ r, onClose }) {
         backdropFilter: 'blur(2px)',
       }}
     >
-      <div style={{
+      <div className="sheet" style={{
         background: '#fff', width: '100%', maxHeight: '92dvh',
         borderRadius: '18px 18px 0 0', overflowY: 'auto',
         padding: '0 0 24px', boxShadow: '0 -8px 32px rgba(0,0,0,0.2)',
@@ -116,27 +118,27 @@ function BoChartPopup({ r, onClose }) {
         {(r.intraConfirm || r.intraVolRatio >= 1.5 || r.intraMomentum || r.stockVWAP) && (
           <div style={{ display:'flex', gap:5, flexWrap:'wrap', padding:'0 12px', marginBottom:10 }}>
             {r.intraConfirm && (
-              <span style={{ fontSize:9, fontWeight:800, background:'#f0fdf4', color:'#16a34a', border:'1px solid #86efac', borderRadius:6, padding:'3px 8px' }}>
+              <span style={{ fontSize:10, fontWeight:800, background:'#f0fdf4', color:'#16a34a', border:'1px solid #86efac', borderRadius:6, padding:'3px 8px' }}>
                 ✅ {r.intraConfirm === 'PDH_CONFIRMED' ? 'PDH Confirmed 5m' : 'PDL Confirmed 5m'}
               </span>
             )}
             {r.intraVolRatio >= 1.5 && (
-              <span style={{ fontSize:9, fontWeight:800, background:'#fdf4ff', color:'#7c3aed', border:'1px solid #ddd6fe', borderRadius:6, padding:'3px 8px' }}>
+              <span style={{ fontSize:10, fontWeight:800, background:'#fdf4ff', color:'#7c3aed', border:'1px solid #ddd6fe', borderRadius:6, padding:'3px 8px' }}>
                 🔥 Intraday Vol {r.intraVolRatio}×
               </span>
             )}
             {r.intraMomentum?.bullish && r.isBull && (
-              <span style={{ fontSize:9, fontWeight:700, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:6, padding:'3px 8px' }}>
+              <span style={{ fontSize:10, fontWeight:700, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:6, padding:'3px 8px' }}>
                 ⚡ 5m EMA Bullish
               </span>
             )}
             {r.intraMomentum?.accelerating && (
-              <span style={{ fontSize:9, fontWeight:700, background:'#fff7ed', color:'#c2410c', border:'1px solid #fed7aa', borderRadius:6, padding:'3px 8px' }}>
+              <span style={{ fontSize:10, fontWeight:700, background:'#fff7ed', color:'#c2410c', border:'1px solid #fed7aa', borderRadius:6, padding:'3px 8px' }}>
                 🚀 Momentum Accelerating
               </span>
             )}
             {r.stockVWAP && (
-              <span style={{ fontSize:9, fontWeight:700, background: r.stockVWAP.aboveVWAP?'#f0fdf4':'#fef2f2', color: r.stockVWAP.aboveVWAP?'#16a34a':'#ef4444', border:`1px solid ${r.stockVWAP.aboveVWAP?'#86efac':'#fca5a5'}`, borderRadius:6, padding:'3px 8px' }}>
+              <span style={{ fontSize:10, fontWeight:700, background: r.stockVWAP.aboveVWAP?'#f0fdf4':'#fef2f2', color: r.stockVWAP.aboveVWAP?'#16a34a':'#ef4444', border:`1px solid ${r.stockVWAP.aboveVWAP?'#86efac':'#fca5a5'}`, borderRadius:6, padding:'3px 8px' }}>
                 {r.stockVWAP.aboveVWAP ? '↑ Above' : '↓ Below'} VWAP ₹{r.stockVWAP.vwap?.toFixed(1)}
               </span>
             )}
@@ -151,7 +153,7 @@ function BoChartPopup({ r, onClose }) {
             { l: 'TARGET',    v: `₹${fmtV(t.target)}`,        c: '#16a34a', bg: '#f0fdf4' },
           ].map(x => (
             <div key={x.l} style={{ background: x.bg, padding: '10px 8px', textAlign: 'center' }}>
-              <div style={{ fontSize: 8, color: '#64748b', marginBottom: 3 }}>{x.l}</div>
+              <div style={{ fontSize: 10, color: '#64748b', marginBottom: 3 }}>{x.l}</div>
               <div style={{ fontSize: 15, fontWeight: 900, color: x.c }}>{x.v}</div>
             </div>
           ))}
@@ -161,7 +163,7 @@ function BoChartPopup({ r, onClose }) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 6, padding: '0 12px', marginBottom: 12 }}>
           {metrics.map(m => (
             <div key={m.label} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '7px 9px' }}>
-              <div style={{ fontSize: 8, color: '#94a3b8', fontWeight: 700, marginBottom: 2 }}>{m.label}</div>
+              <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700, marginBottom: 2 }}>{m.label}</div>
               <div style={{ fontSize: 13, fontWeight: 800, color: m.color }}>{m.value}</div>
             </div>
           ))}
@@ -172,7 +174,7 @@ function BoChartPopup({ r, onClose }) {
           <div style={{ display: 'flex', gap: 6, padding: '0 12px', marginBottom: 12, flexWrap: 'wrap' }}>
             {emaRows.map(e => (
               <div key={e.label} style={{ background: '#f8fafc', border: `1px solid ${e.color}44`, borderRadius: 8, padding: '6px 10px', flex: 1 }}>
-                <div style={{ fontSize: 8, color: '#94a3b8', fontWeight: 700 }}>{e.label}</div>
+                <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700 }}>{e.label}</div>
                 <div style={{ fontSize: 13, fontWeight: 800, color: e.color }}>{e.value}</div>
               </div>
             ))}
@@ -182,23 +184,23 @@ function BoChartPopup({ r, onClose }) {
         {/* 52-week range */}
         {r.wk52 && (
           <div style={{ padding: '0 12px', marginBottom: 12 }}>
-            <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', marginBottom: 6 }}>52-WEEK RANGE</div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', marginBottom: 6 }}>52-WEEK RANGE</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 9, color: '#dc2626', fontWeight: 700 }}>₹{fmtV(r.wk52.lo52)}</span>
+              <span style={{ fontSize: 10, color: '#dc2626', fontWeight: 700 }}>₹{fmtV(r.wk52.lo52)}</span>
               <div style={{ flex: 1, position: 'relative', height: 8, background: '#e2e8f0', borderRadius: 4, overflow: 'visible' }}>
                 <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: `${rangePos}%`, background: `linear-gradient(90deg, #dc2626, #16a34a)`, borderRadius: 4 }} />
                 <div style={{ position: 'absolute', left: `${rangePos}%`, top: -3, width: 14, height: 14, borderRadius: '50%', background: '#1d4ed8', border: '2px solid #fff', boxShadow: '0 1px 4px rgba(0,0,0,.2)', transform: 'translateX(-50%)' }} />
               </div>
-              <span style={{ fontSize: 9, color: '#16a34a', fontWeight: 700 }}>₹{fmtV(r.wk52.hi52)}</span>
+              <span style={{ fontSize: 10, color: '#16a34a', fontWeight: 700 }}>₹{fmtV(r.wk52.hi52)}</span>
             </div>
-            <div style={{ textAlign: 'center', fontSize: 9, color: '#64748b', marginTop: 4 }}>At {rangePos}% of 52-week range</div>
+            <div style={{ textAlign: 'center', fontSize: 10, color: '#64748b', marginTop: 4 }}>At {rangePos}% of 52-week range</div>
           </div>
         )}
 
         {/* Strength bar */}
         <div style={{ padding: '0 12px', marginBottom: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
-            <span style={{ fontSize: 9, fontWeight: 700, color: '#64748b' }}>SIGNAL STRENGTH</span>
+            <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b' }}>SIGNAL STRENGTH</span>
             <span style={{ fontSize: 11, fontWeight: 900, color: r.score>=7?'#16a34a':r.score>=4?'#d97706':'#0ea5e9' }}>{r.score||0}/10</span>
           </div>
           <div style={{ height: 8, background: '#e2e8f0', borderRadius: 4, overflow: 'hidden' }}>
@@ -212,7 +214,7 @@ function BoChartPopup({ r, onClose }) {
         {/* Why */}
         {r._whyLines?.length > 0 && (
           <div style={{ margin: '0 12px', padding: '10px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, marginBottom: 12 }}>
-            <div style={{ fontSize: 9, fontWeight: 800, color: '#64748b', marginBottom: 6 }}>SIGNAL ANALYSIS</div>
+            <div style={{ fontSize: 10, fontWeight: 800, color: '#64748b', marginBottom: 6 }}>SIGNAL ANALYSIS</div>
             {r._whyLines.map((w, i) => (
               <div key={i} style={{ fontSize: 10, color: '#475569', lineHeight: 1.7 }}>→ {w}</div>
             ))}
@@ -268,10 +270,11 @@ function PickChartPopup({ p, onClose }) {
 
   return (
     <div
+      className="sheet-ov"
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}
       style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.55)', zIndex:1000, display:'flex', alignItems:'flex-end', backdropFilter:'blur(2px)' }}
     >
-      <div style={{ background:'#fff', width:'100%', maxHeight:'92dvh', borderRadius:'18px 18px 0 0', overflowY:'auto', padding:'0 0 24px', boxShadow:'0 -8px 32px rgba(0,0,0,0.2)', animation:'slideUp .22s ease' }}>
+      <div className="sheet" style={{ background:'#fff', width:'100%', maxHeight:'92dvh', borderRadius:'18px 18px 0 0', overflowY:'auto', padding:'0 0 24px', boxShadow:'0 -8px 32px rgba(0,0,0,0.2)', animation:'slideUp .22s ease' }}>
         {/* Drag handle */}
         <div style={{ display:'flex', justifyContent:'center', padding:'10px 0 4px' }}>
           <div style={{ width:36, height:4, borderRadius:2, background:'#e2e8f0' }} />
@@ -309,22 +312,22 @@ function PickChartPopup({ p, onClose }) {
         {(p.stockVWAP || p.intraVolRatio >= 1.5 || p.intraBull != null || p.intraAccel) && (
           <div style={{ display:'flex', gap:5, flexWrap:'wrap', padding:'0 12px', marginBottom:10 }}>
             {p.stockVWAP && (
-              <span style={{ fontSize:9, fontWeight:800, background: p.stockVWAP.aboveVWAP?'#f0fdf4':'#fef2f2', color: p.stockVWAP.aboveVWAP?'#16a34a':'#ef4444', border:`1px solid ${p.stockVWAP.aboveVWAP?'#86efac':'#fca5a5'}`, borderRadius:6, padding:'3px 8px' }}>
+              <span style={{ fontSize:10, fontWeight:800, background: p.stockVWAP.aboveVWAP?'#f0fdf4':'#fef2f2', color: p.stockVWAP.aboveVWAP?'#16a34a':'#ef4444', border:`1px solid ${p.stockVWAP.aboveVWAP?'#86efac':'#fca5a5'}`, borderRadius:6, padding:'3px 8px' }}>
                 {p.stockVWAP.aboveVWAP?'↑ Above':'↓ Below'} VWAP ₹{p.stockVWAP.vwap?.toFixed(1)}
               </span>
             )}
             {p.intraVolRatio >= 1.5 && (
-              <span style={{ fontSize:9, fontWeight:800, background:'#fdf4ff', color:'#7c3aed', border:'1px solid #ddd6fe', borderRadius:6, padding:'3px 8px' }}>
+              <span style={{ fontSize:10, fontWeight:800, background:'#fdf4ff', color:'#7c3aed', border:'1px solid #ddd6fe', borderRadius:6, padding:'3px 8px' }}>
                 🔥 Intraday Vol {p.intraVolRatio}×
               </span>
             )}
             {p.intraBull === true && (
-              <span style={{ fontSize:9, fontWeight:700, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:6, padding:'3px 8px' }}>
+              <span style={{ fontSize:10, fontWeight:700, background:'#eff6ff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:6, padding:'3px 8px' }}>
                 ⚡ 5m EMA Bullish
               </span>
             )}
             {p.intraAccel && (
-              <span style={{ fontSize:9, fontWeight:700, background:'#fff7ed', color:'#c2410c', border:'1px solid #fed7aa', borderRadius:6, padding:'3px 8px' }}>
+              <span style={{ fontSize:10, fontWeight:700, background:'#fff7ed', color:'#c2410c', border:'1px solid #fed7aa', borderRadius:6, padding:'3px 8px' }}>
                 🚀 Momentum Accelerating
               </span>
             )}
@@ -339,7 +342,7 @@ function PickChartPopup({ p, onClose }) {
             { l:'TARGET',    v:`₹${fmtV(p.target)}`,          c:'#16a34a', bg:'#f0fdf4' },
           ].map(x => (
             <div key={x.l} style={{ background:x.bg, padding:'10px 8px', textAlign:'center' }}>
-              <div style={{ fontSize:8, color:'#64748b', marginBottom:3 }}>{x.l}</div>
+              <div style={{ fontSize:10, color:'#64748b', marginBottom:3 }}>{x.l}</div>
               <div style={{ fontSize:15, fontWeight:900, color:x.c }}>{x.v}</div>
             </div>
           ))}
@@ -349,7 +352,7 @@ function PickChartPopup({ p, onClose }) {
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:6, padding:'0 12px', marginBottom:12 }}>
           {metrics.map(m => (
             <div key={m.label} style={{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:8, padding:'7px 9px' }}>
-              <div style={{ fontSize:8, color:'#94a3b8', fontWeight:700, marginBottom:2 }}>{m.label}</div>
+              <div style={{ fontSize:10, color:'#94a3b8', fontWeight:700, marginBottom:2 }}>{m.label}</div>
               <div style={{ fontSize:13, fontWeight:800, color:m.color }}>{m.value}</div>
             </div>
           ))}
@@ -364,7 +367,7 @@ function PickChartPopup({ p, onClose }) {
               { l:'Aggressive',   v:p.pot.agg,  c:'#7c3aed', bg:'#faf5ff', bd:'#ddd6fe' },
             ].map(t => (
               <div key={t.l} style={{ flex:1, background:t.bg, border:`1px solid ${t.bd}`, borderRadius:8, padding:'7px 6px', textAlign:'center' }}>
-                <div style={{ fontSize:8, color:'#94a3b8' }}>{t.l}</div>
+                <div style={{ fontSize:10, color:'#94a3b8' }}>{t.l}</div>
                 <div style={{ fontSize:13, fontWeight:800, color:t.c }}>₹{fmtV(t.v)}</div>
               </div>
             ))}
@@ -374,7 +377,7 @@ function PickChartPopup({ p, onClose }) {
         {/* Signal strength */}
         <div style={{ padding:'0 12px', marginBottom:12 }}>
           <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:5 }}>
-            <span style={{ fontSize:9, fontWeight:700, color:'#64748b' }}>CONFIDENCE</span>
+            <span style={{ fontSize:10, fontWeight:700, color:'#64748b' }}>CONFIDENCE</span>
             <span style={{ fontSize:11, fontWeight:900, color:(p.conf||0)>=70?'#16a34a':(p.conf||0)>=50?'#d97706':'#dc2626' }}>{p.conf||0}%</span>
           </div>
           <div style={{ height:8, background:'#e2e8f0', borderRadius:4, overflow:'hidden' }}>
@@ -397,7 +400,7 @@ function PickChartPopup({ p, onClose }) {
 
         {/* Why */}
         <div style={{ margin:'0 12px', padding:'10px 12px', background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:10, marginBottom:12 }}>
-          <div style={{ fontSize:9, fontWeight:800, color:'#64748b', marginBottom:6 }}>SIGNAL ANALYSIS</div>
+          <div style={{ fontSize:10, fontWeight:800, color:'#64748b', marginBottom:6 }}>SIGNAL ANALYSIS</div>
           <div style={{ fontSize:10, color:'#475569', lineHeight:1.7 }}>
             {p.numInds||0}/7 indicators aligned · R:R {p.pot?.rr||0}:1 · Win rate ~{p.pot?.wr||0}%
             {et?.alreadyTriggered ? ' · ✅ Entry trigger hit' : ` · ⏳ Waiting for trigger at ₹${fmtV(et?.trigger||ltp)}`}
@@ -575,6 +578,8 @@ export default function StocksPane() {
   const [picksLoading, setPicksLoading] = useState(false);
   const [picksError, setPicksError]     = useState('');
   const [picks, setPicks]               = useState([]);
+  const [pickFilter, setPickFilter]     = useState('all');
+  const isDesktop = useIsDesktop();
   const [scanStats, setScanStats]       = useState(null);
   const [picksTime, setPicksTime]       = useState('');
   const [pickProgress, setPickProgress] = useState('');
@@ -634,6 +639,14 @@ export default function StocksPane() {
   }, [token]); // eslint-disable-line
 
   // ── PICKS SCAN — thin wrapper around services/stockScan.runPicksScan ──
+  const visiblePicks = picks.filter(p => {
+    const rec = String(p.rec || p.signal || '');
+    if (pickFilter === 'buy')  return /BUY/i.test(rec);
+    if (pickFilter === 'sell') return /SELL|AVOID/i.test(rec);
+    if (pickFilter === 'conf') return (p.conf || 0) >= 60;
+    return true;
+  });
+
   async function runPicks() {
     if (scanInProgress.current) return;
     scanInProgress.current = true;
@@ -748,24 +761,34 @@ export default function StocksPane() {
 
               {fiiInterp&&(
                 <div style={{background:'#fff',border:'1px solid #e2e8f0',borderRadius:8,padding:'8px 14px',marginBottom:10}}>
-                  <div style={{fontSize:9,color:'#94a3b8',marginBottom:3}}>FII/DII FLOW</div>
+                  <div style={{fontSize:10,color:'#94a3b8',marginBottom:3}}>FII/DII FLOW</div>
                   <div style={{fontWeight:800,fontSize:14,color:fiiInterp.color}}>{fiiInterp.label}</div>
-                  <div style={{fontSize:9,color:'#64748b',marginTop:2}}>{fiiInterp.detail}</div>
+                  <div style={{fontSize:10,color:'#64748b',marginTop:2}}>{fiiInterp.detail}</div>
                 </div>
               )}
 
               {picksTime&&<LastUpdated time={picksTime}/>}
+              {picks.length>0&&(
+                <div className="chip-row">
+                  {[['all','All'],['buy','Buy'],['sell','Sell / Avoid'],['conf','Conf 60+']].map(([id,lbl])=>(
+                    <button key={id} className={'chip'+(pickFilter===id?' on':'')} onClick={()=>setPickFilter(id)}>{lbl}</button>
+                  ))}
+                  <span className="chip-note">{visiblePicks.length} of {picks.length} signals</span>
+                </div>
+              )}
               <div className="sec-hdr">
                 <h3>Professional Picks{picks.length>0?` · ${picks.length} signal${picks.length===1?'':'s'}`:''}</h3>
                 <span>Conf≥{cfg.minStockConf||50}% · Pot≥{cfg.pot||3}% · Risk&lt;{cfg.risk||55}% · R:R≥{cfg.rr||1.2} · EV&gt;0 · Sorted by Confidence</span>
               </div>
-              {wsConnected&&<div style={{fontSize:9,marginBottom:8,color:'#16a34a',fontWeight:600}}>⚡ Picks live via {wsMode==='ws'?'WebSocket':'REST polling'} — {topKeys.length} instruments</div>}
+              {wsConnected&&<div style={{fontSize:10,marginBottom:8,color:'#16a34a',fontWeight:600}}>⚡ Picks live via {wsMode==='ws'?'WebSocket':'REST polling'} — {topKeys.length} instruments</div>}
               {picks.length===0
                 ?<EmptyState>
                   {!stocks?.length?'⚙ Configure stocks.json in GitHub Settings':marketStatus.open?'🔄 Click ▶ Scan to fetch picks':'📅 Market Closed'}
                   {scanStats&&<><br/><span style={{fontSize:11,color:'#64748b'}}>Conf≥{cfg.minStockConf||50}% · Pot≥{cfg.pot||3}% · Risk&lt;{cfg.risk||55}% · R:R≥{cfg.rr||1.2}</span><br/><span style={{fontSize:10}}>Scanned {scanStats.totalScanned||0} stocks · Lower thresholds in ⚙ Settings</span></>}
                 </EmptyState>
-                :<div className="cards-g">{picks.map((p,i)=>{const live=stockPrices[p.key];const pickData=live?{...p,ltp:live.ltp,chgPct:live.chgPct}:p;return(<StockCard key={`${p._scanId||picksScanId}-${p.key||p.s}-${i}`} pick={pickData} rank={i+1} cfg={cfg} onPopup={()=>setPopupPick(pickData)}/>);})}</div>
+                :isDesktop
+                  ?<PicksTable picks={visiblePicks.map(p=>{const live=stockPrices[p.key];return live?{...p,ltp:live.ltp,chgPct:live.chgPct}:p;})} selectedKey={popupPick?.key||popupPick?.s} onSelect={p=>setPopupPick(p)}/>
+                  :<div className="cards-g">{visiblePicks.map((p,i)=>{const live=stockPrices[p.key];const pickData=live?{...p,ltp:live.ltp,chgPct:live.chgPct}:p;return(<StockCard key={`${p._scanId||picksScanId}-${p.key||p.s}-${i}`} pick={pickData} rank={i+1} cfg={cfg} onPopup={()=>setPopupPick(pickData)}/>);})}</div>
               }
               <div className="disc">⚠ Not SEBI advice. Always DYODD.</div>
             </div>

@@ -60,7 +60,7 @@ export const TABS = [
   { id: 'portfolio', icon: '💼', label: 'Portfolio',     pageLabel: '💼 Portfolio'   },
   { id: 'lookup',    icon: '🔍', label: 'Analyse Stock', pageLabel: '🔍 Analyse Stock'     },
   { id: 'log',       icon: '📋', label: 'Signal Log',    pageLabel: '📋 Signal Log'  },
-  { id: 'analysis',  icon: '📊', label: 'Analysis Signal Log',      pageLabel: '📊 Analysis Signal Log'    },
+  { id: 'analysis',  icon: '📊', label: 'Performance',      pageLabel: '📊 Performance'    },
   { id: 'heatmap',   icon: '🌡', label: 'Market Heatmap',  pageLabel: '🌡 Market Heatmap' },
   { id: 'settings',  icon: '⚙',  label: 'Settings',      pageLabel: '⚙ Settings'    },
 ];

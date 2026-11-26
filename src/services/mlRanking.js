@@ -4,6 +4,8 @@ const STOCK_FEATURES = [
   'deliveryHigh', 'deliveryLow', 'macdBullCross', 'adxBull', 'rsiBullDiv', 'bbSqueeze',
   'weekday', 'phase', 'regime', 'volRegimeShift', 'sectorStrength', 'newsSentiment', 'gapType',
   'mtfScore', 'mtfGrade', 'mtfRoom',
+  // Added: volatility, position inside the yearly range, distance from the trend averages, day move
+  'atrPct', 'hi52Dist', 'lo52Dist', 'ema50Dist', 'ema200Dist', 'dayChg',
 ];
 
 const OPTION_FEATURES = [
@@ -13,6 +15,8 @@ const OPTION_FEATURES = [
   'weekday', 'phase', 'regime', 'volRegimeShift', 'expiryDay', 'sectorStrength', 'newsSentiment',
   'maxPainDist', 'counterTrend',
   'mtfScore', 'mtfGrade', 'mtfRoom', 'spread',
+  // Added: how far the strike is, the move needed vs the expected move, time left, liquidity, OI change
+  'otmPct', 'moveRatio', 'dteNorm', 'oiLiq', 'oiChgPct',
 ];
 
 const BASE_COST_PCT = {
@@ -30,6 +34,23 @@ const BASE_COST_PCT = {
 // (~₹20/order) spread over the real turnover (premium × lot), plus statutory charges
 // (STT on the sell leg, exchange fees, SEBI, GST), plus adverse market-order slippage
 // scaled by open interest. Capped so one tiny-premium contract can't dominate averages.
+// ── Learning knobs ────────────────────────────────────────────────
+// Recency: every closed signal is used. Newer ones simply count more; old ones never drop below
+// RECENCY_FLOOR of a new one's weight, so there is no 30/60/90-day cut-off.
+const RECENCY_HALF_LIFE_DAYS = 365;
+const RECENCY_FLOOR = 0.35;
+// Shadow (rejected-but-tracked) signals teach what the filters threw away, but they were never
+// "real" trades, so they count half.
+const SHADOW_WEIGHT = 0.5;
+// Calibration/thresholds are fitted on out-of-fold (walk-forward) predictions once there are this many.
+const WF_MIN_OOF = 50;
+// Calibration + regime + learned weights + ML are four learners fed by the same outcomes. Their
+// combined effect on a signal's confidence is capped so they cannot stack into a runaway swing.
+export const MAX_LEARNED_ADJ = 25;
+export function limitLearnedAdj(total) {
+  return Math.max(-MAX_LEARNED_ADJ, Math.min(MAX_LEARNED_ADJ, total));
+}
+
 export function estimateCostPct(row, type) {
   if (type !== 'OPTION') return BASE_COST_PCT.STOCK;
   const oi = toNum(row?.signal?.oi ?? row?.oi, 0);
@@ -172,8 +193,19 @@ function getIndicators(sig) {
   return sig?._indSnap || sig?.indicators || {};
 }
 
+// Live picks carry type 'CE'/'PE' (the contract side) while logged signals carry type 'OPTION' +
+// optType 'CE'/'PE'. Both must resolve to the same subtype / segment, or segment models and
+// per-subtype thresholds never apply to live picks.
+function optSide(sig) {
+  const o = String(sig?.optType || '').toUpperCase();
+  if (o === 'CE' || o === 'PE') return o;
+  const t = String(sig?.type || '').toUpperCase();
+  return t === 'CE' || t === 'PE' ? t : '';
+}
+function isOptionLike(sig) { return sig?.type === 'OPTION' || sig?.type === 'CE' || sig?.type === 'PE'; }
+
 function getOptionSubtype(sig) {
-  if (sig?.type !== 'OPTION') return 'stock';
+  if (!isOptionLike(sig)) return 'stock';
   const stock = (sig?.stock || sig?.und || '').toUpperCase();
   if (['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'SENSEX'].includes(stock)) return 'index';
   return 'stock';
@@ -203,6 +235,9 @@ function getStockFeatureVector(sig) {
   const impliedPotential = entry > 0 && target > 0 ? ((target - entry) / entry) * 100 : 0;
   const impliedRR = entry > 0 && sl > 0 && target > entry && entry > sl ? (target - entry) / (entry - sl) : 0;
   const { weekday } = safeDateParts(sig);
+  const px = toNum(sig?.entry ?? sig?.ltp, 0);
+  const atr = toNum(sig?.atr, 0), e50 = toNum(sig?.ema50, 0), e200 = toNum(sig?.ema200, 0);
+  const hi52 = toNum(sig?.hi52, 0), lo52 = toNum(sig?.lo52, 0);
   return {
     baseConf: clamp(preMlConfidence(sig) / 100, 0, 1),
     rr: clamp(toNum(sig?.rr ?? pot?.rr, impliedRR) / 4, 0, 1.5),
@@ -230,6 +265,12 @@ function getStockFeatureVector(sig) {
     newsSentiment: getNewsSentiment(sig),
     gapType: getGapType(sig),
     ...mtfFeatures(sig),
+    atrPct: px > 0 && atr > 0 ? clamp(atr / px / 0.05, 0, 2) : 0.4,
+    hi52Dist: px > 0 && hi52 > 0 ? clamp(((hi52 - px) / px) * 2, 0, 1.5) : 0.5,
+    lo52Dist: px > 0 && lo52 > 0 ? clamp((px - lo52) / px, 0, 1.5) : 0.5,
+    ema50Dist: px > 0 && e50 > 0 ? clamp(((px - e50) / px) * 5, -1.5, 1.5) : 0,
+    ema200Dist: px > 0 && e200 > 0 ? clamp(((px - e200) / px) * 5, -1.5, 1.5) : 0,
+    dayChg: clamp(toNum(sig?.dayChg ?? sig?.chgPct, 0) / 5, -1.5, 1.5),
   };
 }
 
@@ -257,7 +298,25 @@ function getOptionFeatureVector(sig) {
   const spot = toNum(sig?.spot, 0);
   const strike = toNum(sig?.strike, 0);
   const maxPain = toNum(sig?.maxPain, strike);
-  const maxPainDist = spot > 0 ? Math.abs(strike - maxPain) / spot : 0;
+  // spot / maxPain were not logged on older signals: encode "unknown" as a typical distance, not as
+  // "exactly at max pain".
+  const maxPainKnown = spot > 0 && toNum(sig?.maxPain, 0) > 0;
+  const maxPainDist = maxPainKnown ? Math.abs(strike - maxPain) / spot : 0.02;
+  const side = optSide(sig);
+  const entryPx = toNum(sig?.entry, 0);
+  const ivPct = toNum(sig?.iv, 0);
+  const dteRaw = toNum(sig?._dte ?? sig?.dte, NaN);
+  const dte = Number.isFinite(dteRaw) ? Math.max(0.5, dteRaw) : 3;
+  let otmPct = 0.03, moveRatio = 0.5;          // typical values when spot is unknown (older logs)
+  if (spot > 0 && strike > 0 && side) {
+    const otm = side === 'CE' ? Math.max(0, strike - spot) : Math.max(0, spot - strike);
+    otmPct = otm / spot;
+    const breakEven = side === 'CE' ? strike + entryPx : strike - entryPx;
+    const need = side === 'CE' ? Math.max(0, breakEven - spot) : Math.max(0, spot - breakEven);
+    const expMove = spot * (Math.max(ivPct, 5) / 100) * Math.sqrt(dte / 365);   // 1-sigma move to expiry
+    moveRatio = expMove > 0 ? need / expMove : 0.5;
+  }
+  const oiNow = toNum(sig?.oi, 0);
   return {
     baseConf: clamp(preMlConfidence(sig) / 100, 0, 1),
     rr: clamp(toNum(sig?.rr, 0) / 4, 0, 1.5),
@@ -288,6 +347,11 @@ function getOptionFeatureVector(sig) {
     counterTrend: asBool(sig?.trendAligned === false),
     ...mtfFeatures(sig),
     spread: Number.isFinite(toNum(sig?.spreadPct, NaN)) ? clamp(toNum(sig?.spreadPct, 0) / 5, 0, 2) : 0,
+    otmPct: clamp(otmPct * 10, 0, 2),
+    moveRatio: clamp(moveRatio / 3, 0, 1.5),
+    dteNorm: clamp(dte / 30, 0, 1.5),
+    oiLiq: oiNow > 0 ? clamp(Math.log10(oiNow) / 6, 0, 1.2) : 0.4,
+    oiChgPct: clamp(toNum(sig?.oiChg, 0) / 100, -1.5, 1.5),
   };
 }
 
@@ -434,26 +498,34 @@ function predictScore(model, vector) {
   return score;
 }
 
-function fitCalibrator(dataset, model) {
-  if (!dataset.length) return null;
-  const bins = Array.from({ length: 10 }, (_, i) => ({
-    min: i / 10,
-    max: (i + 1) / 10,
-    total: 0,
-    hits: 0,
-    avgPred: 0,
-  }));
-  for (const row of dataset) {
-    const p = sigmoid(predictScore(model, row.x));
-    const idx = Math.min(9, Math.floor(p * 10));
+// Bins predictions by probability and records the hit rate seen in each bin.
+function buildCalibrationBins(pairs, nBins = 10) {
+  if (!pairs.length) return null;
+  const bins = Array.from({ length: nBins }, (_, i) => ({ min: i / nBins, max: (i + 1) / nBins, total: 0, hits: 0, avgPred: 0 }));
+  for (const { p, y } of pairs) {
+    const idx = Math.min(nBins - 1, Math.floor(clamp(p, 0, 0.9999) * nBins));
     bins[idx].total++;
-    bins[idx].hits += row.y;
+    bins[idx].hits += y;
     bins[idx].avgPred += p;
   }
   return bins.map((bin) => ({
     ...bin,
     avgPred: bin.total ? bin.avgPred / bin.total : (bin.min + bin.max) / 2,
     actual: bin.total ? bin.hits / bin.total : null,
+  }));
+}
+
+function fitCalibrator(dataset, model) {
+  if (!dataset.length) return null;
+  return buildCalibrationBins(dataset.map((row) => ({ p: sigmoid(predictScore(model, row.x)), y: row.y })), 10);
+}
+
+// Reliability: for each probability band, what the model said vs what really happened.
+function reliabilityBins(pairs, nBins) {
+  const bins = buildCalibrationBins(pairs, nBins) || [];
+  return bins.filter((b) => b.total > 0).map((b) => ({
+    lo: +b.min.toFixed(2), hi: +b.max.toFixed(2), n: b.total,
+    pred: +b.avgPred.toFixed(3), actual: +(b.actual ?? 0).toFixed(3),
   }));
 }
 
@@ -498,6 +570,17 @@ function buildBacktestRows(signals, model, type) {
         pnlPct: toNum(sig.pnlPct, 0),
       };
     });
+}
+
+// Same rows as buildBacktestRows, but from walk-forward predictions made WITHOUT seeing the signal.
+function buildBacktestRowsFromOof(preds, model, type) {
+  return preds.map((p) => ({
+    signal: p.signal,
+    mlProb: calibrateProbability(p.raw, model.calibrator),
+    baseConf: clamp(preMlConfidence(p.signal) / 100, 0, 1),
+    y: p.y,
+    pnlPct: toNum(p.signal?.pnlPct, 0),
+  })).filter(() => type);
 }
 
 function summarizeBacktest(rows, type, thresholds) {
@@ -572,8 +655,9 @@ function calibrateExpectedWR(closedSignals) {
   return Object.keys(out).length ? out : null;
 }
 
-function optimizeThresholds(dataset, model, type) {
-  const rows = buildBacktestRows(dataset.map((d) => d.signal || d), model, type);
+function optimizeThresholds(dataset, model, type, oofRows = null) {
+  // Prefer honest out-of-fold probabilities; the in-sample ones flatter every threshold.
+  const rows = oofRows && oofRows.length >= 40 ? oofRows : buildBacktestRows(dataset.map((d) => d.signal || d), model, type);
   // minRR floor raised from 1.2/1.3 to 1.6 for both types: at ~55-60% win
   // rate and real transaction costs (BASE_COST_PCT above), a sub-1.5 RR
   // barely clears breakeven after costs — see avgNet in summarizeBacktest.
@@ -750,7 +834,7 @@ function getSegmentLabel(sig, type) {
     return phase <= 0.25 ? 'stock_opening' : phase >= 0.65 ? 'stock_midday' : 'stock_late';
   }
   const subtype = getOptionSubtype(sig);
-  const dir = (sig?.optType || '').toUpperCase();
+  const dir = optSide(sig);
   return `${subtype}_${dir || 'OPTION'}`.toLowerCase();
 }
 
@@ -782,6 +866,16 @@ function buildDataset(signals, type, featureNames, label = null) {
     const weight = 1 / group.length;
     for (const row of group) row.weight = weight;
   }
+  // Recency + provenance weights. Nothing is cut off by age; newer signals count more, older ones
+  // fade toward RECENCY_FLOOR. Shadow rows count SHADOW_WEIGHT.
+  const stamps = rows.map((r) => Date.parse(r.signal?.date || '')).filter(Number.isFinite);
+  const latest = stamps.length ? Math.max(...stamps) : NaN;
+  for (const row of rows) {
+    const t = Date.parse(row.signal?.date || '');
+    const ageDays = Number.isFinite(latest) && Number.isFinite(t) ? Math.max(0, (latest - t) / 86400000) : 0;
+    row.weight *= RECENCY_FLOOR + (1 - RECENCY_FLOOR) * Math.pow(0.5, ageDays / RECENCY_HALF_LIFE_DAYS);
+    if (row.signal?.shadow) row.weight *= SHADOW_WEIGHT;
+  }
   return rows;
 }
 
@@ -792,41 +886,57 @@ const WF_EMBARGO_FRAC = 0.01;
 const entryKey = (s) => `${s?.date || ''} ${s?.time || '00:00'}`;
 const exitKey = (s) => `${s?.exitDate || s?.date || ''} ${s?.exitDate ? (s?.exitTime || '23:59') : '23:59'}`;
 
-function trainWalkForward(dataset, featureNames, type, label) {
+function trainWalkForward(dataset, featureNames, type, label, { maxRetrains = 60, budgetMs = 90000 } = {}) {
   if (dataset.length < 40) return null;
   const sorted = [...dataset].sort((a, b) => `${a.signal.date}${a.signal.time || ''}`.localeCompare(`${b.signal.date}${b.signal.time || ''}`));
   const minTrain = Math.max(25, Math.floor(sorted.length * 0.5));
-  // Retraining a full model at every single step is O(n^2) — timed out past
-  // ~1600 rows in testing. Cap total retrains to a fixed budget by striding
-  // through the test window instead of walking it one point at a time; this
-  // keeps runtime bounded as the closed-signal count grows without silently
-  // returning null (which — since fix #2's overfitting gate — makes every
-  // segment model fail the trust check and fall back to global).
+  // Cap the number of retrains by striding through the test window so runtime stays bounded as the
+  // log grows. Each fold now trains with the SAME settings as the model that is actually served
+  // (it used to be a lighter model), so the accuracy measured is the accuracy of what ships.
   const testPoints = sorted.length - minTrain;
-  const MAX_RETRAINS = 120;
-  const stride = Math.max(1, Math.ceil(testPoints / MAX_RETRAINS));
+  const stride = Math.max(1, Math.ceil(testPoints / maxRetrains));
+  const startedAt = Date.now();
   let correct = 0;
-  let tested = 0;
   let brier = 0;
+  const preds = [];
   for (let i = minTrain; i < sorted.length; i += stride) {
+    // Runtime guard: stop adding folds once the time budget is spent (keeps the nightly job bounded
+    // as the log grows); the folds already done are still a valid out-of-fold sample.
+    if (Date.now() - startedAt > budgetMs && preds.length >= 25) break;
     const embargo = Math.max(1, Math.floor(sorted.length * WF_EMBARGO_FRAC));
     const testEntry = entryKey(sorted[i].signal);
     const train = sorted.slice(0, Math.max(0, i - embargo))
       .filter((r) => exitKey(r.signal) < testEntry);
     if (train.length < 25) continue;
-    const model = trainLightGbmStyleModel(train, featureNames, type, label, true);
+    const model = trainLightGbmStyleModel(train, featureNames, type, label, false);
     if (!model) continue;
     const raw = sigmoid(predictScore(model, sorted[i].x));
     const prob = calibrateProbability(raw, model.calibrator);
     if ((prob >= 0.5 ? 1 : 0) === sorted[i].y) correct++;
     brier += Math.pow(prob - sorted[i].y, 2);
-    tested++;
+    preds.push({ raw, prob, y: sorted[i].y, signal: sorted[i].signal });
   }
+  const tested = preds.length;
   if (!tested) return null;
+  const accuracy = +(correct / tested).toFixed(3);
+  const brierAvg = +(brier / tested).toFixed(4);
+  const baseRate = preds.reduce((s, p) => s + p.y, 0) / tested;
+  const baseBrier = +(baseRate * (1 - baseRate)).toFixed(4);
+  // Drift check: how the newest slice of out-of-fold predictions did vs the whole window.
+  const k = Math.min(40, Math.max(15, Math.floor(tested * 0.3)));
+  const recent = preds.slice(-k);
+  const recentAcc = recent.filter((p) => (p.prob >= 0.5 ? 1 : 0) === p.y).length / recent.length;
+  const recentBrier = recent.reduce((s, p) => s + Math.pow(p.prob - p.y, 2), 0) / recent.length;
   return {
     tested,
-    accuracy: +(correct / tested).toFixed(3),
-    brier: +(brier / tested).toFixed(4),
+    accuracy,
+    brier: brierAvg,
+    baseRate: +baseRate.toFixed(3),
+    baseBrier,
+    edge: +(baseBrier - brierAvg).toFixed(4),
+    recent: { n: recent.length, accuracy: +recentAcc.toFixed(3), brier: +recentBrier.toFixed(4) },
+    degraded: tested >= 40 && recentAcc < accuracy - 0.12,
+    preds,   // stripped before the model is stored
   };
 }
 
@@ -848,61 +958,93 @@ function chooseRollback(globalModel, segmentModels) {
   });
   if (!qualified.length) return globalModel;
   return qualified.sort((a, b) => {
-    const ea = (a.edge || 0) + (a.walkForward?.accuracy || 0) * 0.2;
-    const eb = (b.edge || 0) + (b.walkForward?.accuracy || 0) * 0.2;
+    const ea = ((a.oof?.edge ?? a.edge) || 0) + (a.walkForward?.accuracy || 0) * 0.2;
+    const eb = ((b.oof?.edge ?? b.edge) || 0) + (b.walkForward?.accuracy || 0) * 0.2;
     return eb - ea;
   })[0];
+}
+
+// Walk-forward result without the heavy prediction list (that is only needed while training).
+function wfSummary(wf) {
+  if (!wf) return null;
+  const { preds, ...rest } = wf; // eslint-disable-line no-unused-vars
+  return rest;
+}
+
+// Replaces the in-sample calibrator with one fitted on out-of-fold predictions (what the model said
+// about signals it had NOT seen), and records the honest out-of-fold numbers on the model.
+function applyOutOfFold(model, ds, wf) {
+  model.calibrationSource = 'in-sample';
+  model.walkForward = wfSummary(wf);
+  model.oof = wf ? { n: wf.tested, accuracy: wf.accuracy, brier: wf.brier, baseBrier: wf.baseBrier, edge: wf.edge } : null;
+  if (!wf?.preds || wf.preds.length < WF_MIN_OOF) return;
+  const pairs = wf.preds.map((p) => ({ p: p.raw, y: p.y }));
+  const nBins = pairs.length >= 150 ? 10 : 5;
+  model.calibrator = buildCalibrationBins(pairs, nBins);
+  model.calibrationSource = 'walk-forward';
+  const m = evaluateModel(model, ds);           // in-sample figures, now with the honest calibrator
+  model.accuracy = m.accuracy;
+  model.brier = m.brier;
+  model.edge = +((model.baseBrier ?? 0) - m.brier).toFixed(4);
+  model.reliability = reliabilityBins(wf.preds.map((p) => ({ p: calibrateProbability(p.raw, model.calibrator), y: p.y })), nBins);
 }
 
 function trainFamily(signals, type, featureNames) {
   const baseDataset = buildDataset(signals, type, featureNames);
   const globalModel = trainLightGbmStyleModel(baseDataset, featureNames, type, `${type.toLowerCase()}_global`);
   if (!globalModel) return null;
-  globalModel.walkForward = trainWalkForward(baseDataset, featureNames, type, globalModel.label);
+  const oofByLabel = {};
+  const globalWf = trainWalkForward(baseDataset, featureNames, type, globalModel.label, { maxRetrains: 90, budgetMs: 150000 });
+  oofByLabel[globalModel.label] = globalWf?.preds || null;
+  applyOutOfFold(globalModel, baseDataset, globalWf);
 
   const labelSet = [...new Set(signals.filter((s) => s.type === type).map((s) => getSegmentLabel(s, type)))];
   const segmentModels = labelSet.map((label) => {
     const ds = buildDataset(signals, type, featureNames, label);
     const model = trainLightGbmStyleModel(ds, featureNames, type, label);
     if (!model) return null;
-    model.walkForward = trainWalkForward(ds, featureNames, type, label);
+    const wf = trainWalkForward(ds, featureNames, type, label, { maxRetrains: 40, budgetMs: 60000 });
+    oofByLabel[label] = wf?.preds || null;
+    applyOutOfFold(model, ds, wf);
     return model;
   }).filter(Boolean);
 
   const servingModel = chooseRollback(globalModel, segmentModels);
-  const thresholds = optimizeThresholds(baseDataset, servingModel, type);
-  // Index options (NIFTY/BANKNIFTY) and individual-stock options have different
-  // liquidity, IV behavior, and win-rate curves, but optimizeThresholds above
-  // tunes one set of numbers against the whole blended OPTION dataset — likely
-  // dominated by whichever subtype fires more signals. A single stock's option
-  // pick then gets scored by a (correctly) stock-specific model but filtered
-  // against a bar really tuned on the mixed set. Compute a subtype-specific
-  // threshold where there's enough data to trust one; resolveThresholds() below
-  // falls back to the blended `thresholds` above wherever this isn't populated.
+  // Thresholds are tuned on out-of-fold probabilities (the serving model's if it has enough, else the
+  // global model's), not on predictions for signals the model was trained on.
+  const thrModel = (oofByLabel[servingModel.label]?.length >= 40) ? servingModel : globalModel;
+  const thrPreds = oofByLabel[thrModel.label];
+  const thresholds = optimizeThresholds(baseDataset, servingModel, type, thrPreds ? buildBacktestRowsFromOof(thrPreds, thrModel, type) : null);
+  // Index options (NIFTY/BANKNIFTY) and individual-stock options behave differently (liquidity, IV,
+  // win-rate curve). Compute a subtype-specific threshold where there is enough data to trust one;
+  // resolveThresholds() falls back to the blended thresholds above elsewhere.
   if (type === 'OPTION') {
     thresholds.bySubtype = {};
+    const gPreds = oofByLabel[globalModel.label];
     for (const subtype of ['index', 'stock']) {
       const subsetSignals = signals.filter((s) => s.type === 'OPTION' && getOptionSubtype(s) === subtype);
       const subsetDataset = buildDataset(subsetSignals, type, featureNames);
       if (subsetDataset.length < 40) continue; // same trust floor as optimizeThresholds itself
-      thresholds.bySubtype[subtype] = optimizeThresholds(subsetDataset, globalModel, type);
+      const subRows = gPreds ? buildBacktestRowsFromOof(gPreds.filter((p) => getOptionSubtype(p.signal) === subtype), globalModel, type) : null;
+      thresholds.bySubtype[subtype] = optimizeThresholds(subsetDataset, globalModel, type, subRows);
     }
   }
-  // Must exclude OPEN signals — calibrateRegimePenalties treats anything
-  // that isn't status==='TARGET_HIT' as a loss, so an unresolved position
-  // would get silently counted as a loss for its regime bucket otherwise.
+  // Must exclude OPEN signals — calibrateRegimePenalties treats anything that isn't TARGET_HIT as a loss.
   const resolvedSignals = signals.filter((s) => s.type === type && s.status !== 'OPEN');
   thresholds.regimePenalties = calibrateRegimePenalties(resolvedSignals);
   if (type === 'STOCK') thresholds.wrByRec = calibrateExpectedWR(resolvedSignals);
+  const servingWf = servingModel.walkForward;
   return {
     global: globalModel,
     segments: Object.fromEntries(segmentModels.map((m) => [m.label, m])),
     servingLabel: servingModel.label,
     thresholds,
     drift: {
-      walkForwardAccuracy: servingModel.walkForward?.accuracy ?? globalModel.accuracy,
-      stable: (servingModel.walkForward?.accuracy ?? globalModel.accuracy) >= (globalModel.accuracy - 0.08),
+      walkForwardAccuracy: servingWf?.accuracy ?? globalModel.accuracy,
+      stable: (servingWf?.accuracy ?? globalModel.accuracy) >= (globalModel.accuracy - 0.08),
       rollbackTo: servingModel.label !== globalModel.label ? servingModel.label : null,
+      recent: servingWf?.recent || null,
+      degraded: !!servingWf?.degraded,
     },
     topFeatures: collectFeatureImportance(servingModel).slice(0, 8),
   };
@@ -1066,6 +1208,9 @@ export function buildModelSnapshot(models) {
       walkForward: models.families.stock.global?.walkForward?.accuracy || 0,
       topFeatures: models.families.stock.topFeatures || [],
       servingLabel: models.families.stock.servingLabel || 'stock_global',
+      oofEdge: models.families.stock.global?.oof?.edge ?? null,
+      calibration: models.families.stock.global?.calibrationSource || 'in-sample',
+      degraded: !!models.families.stock.drift?.degraded,
     } : null,
     option: models.families?.option ? {
       trainedOn: models.families.option.global?.trainedOn || 0,
@@ -1074,6 +1219,9 @@ export function buildModelSnapshot(models) {
       walkForward: models.families.option.global?.walkForward?.accuracy || 0,
       topFeatures: models.families.option.topFeatures || [],
       servingLabel: models.families.option.servingLabel || 'option_global',
+      oofEdge: models.families.option.global?.oof?.edge ?? null,
+      calibration: models.families.option.global?.calibrationSource || 'in-sample',
+      degraded: !!models.families.option.drift?.degraded,
     } : null,
   };
 }
@@ -1220,9 +1368,16 @@ export function applyMlRanking(confidence, models, sigLikeIn) {
 
   const baseProb = clamp(toNum(confidence, 50) / 100, 0.01, 0.99);
   const sampleFactor = clamp(model.trainedOn / 180, 0.2, 1);
-  const edgeFactor = clamp((model.edge || 0) / 0.06, 0, 1);
+  // Honest (out-of-fold) edge when the model has one; the in-sample edge only as a fallback.
+  const edgeFactor = clamp(((model.oof?.edge ?? model.edge) || 0) / 0.06, 0, 1);
   const walkForwardFactor = clamp((model.walkForward?.accuracy || model.accuracy || 0.5), 0.35, 0.8);
-  const trust = 0.18 + (0.28 * sampleFactor) + (0.18 * edgeFactor) + (0.18 * walkForwardFactor);
+  // If the newest out-of-fold predictions have fallen well below the model's long-run accuracy, the
+  // market has probably shifted: halve the model's say until the next retrain proves itself again.
+  const driftInfo = models?.featureNames ? null : models?.drift?.[sigLike.type === 'STOCK' ? 'stock' : 'option'];
+  const driftMult = driftInfo?.degraded ? 0.5 : 1;
+  // No demonstrated skill: out-of-fold results are no better than guessing the average win rate.
+  const skillMult = model.oof && model.oof.n >= 40 && model.oof.edge <= 0 ? 0.5 : 1;
+  const trust = (0.18 + (0.28 * sampleFactor) + (0.18 * edgeFactor) + (0.18 * walkForwardFactor)) * driftMult * skillMult;
   let adj = clamp((probability - baseProb) * 100 * trust, -18, 18);
   // portfolioPenalty (capital load / cluster risk) is intentionally NOT applied
   // here anymore — it's a position-sizing concern (see getPortfolioAiGuidance),
@@ -1251,5 +1406,33 @@ export function applyMlRanking(confidence, models, sigLikeIn) {
     mlSegment: models?.featureNames ? 'external' : describeServingLabel(models, sigLike),
     explanation,
     servingLabel: model.label,
+    calibrationSource: model.calibrationSource || 'in-sample',
+    driftDegraded: !!driftInfo?.degraded,
   };
+}
+
+
+// ── Champion / challenger ─────────────────────────────────────────
+// Decides whether a freshly trained family (stock or option) should replace the one currently live.
+// Uses the HONEST numbers (walk-forward / out-of-fold), never the in-sample ones.
+//   - nothing new to learn from  -> keep the live model (no pointless daily commits)
+//   - candidate lost a lot of its data (e.g. a bad load) -> keep the live model
+//   - candidate's out-of-fold edge dropped clearly below the live model's and is itself weak -> keep
+//   - candidate is worse than just guessing your average win rate while the live one is not -> keep
+export function decidePromotion(candidate, incumbent) {
+  if (!candidate) return { promote: false, reason: 'no candidate model' };
+  if (!incumbent) return { promote: true, reason: 'no live model yet' };
+  const pick = (fam) => fam?.segments?.[fam.servingLabel] || fam?.global || null;
+  const c = pick(candidate), i = pick(incumbent);
+  if (!c) return { promote: false, reason: 'candidate has no serving model' };
+  if (!i) return { promote: true, reason: 'live model unreadable' };
+  const cg = candidate.global || c, ig = incumbent.global || i;
+  if (cg.trainedOn === ig.trainedOn && cg.wins === ig.wins) return { promote: false, reason: 'no new closed signals since the live model' };
+  if ((cg.trainedOn || 0) < (ig.trainedOn || 0) * 0.5) return { promote: false, reason: `candidate trained on far less data (${cg.trainedOn} vs ${ig.trainedOn})` };
+  const cEdge = c.oof?.edge ?? null, iEdge = i.oof?.edge ?? null;
+  if (cEdge != null && iEdge != null) {
+    if (cEdge < iEdge - 0.015 && cEdge < 0.01) return { promote: false, reason: `out-of-fold edge fell ${iEdge} -> ${cEdge}` };
+    if (cEdge < -0.005 && iEdge >= 0.005) return { promote: false, reason: `candidate is below the base rate (edge ${cEdge}) while the live model is not (${iEdge})` };
+  }
+  return { promote: true, reason: cEdge != null ? `out-of-fold edge ${cEdge}${iEdge != null ? ` (live ${iEdge})` : ''}` : 'candidate accepted' };
 }

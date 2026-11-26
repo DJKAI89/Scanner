@@ -476,13 +476,13 @@ export default function LiveChart({
           <span style={{ fontSize:11, fontWeight:700, color:chgColor }}>{chgPct>=0?'+':''}{chgPct.toFixed(2)}%</span>
         </div>
         {feedState === 'live' && (
-          <div style={{ display:'flex', alignItems:'center', gap:3, fontSize:9, color:'#16a34a', fontWeight:700 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:3, fontSize:10, color:'#16a34a', fontWeight:700 }}>
             <div style={{ width:6, height:6, borderRadius:'50%', background:'#16a34a', animation:'pulse 1.5s infinite' }} />
             LIVE {tickTime}
           </div>
         )}
         {(feedState === 'delayed' || feedState === 'connecting') && (
-          <div style={{ display:'flex', alignItems:'center', gap:3, fontSize:9, color:'#d97706', fontWeight:700 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:3, fontSize:10, color:'#d97706', fontWeight:700 }}>
             <div style={{ width:6, height:6, borderRadius:'50%', background:'#f59e0b' }} />
             {feedState === 'connecting' ? 'Connecting…' : `Live data delayed${tickTime ? ' · ' + tickTime : ''}`}
           </div>
@@ -520,7 +520,7 @@ export default function LiveChart({
               <button onClick={scrollLeft}  style={ctrlBtn}>‹ Older</button>
               <button onClick={scrollRight} style={ctrlBtn}>Newer ›</button>
             </div>
-            <div style={{ fontSize:8, color:'#94a3b8', textAlign:'center' }}>
+            <div style={{ fontSize:10, color:'#94a3b8', textAlign:'center' }}>
               {N} candles · drag to scroll
             </div>
             <div style={{ display:'flex', gap:4 }}>
@@ -601,7 +601,7 @@ export default function LiveChart({
           </svg>
 
           {/* Candle info on drag */}
-          <div style={{ fontSize:9, color:'#94a3b8', marginTop:4, textAlign:'center' }}>
+          <div style={{ fontSize:10, color:'#94a3b8', marginTop:4, textAlign:'center' }}>
             {viewOffset > 0 ? `Showing ${N} candles · ${viewOffset} from latest (drag to scroll)` : `Latest ${N} of ${merged.length} candles`}
           </div>
         </>
@@ -611,7 +611,7 @@ export default function LiveChart({
 }
 
 const ctrlBtn = {
-  padding:'3px 9px', fontSize:9, fontWeight:700, borderRadius:6,
+  padding:'3px 9px', fontSize:10, fontWeight:700, borderRadius:6,
   border:'1px solid #e2e8f0', background:'#f8fafc', color:'#64748b',
   cursor:'pointer', flexShrink:0,
 };

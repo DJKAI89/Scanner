@@ -1,8 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import MtfPanel, { GradePill } from '../components/MtfPanel.jsx';
 import { Spinner, ErrorBanner, StatCard, EmptyState } from '../components/common.jsx';
 import ScanProgress from '../components/ScanProgress';
+import FundamentalsTab from '../components/FundamentalsTab.jsx';
+import StockOptionsTab from '../components/StockOptionsTab.jsx';
 import LiveChart from '../components/LiveChart';
 import { useMarketFeed } from '../hooks/useMarketFeed';
 import { lookupInstrument } from '../services/lookupService';
@@ -124,16 +126,16 @@ function PayoffCalc({ pick }) {
 
   return (
     <div style={{ background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:9, padding:'9px 11px', marginBottom:8 }}>
-      <div style={{ fontSize:8.5, color:'#64748b', fontWeight:800, letterSpacing:.3, marginBottom:6 }}>PAYOFF CALCULATOR</div>
+      <div style={{ fontSize:10, color:'#64748b', fontWeight:800, letterSpacing:.3, marginBottom:6 }}>PAYOFF CALCULATOR</div>
       {scenarios.map((s) => (
         <div key={s.pct} style={{ display:'flex', justifyContent:'space-between', padding:'3px 6px' }}>
-          <span style={{ fontSize:9.5, color:'#374151', fontWeight:600 }}>{s.pct > 0 ? '+' : ''}{s.pct}%</span>
-          <span style={{ fontSize:9.5, fontWeight:700, color:s.pnlPct >= 0 ? '#16a34a' : '#dc2626' }}>
+          <span style={{ fontSize:10, color:'#374151', fontWeight:600 }}>{s.pct > 0 ? '+' : ''}{s.pct}%</span>
+          <span style={{ fontSize:10, fontWeight:700, color:s.pnlPct >= 0 ? '#16a34a' : '#dc2626' }}>
             ₹{fmt(s.newPrem)} {s.pnlPct !== 0 ? `(${s.pnlPct > 0 ? '+' : ''}${s.pnlPct}%)` : ''}
           </span>
         </div>
       ))}
-      <div style={{ display:'flex', justifyContent:'space-between', marginTop:6, paddingTop:6, borderTop:'1px solid #e2e8f0', fontSize:8.5, color:'#64748b' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', marginTop:6, paddingTop:6, borderTop:'1px solid #e2e8f0', fontSize:10, color:'#64748b' }}>
         <span>Break-even ₹{fmt(beSpot, 0)}</span>
         <span>{bePct}% move needed</span>
         <span>Theta -₹{thetaAbs.toFixed(2)}/day</span>
@@ -150,7 +152,7 @@ function PositionSizing({ pick, portSize, riskPct }) {
   const recCapital = recLots * pick.entry * pick.lot;
   return (
     <div style={{ background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:9, padding:'9px 11px', marginBottom:8 }}>
-      <div style={{ fontSize:8.5, color:'#64748b', fontWeight:800, letterSpacing:.3, marginBottom:4 }}>POSITION SIZING</div>
+      <div style={{ fontSize:10, color:'#64748b', fontWeight:800, letterSpacing:.3, marginBottom:4 }}>POSITION SIZING</div>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
         <div style={{ fontSize:17, fontWeight:800, color:'#1d4ed8' }}>{recLots} lot{recLots > 1 ? 's' : ''}</div>
         <div style={{ textAlign:'right', fontSize:10.5, color:'#64748b', lineHeight:1.6 }}>
@@ -246,6 +248,9 @@ export default function LookupPane() {
   const [ddOpen, setDdOpen] = useState(false);
   const [ddItems, setDdItems] = useState([]);
   const [chartOpen, setChartOpen] = useState(false);
+  const [tab, setTab] = useState('overview');
+  // True right after a stock is picked, so the suggestion list stays closed once analysis starts
+  const ddSuppress = useRef(false);
 
   const activeKey = result?.inst?.key ? [result.inst.key] : [];
 
@@ -269,6 +274,7 @@ export default function LookupPane() {
       setDdOpen(false);
       return;
     }
+    if (ddSuppress.current) { ddSuppress.current = false; setDdItems([]); setDdOpen(false); return; }
     const q = sym.toUpperCase();
     const matches = (stocks || []).filter((s) => s.s.startsWith(q) || s.n?.toUpperCase().includes(q)).slice(0, 12);
     setDdItems(matches);
@@ -300,8 +306,11 @@ export default function LookupPane() {
     const s = (symbol || sym).trim().toUpperCase();
     if (!s) return;
 
+    ddSuppress.current = true;
     setSym(s);
     setDdOpen(false);
+    setDdItems([]);
+    setTab('overview');
     setLoading(true);
     setError('');
     setResult(null);
@@ -333,14 +342,14 @@ export default function LookupPane() {
           <input
             type="text"
             value={sym}
-            onChange={(e) => setSym(e.target.value.toUpperCase())}
+            onChange={(e) => { ddSuppress.current = false; setSym(e.target.value.toUpperCase()); }}
             onKeyDown={(e) => { if (e.key === 'Enter') lookup(); if (e.key === 'Escape') setDdOpen(false); }}
             placeholder="Symbol e.g. RELIANCE, HDFCBANK..."
             style={{ width:'100%', border:'1.5px solid #e2e8f0', borderRadius:8, padding:'9px 12px', fontSize:13, outline:'none' }}
             onFocus={(e) => { e.target.style.borderColor = '#16a34a'; }}
             onBlur={(e) => { e.target.style.borderColor = '#e2e8f0'; setTimeout(() => setDdOpen(false), 200); }}
           />
-          {ddOpen && ddItems.length > 0 && (
+          {ddOpen && !loading && ddItems.length > 0 && (
             <div className="lkp-dd open">
               {ddItems.map((item) => (
                 <div key={item.s} className="lkp-dd-item" onMouseDown={() => lookup(item.s)}>
@@ -376,13 +385,13 @@ export default function LookupPane() {
                   <span style={{ fontSize:21, fontWeight:900, color:'#0f172a', letterSpacing:-0.3 }}>{r.inst?.s}</span>
                   <button
                     onClick={() => setChartOpen(true)}
-                    style={{ fontSize:9.5, color:'#1d4ed8', fontWeight:700, background:'#eff6ff', border:'1px solid #bfdbfe', padding:'3px 9px', borderRadius:7, cursor:'pointer', display:'inline-flex', alignItems:'center', gap:3 }}
+                    style={{ fontSize:10, color:'#1d4ed8', fontWeight:700, background:'#eff6ff', border:'1px solid #bfdbfe', padding:'3px 9px', borderRadius:7, cursor:'pointer', display:'inline-flex', alignItems:'center', gap:3 }}
                   >
                     📊 Chart
                   </button>
                 </div>
                 <div style={{ fontSize:11, color:'#64748b', marginTop:3 }}>{r.inst?.n} · {r.inst?.sec} {r.inst?.fo ? '· F&O' : ''}</div>
-                <div style={{ fontSize:9, color:'#94a3b8', marginTop:5, display:'flex', alignItems:'center', gap:5 }}>
+                <div style={{ fontSize:10, color:'#94a3b8', marginTop:5, display:'flex', alignItems:'center', gap:5 }}>
                   <span>Updated {r.time}</span>
                   {activeKey.length > 0 && (
                     <>
@@ -405,12 +414,20 @@ export default function LookupPane() {
               </div>
             </div>
             {r.q.volume > 0 && (
-              <div style={{ fontSize:9.5, color:'#94a3b8', marginTop:9, paddingTop:9, borderTop:'1px solid #f1f5f9' }}>
+              <div style={{ fontSize:10, color:'#94a3b8', marginTop:9, paddingTop:9, borderTop:'1px solid #f1f5f9' }}>
                 Vol {fmtVol(r.q.volume)} · Avg20 {fmtVol(r.tech?.avgVol || 0)} · {(r.tech?.volRatio || 1).toFixed(1)}× avg
               </div>
             )}
           </div>
 
+          {/* Tabs */}
+          <div className="tabs-row" role="tablist">
+            {[['overview', 'Overview'], ['fundamentals', 'Fundamentals'], ['options', 'Options']].map(([id, lbl]) => (
+              <button key={id} role="tab" aria-selected={tab === id} className={'tab-btn' + (tab === id ? ' on' : '')} onClick={() => setTab(id)}>{lbl}</button>
+            ))}
+          </div>
+
+          {tab === 'overview' && (<>
           {/* Recommendation banner */}
           {r.tech?.rec && (
             <div style={{
@@ -517,6 +534,15 @@ export default function LookupPane() {
             </SectionCard>
           )}
 
+          </>)}
+
+          {tab === 'fundamentals' && <FundamentalsTab key={r.inst?.key} inst={r.inst} />}
+
+          {tab === 'options' && (<>
+          {r.foData && !r.foData.unsupported && !r.foData.empty && !r.foData.error && (
+            <StockOptionsTab key={r.inst?.key} inst={r.inst} ltp={r.ltp} chgPct={r.chgPct} chgPts={r.chgPts} foChain={r.foData.chain}
+              foCtx={{ stkCtx: r.foData.stkCtx, niftyBull: r.foData.niftyBull, vixVal: r.foData.vixVal }} />
+          )}
           {r.foData && !r.foData.error && (
             <SectionCard
               title={r.foData.unsupported
@@ -566,7 +592,7 @@ export default function LookupPane() {
 
                   {r.foData.multiExpiry && (
                     <div style={{ marginTop:4, background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:11, padding:12 }}>
-                      <div style={{ fontSize:9.5, fontWeight:800, color:'#374151', letterSpacing:.3, marginBottom:9 }}>MULTI-EXPIRY COMPARISON · ATM {r.foData.multiExpiry.atm}</div>
+                      <div style={{ fontSize:10, fontWeight:800, color:'#374151', letterSpacing:.3, marginBottom:9 }}>MULTI-EXPIRY COMPARISON · ATM {r.foData.multiExpiry.atm}</div>
                       {['CE', 'PE'].map((side) => {
                         const me = r.foData.multiExpiry;
                         const cur = me[side.toLowerCase()].cur;
@@ -574,16 +600,16 @@ export default function LookupPane() {
                         const costDiff = nxt.ltp > 0 && cur.ltp > 0 ? +((nxt.ltp - cur.ltp) / cur.ltp * 100).toFixed(0) : null;
                         return (
                           <div key={side} style={{ marginBottom:8 }}>
-                            <div style={{ fontSize:9.5, fontWeight:700, color:'#374151', marginBottom:4 }}>{side} ATM {me.atm}</div>
+                            <div style={{ fontSize:10, fontWeight:700, color:'#374151', marginBottom:4 }}>{side} ATM {me.atm}</div>
                             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6 }}>
                               <div style={{ background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:8, padding:'7px 9px' }}>
-                                <div style={{ fontSize:7.5, color:'#1d4ed8', fontWeight:800, letterSpacing:.2 }}>CURRENT · {me.expiry} · {me.dteCur}d</div>
+                                <div style={{ fontSize:10, color:'#1d4ed8', fontWeight:800, letterSpacing:.2 }}>CURRENT · {me.expiry} · {me.dteCur}d</div>
                                 <div style={{ fontSize:14.5, fontWeight:800, color:'#1e40af', marginTop:1 }}>₹{fmt(cur.ltp)}</div>
                               </div>
                               <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:8, padding:'7px 9px' }}>
-                                <div style={{ fontSize:7.5, color:'#64748b', fontWeight:800, letterSpacing:.2 }}>NEXT · {me.nextExp} · {me.dteNxt}d</div>
+                                <div style={{ fontSize:10, color:'#64748b', fontWeight:800, letterSpacing:.2 }}>NEXT · {me.nextExp} · {me.dteNxt}d</div>
                                 <div style={{ fontSize:14.5, fontWeight:800, color:'#0f172a', marginTop:1 }}>₹{fmt(nxt.ltp)}</div>
-                                {costDiff !== null && <div style={{ fontSize:7.5, color:costDiff > 0 ? '#dc2626' : '#16a34a', fontWeight:700, marginTop:1 }}>{costDiff > 0 ? '+' : ''}{costDiff}% vs current</div>}
+                                {costDiff !== null && <div style={{ fontSize:10, color:costDiff > 0 ? '#dc2626' : '#16a34a', fontWeight:700, marginTop:1 }}>{costDiff > 0 ? '+' : ''}{costDiff}% vs current</div>}
                               </div>
                             </div>
                           </div>
@@ -599,6 +625,7 @@ export default function LookupPane() {
           {r.foData?.error && (
             <Banner tone="red" icon="⛔" title="Options error" detail={r.foData.error} />
           )}
+          </>)}
 
           <FooterNote>Analysis for educational purposes only. Not SEBI-registered advice. Always DYODD.</FooterNote>
         </div>

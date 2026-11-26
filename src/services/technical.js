@@ -1640,7 +1640,7 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
   const compositeScore = marketCtx?.compositeScore ?? (niftyBullish ? 1 : -1);
 
   // Gate: consolidating market
-  if (marketCtx?.isConsolidating) return [];
+  if (marketCtx?.isConsolidating && !cfg?.includeAll) return [];
 
   // PDH/PDL zone
   const pdh = marketCtx?.pdh || null, pdl = marketCtx?.pdl || null;
@@ -1676,7 +1676,7 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       const spreadPct = calcSpread(md);
       // Liquidity gate — a calculated SL is meaningless if the contract barely trades;
       // thin OI means price can gap straight through the SL before it's ever caught.
-      if (oi < (cfg?.minOptOI ?? 500)) continue;
+      if (oi < (cfg?.minOptOI ?? 500) && !cfg?.includeAll) continue;
       const oiChg = prevOI > 0 ? ((oi - prevOI) / prevOI * 100) : 0;
       const absD  = Math.abs(delta);
 
@@ -1688,7 +1688,7 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       if (oiChg <= -oi_thresh)    signals.push({ l: 'OI ' + oiChg.toFixed(0) + '% UW',   s: 1 });
       if (theta < -0.5)           signals.push({ l: 'Θ ' + theta.toFixed(2),              s: 1 });
       if (sp === atm)             signals.push({ l: 'ATM',                                 s: 1 });
-      if (signals.length < 2)     continue;
+      if (signals.length < 2 && !cfg?.includeAll) continue;
 
       // OI build classification
       const priceBull = compositeScore > 0.5, priceBear = compositeScore < -0.5;

@@ -24,7 +24,7 @@ function RingGauge({ value, size = 88, stroke = 9, label, sub, color }) {
         <div style={{ fontSize: size * 0.22, fontWeight: 900, color, letterSpacing: -1, lineHeight: 1 }}>{value}%</div>
         {label && <div style={{ fontSize: size * 0.11, color: '#64748b', fontWeight: 600, marginTop: 2 }}>{label}</div>}
       </div>
-      {sub && <div style={{ fontSize: 9, color: '#64748b', fontWeight: 600, marginTop: 2 }}>{sub}</div>}
+      {sub && <div style={{ fontSize: 10, color: '#64748b', fontWeight: 600, marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
@@ -80,9 +80,9 @@ function StatTile({ label, value, sub, color = '#10b981', size = 'md' }) {
       display: 'flex', flexDirection: 'column', gap: 3,
       boxShadow: '0 1px 4px #0000000f',
     }}>
-      <div style={{ fontSize: 8, fontWeight: 800, color: '#94a3b8', letterSpacing: 1.5, textTransform: 'uppercase' }}>{label}</div>
+      <div style={{ fontSize: 10, fontWeight: 800, color: '#94a3b8', letterSpacing: 1.5, textTransform: 'uppercase' }}>{label}</div>
       <div style={{ fontSize: isLg ? 28 : 22, fontWeight: 900, color, lineHeight: 1, letterSpacing: -1 }}>{value}</div>
-      {sub && <div style={{ fontSize: 9, color: '#94a3b8', fontWeight: 600 }}>{sub}</div>}
+      {sub && <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600 }}>{sub}</div>}
     </div>
   );
 }
@@ -126,7 +126,7 @@ function TimeClock({ sessions }) {
               return (
                 <text x={cx + rM * Math.cos(a)} y={cy + rM * Math.sin(a)}
                   textAnchor="middle" dominantBaseline="middle"
-                  style={{ fontSize: 9, fontWeight: 800, fill: '#fff' }}>{r2}%</text>
+                  style={{ fontSize: 10, fontWeight: 800, fill: '#fff' }}>{r2}%</text>
               );
             })()}
           </g>
@@ -148,16 +148,16 @@ function ConfHeatmap({ bands }) {
         const c = clr(b.r);
         return (
           <div key={b.band} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', minWidth: 52, textAlign: 'right' }}>{b.band}</div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', minWidth: 52, textAlign: 'right' }}>{b.band}</div>
             <SparkBar value={b.t} max={max} color={c} height={20} />
             <div style={{ minWidth: 48, textAlign: 'right' }}>
               <span style={{ fontSize: 10, fontWeight: 800, color: c }}>{pct(b.r)}</span>
-              <span style={{ fontSize: 8, color: '#94a3b8', marginLeft: 4 }}>·{b.t}</span>
+              <span style={{ fontSize: 10, color: '#94a3b8', marginLeft: 4 }}>·{b.t}</span>
             </div>
           </div>
         );
       })}
-      <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 2, textAlign: 'center' }}>
+      <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 2, textAlign: 'center' }}>
         bar width = signal volume · color = win rate
       </div>
     </div>
@@ -173,13 +173,13 @@ function MetricBars({ items, labelKey = 'band', showAvgNet = false, labelWidth =
         const c = clr(b.r || 0);
         return (
           <div key={b[labelKey] || i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', minWidth: labelWidth }}>{b[labelKey]}</div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', minWidth: labelWidth }}>{b[labelKey]}</div>
             <SparkBar value={b.t} max={max} color={c} height={18} />
             <div style={{ minWidth: showAvgNet ? 96 : 58, textAlign: 'right' }}>
               <span style={{ fontSize: 10, fontWeight: 800, color: c }}>{pct(b.r)}</span>
-              <span style={{ fontSize: 8, color: '#94a3b8', marginLeft: 4 }}>·{b.t}</span>
+              <span style={{ fontSize: 10, color: '#94a3b8', marginLeft: 4 }}>·{b.t}</span>
               {showAvgNet && b.avgNet != null && (
-                <span style={{ fontSize: 9, fontWeight: 700, color: b.avgNet >= 0 ? '#10b981' : '#ef4444', marginLeft: 6 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: b.avgNet >= 0 ? '#10b981' : '#ef4444', marginLeft: 6 }}>
                   {b.avgNet >= 0 ? '+' : ''}{b.avgNet}%
                 </span>
               )}
@@ -202,9 +202,9 @@ function RHistogram({ buckets }) {
         const color = isLoss ? '#ef4444' : b.label.startsWith('0') ? '#f59e0b' : '#10b981';
         return (
           <div key={b.label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-            <div style={{ fontSize: 9, fontWeight: 800, color: '#0f172a' }}>{b.t}</div>
+            <div style={{ fontSize: 10, fontWeight: 800, color: '#0f172a' }}>{b.t}</div>
             <div style={{ width: '100%', height: h, borderRadius: 4, background: `linear-gradient(180deg,${color},${color}99)` }} />
-            <div style={{ fontSize: 7, color: '#94a3b8', fontWeight: 700, textAlign: 'center' }}>{b.label}</div>
+            <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700, textAlign: 'center' }}>{b.label}</div>
           </div>
         );
       })}
@@ -224,14 +224,14 @@ function Leaderboard({ items }) {
             <div style={{
               width: 20, height: 20, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center',
               background: i === 0 ? '#fbbf24' : i === 1 ? '#cbd5e1' : i === 2 ? '#cd7c3e' : '#f1f5f9',
-              fontSize: 9, fontWeight: 900,
+              fontSize: 10, fontWeight: 900,
               color: i < 3 ? '#0f172a' : '#94a3b8',
             }}>{i + 1}</div>
             <div style={{ flex: 1, fontSize: 10, fontWeight: 700, color: '#0f172a' }}>{x.u}</div>
             <SparkBar value={x.r} max={best} color={c} height={14} />
             <div style={{ minWidth: 60, textAlign: 'right' }}>
               <span style={{ fontSize: 11, fontWeight: 800, color: c }}>{pct(x.r)}</span>
-              <span style={{ fontSize: 8, color: '#94a3b8', marginLeft: 4 }}>n={x.t}</span>
+              <span style={{ fontSize: 10, color: '#94a3b8', marginLeft: 4 }}>n={x.t}</span>
             </div>
           </div>
         );
@@ -269,22 +269,22 @@ function DayDetailPopup({ date, signals, onClose }) {
         <div style={{ flex:1, minWidth:0 }}>
           <div style={{ display:'flex', alignItems:'center', gap:4, flexWrap:'wrap' }}>
             <span style={{ fontSize:12, fontWeight:800, color:'#0f172a', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:160 }}>{s.stock||s.name}</span>
-            {s.optType && <span style={{ fontSize:8, fontWeight:800, borderRadius:4, padding:'1px 5px', background:s.optType==='CE'?'#eff6ff':'#fdf4ff', color:s.optType==='CE'?'#1d4ed8':'#7c3aed' }}>{s.strike} {s.optType}</span>}
-            {s.signal  && <span style={{ fontSize:8, fontWeight:700, borderRadius:4, padding:'1px 5px', background:s.signal==='BUY'?'#f0fdf4':'#fef2f2', color:s.signal==='BUY'?'#16a34a':'#dc2626' }}>{s.signal}</span>}
+            {s.optType && <span style={{ fontSize:10, fontWeight:800, borderRadius:4, padding:'1px 5px', background:s.optType==='CE'?'#eff6ff':'#fdf4ff', color:s.optType==='CE'?'#1d4ed8':'#7c3aed' }}>{s.strike} {s.optType}</span>}
+            {s.signal  && <span style={{ fontSize:10, fontWeight:700, borderRadius:4, padding:'1px 5px', background:s.signal==='BUY'?'#f0fdf4':'#fef2f2', color:s.signal==='BUY'?'#16a34a':'#dc2626' }}>{s.signal}</span>}
           </div>
           <div style={{ display:'flex', gap:8, marginTop:2, flexWrap:'wrap' }}>
-            <span style={{ fontSize:8, color:'#94a3b8' }}>📅 {s.date} {fmtT(s.time) && `· ${fmtT(s.time)}`}</span>
-            {fmtT(s.exitTime) && <span style={{ fontSize:8, color:c }}>{hit?'🎯':'❌'} {s.exitDate||s.date} · {fmtT(s.exitTime)}</span>}
+            <span style={{ fontSize:10, color:'#94a3b8' }}>📅 {s.date} {fmtT(s.time) && `· ${fmtT(s.time)}`}</span>
+            {fmtT(s.exitTime) && <span style={{ fontSize:10, color:c }}>{hit?'🎯':'❌'} {s.exitDate||s.date} · {fmtT(s.exitTime)}</span>}
           </div>
           {s.entry>0 && (
-            <div style={{ fontSize:8, color:'#64748b', marginTop:1 }}>
+            <div style={{ fontSize:10, color:'#64748b', marginTop:1 }}>
               ₹{Number(s.entry).toFixed(2)}{s.exitPrice ? ` → ₹${Number(s.exitPrice).toFixed(2)}` : ` · SL ₹${Number(s.sl||0).toFixed(2)} · Tgt ₹${Number(s.target||0).toFixed(2)}`}
             </div>
           )}
         </div>
         <div style={{ textAlign:'right', flexShrink:0 }}>
           <div style={{ fontSize:14, fontWeight:900, color:c }}>{p}</div>
-          {s.confidence>0 && <div style={{ fontSize:8, color:'#94a3b8' }}>{s.confidence}% conf</div>}
+          {s.confidence>0 && <div style={{ fontSize:10, color:'#94a3b8' }}>{s.confidence}% conf</div>}
         </div>
       </div>
     );
@@ -313,7 +313,7 @@ function DayDetailPopup({ date, signals, onClose }) {
             <div style={{ width:`${total?hits.length/total*100:0}%`, background:'#10b981', transition:'width .5s' }} />
             <div style={{ width:`${total?losses.length/total*100:0}%`, background:'#ef4444', transition:'width .5s' }} />
           </div>
-          <div style={{ display:'flex', justifyContent:'space-between', fontSize:9, fontWeight:700 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', fontSize:10, fontWeight:700 }}>
             <span style={{ color:'#10b981' }}>✓ {hits.length} Targets</span>
             <span style={{ color:'#64748b' }}>Net {(+totalPnl)>=0?'+':''}{totalPnl}%</span>
             <span style={{ color:'#ef4444' }}>✕ {losses.length} SL hits</span>
@@ -350,9 +350,9 @@ function DailyTimeline({ rows, onDayClick }) {
               borderBottom:'1px solid #e2e8f0',
               cursor: onDayClick ? 'pointer' : 'default',
             }}>
-            <div style={{ fontSize:9, color:'#64748b', fontWeight:700, minWidth:68 }}>
+            <div style={{ fontSize:10, color:'#64748b', fontWeight:700, minWidth:68 }}>
               {date}
-              <div style={{ fontSize:7, color:'#94a3b8' }}>tap ›</div>
+              <div style={{ fontSize:10, color:'#94a3b8' }}>tap ›</div>
             </div>
             <div style={{ width: 6, height: 6, borderRadius: '50%', background: c, flexShrink: 0 }} />
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -360,11 +360,11 @@ function DailyTimeline({ rows, onDayClick }) {
                 <SparkBar value={dd.hits} max={total || 1} color="#10b981" height={5} />
                 <SparkBar value={dd.sls}  max={total || 1} color="#ef4444" height={5} />
               </div>
-              <div style={{ fontSize: 8, color: '#94a3b8' }}>{dd.hits}W · {dd.sls}L</div>
+              <div style={{ fontSize: 10, color: '#94a3b8' }}>{dd.hits}W · {dd.sls}L</div>
             </div>
             <div style={{ textAlign: 'right' }}>
               <div style={{ fontSize: 11, fontWeight: 800, color: c }}>{pct(wr2)}</div>
-              <div style={{ fontSize: 9, fontWeight: 700, color: isPos ? '#10b981' : '#ef4444' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: isPos ? '#10b981' : '#ef4444' }}>
                 {isPos ? '+' : ''}{dd.pnl.toFixed(1)}%
               </div>
             </div>
@@ -391,9 +391,9 @@ function CEPEFlow({ ceWR, peWR, ceSignals, peSignals }) {
           background: `linear-gradient(135deg, ${side.color}0d, ${side.color}05)`,
           borderRight: i === 0 ? '1px solid #e2e8f0' : 'none',
         }}>
-          <div style={{ fontSize: 9, fontWeight: 800, color: side.color, letterSpacing: 1, marginBottom: 6 }}>{side.label}</div>
+          <div style={{ fontSize: 10, fontWeight: 800, color: side.color, letterSpacing: 1, marginBottom: 6 }}>{side.label}</div>
           <div style={{ fontSize: 26, fontWeight: 900, color: clr(side.r), letterSpacing: -1 }}>{pct(side.r)}</div>
-          <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 3 }}>n={side.t}</div>
+          <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 3 }}>n={side.t}</div>
           {side.avg !== null && (
             <div style={{ fontSize: 10, fontWeight: 700, color: side.avg >= 0 ? '#10b981' : '#ef4444', marginTop: 4 }}>
               avg {side.avg >= 0 ? '+' : ''}{side.avg}%
@@ -418,17 +418,17 @@ function CSArc({ rows }) {
       {sorted.map((item, i) => (
         <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ width: 8, height: 8, borderRadius: 2, background: item.color, flexShrink: 0 }} />
-          <div style={{ fontSize: 9, fontWeight: 600, color: '#64748b', minWidth: 120 }}>{item.label}</div>
+          <div style={{ fontSize: 10, fontWeight: 600, color: '#64748b', minWidth: 120 }}>{item.label}</div>
           {item.r !== null ? (
             <>
               <SparkBar value={item.r} max={100} color={item.color} height={16} />
               <div style={{ minWidth: 52, textAlign: 'right' }}>
                 <span style={{ fontSize: 10, fontWeight: 800, color: clr(item.r) }}>{pct(item.r)}</span>
-                <span style={{ fontSize: 8, color: '#94a3b8', marginLeft: 4 }}>·{item.t}</span>
+                <span style={{ fontSize: 10, color: '#94a3b8', marginLeft: 4 }}>·{item.t}</span>
               </div>
             </>
           ) : (
-            <div style={{ fontSize: 9, color: '#94a3b8' }}>no data</div>
+            <div style={{ fontSize: 10, color: '#94a3b8' }}>no data</div>
           )}
         </div>
       ))}
@@ -438,6 +438,8 @@ function CSArc({ rows }) {
 
 // ── Section wrapper (collapsible, flat) ───────────────────────
 const ExpandCtx = React.createContext(null);
+const TabCtx = React.createContext('summary');
+const TAB_OF_GROUP = { 'PERFORMANCE': 'summary', 'WHEN AND WHAT WORKS': 'insights', 'AI AND MODEL QUALITY': 'ai', 'RECENT CLOSED SIGNALS': 'closed' };
 function Section({ title, children, accent = '#10b981', summary = '', defaultOpen = false }) {
   const force = React.useContext(ExpandCtx);
   const [open, setOpen] = useState(force ?? defaultOpen);
@@ -458,6 +460,8 @@ function Section({ title, children, accent = '#10b981', summary = '', defaultOpe
 }
 
 function Group({ label, children }) {
+  const activeTab = React.useContext(TabCtx);
+  if ((TAB_OF_GROUP[label] || 'summary') !== activeTab) return null;
   return (
     <div style={{ marginBottom: 12 }}>
       <div style={{ fontSize: 10, fontWeight: 800, color: '#94a3b8', letterSpacing: 0.8, margin: '4px 2px 6px' }}>{label}</div>
@@ -494,26 +498,26 @@ function SignalFeed({ signals }) {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {s.name || s.stock}
-                {s.optType && <span style={{ fontSize: 8, marginLeft: 5, background: s.optType==='CE'?'#eff6ff':'#fdf4ff', color: s.optType==='CE'?'#1d4ed8':'#7c3aed', borderRadius: 4, padding: '1px 4px', fontWeight: 800 }}>{s.optType}</span>}
+                {s.optType && <span style={{ fontSize: 10, marginLeft: 5, background: s.optType==='CE'?'#eff6ff':'#fdf4ff', color: s.optType==='CE'?'#1d4ed8':'#7c3aed', borderRadius: 4, padding: '1px 4px', fontWeight: 800 }}>{s.optType}</span>}
               </div>
               {/* Entry date/time */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2 }}>
-                <span style={{ fontSize: 7, color: '#94a3b8', background: '#f1f5f9', borderRadius: 3, padding: '1px 4px', fontWeight: 700 }}>ENTRY</span>
-                <span style={{ fontSize: 8, color: '#94a3b8' }}>{entryTime}</span>
+                <span style={{ fontSize: 10, color: '#94a3b8', background: '#f1f5f9', borderRadius: 3, padding: '1px 4px', fontWeight: 700 }}>ENTRY</span>
+                <span style={{ fontSize: 10, color: '#94a3b8' }}>{entryTime}</span>
               </div>
               {/* Exit date/time — shown if resolved */}
               {exitTime && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 1 }}>
-                  <span style={{ fontSize: 7, color: c, background: hit?'#f0fdf4':'#fef2f2', borderRadius: 3, padding: '1px 4px', fontWeight: 700 }}>{hit?'TARGET':'SL'}</span>
-                  <span style={{ fontSize: 8, color: '#64748b' }}>{exitTime}</span>
-                  {s.exitPrice && <span style={{ fontSize: 8, color: c, fontWeight: 700 }}>@ ₹{(+s.exitPrice).toFixed(2)}</span>}
+                  <span style={{ fontSize: 10, color: c, background: hit?'#f0fdf4':'#fef2f2', borderRadius: 3, padding: '1px 4px', fontWeight: 700 }}>{hit?'TARGET':'SL'}</span>
+                  <span style={{ fontSize: 10, color: '#64748b' }}>{exitTime}</span>
+                  {s.exitPrice && <span style={{ fontSize: 10, color: c, fontWeight: 700 }}>@ ₹{(+s.exitPrice).toFixed(2)}</span>}
                 </div>
               )}
             </div>
             <div style={{ textAlign: 'right', flexShrink: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 900, color: c }}>{pnl}</div>
               {s.entry > 0 && s.exitPrice > 0 && (
-                <div style={{ fontSize: 8, color: '#94a3b8' }}>
+                <div style={{ fontSize: 10, color: '#94a3b8' }}>
                   ₹{(+s.entry).toFixed(2)} → ₹{(+s.exitPrice).toFixed(2)}
                 </div>
               )}
@@ -539,10 +543,10 @@ function MlBacktestCards({ backtest }) {
             <div style={{ fontSize: 10, color: '#94a3b8' }}>Not enough closed signals</div>
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8 }}>
-              <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Overall</div><div style={{ fontSize: 16, fontWeight: 900, color: clr(data.overallWr) }}>{pct(data.overallWr)}</div></div>
-              <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Top Quartile</div><div style={{ fontSize: 16, fontWeight: 900, color: clr(data.topQuartileWr) }}>{pct(data.topQuartileWr)}</div></div>
-              <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Uplift</div><div style={{ fontSize: 14, fontWeight: 800, color: data.upliftTopVsAll >= 0 ? '#10b981' : '#ef4444' }}>{data.upliftTopVsAll >= 0 ? '+' : ''}{data.upliftTopVsAll} pts</div></div>
-              <div><div style={{ fontSize: 8, color: '#94a3b8' }}>Spread</div><div style={{ fontSize: 14, fontWeight: 800, color: data.spreadTopVsBottom >= 0 ? '#10b981' : '#ef4444' }}>{data.spreadTopVsBottom >= 0 ? '+' : ''}{data.spreadTopVsBottom} pts</div></div>
+              <div><div style={{ fontSize: 10, color: '#94a3b8' }}>Overall</div><div style={{ fontSize: 16, fontWeight: 900, color: clr(data.overallWr) }}>{pct(data.overallWr)}</div></div>
+              <div><div style={{ fontSize: 10, color: '#94a3b8' }}>Top Quartile</div><div style={{ fontSize: 16, fontWeight: 900, color: clr(data.topQuartileWr) }}>{pct(data.topQuartileWr)}</div></div>
+              <div><div style={{ fontSize: 10, color: '#94a3b8' }}>Uplift</div><div style={{ fontSize: 14, fontWeight: 800, color: data.upliftTopVsAll >= 0 ? '#10b981' : '#ef4444' }}>{data.upliftTopVsAll >= 0 ? '+' : ''}{data.upliftTopVsAll} pts</div></div>
+              <div><div style={{ fontSize: 10, color: '#94a3b8' }}>Spread</div><div style={{ fontSize: 14, fontWeight: 800, color: data.spreadTopVsBottom >= 0 ? '#10b981' : '#ef4444' }}>{data.spreadTopVsBottom >= 0 ? '+' : ''}{data.spreadTopVsBottom} pts</div></div>
             </div>
           )}
         </div>
@@ -565,12 +569,58 @@ function MlFeatureBoard({ mlModels }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {b.items.slice(0, 5).map((f) => (
                 <div key={f.feature} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div style={{ minWidth: 110, fontSize: 9, fontWeight: 700, color: '#475569' }}>{f.feature}</div>
+                  <div style={{ minWidth: 110, fontSize: 10, fontWeight: 700, color: '#475569' }}>{f.feature}</div>
                   <SparkBar value={f.importance} max={100} color="#0ea5e9" height={10} />
-                  <div style={{ minWidth: 40, textAlign: 'right', fontSize: 9, fontWeight: 800, color: '#0ea5e9' }}>{f.importance}%</div>
+                  <div style={{ minWidth: 40, textAlign: 'right', fontSize: 10, fontWeight: 800, color: '#0ea5e9' }}>{f.importance}%</div>
                 </div>
               ))}
             </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Honest check of the model: what it scored on signals it was trained on vs on signals it had not
+// seen (out-of-fold), whether its probabilities are calibrated, and whether it is drifting.
+function MlReliabilityBoard({ mlModels }) {
+  const blocks = [
+    { key: 'stock', label: 'Stock model', m: mlModels?.stock, drift: mlModels?.drift?.stock },
+    { key: 'option', label: 'Option model', m: mlModels?.option, drift: mlModels?.drift?.option },
+  ];
+  const pct = (v) => (v == null ? '—' : Math.round(v * 100) + '%');
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 10 }}>
+      {blocks.map(({ key, label, m, drift }) => (
+        <div key={key} style={{ background: '#fff', border: '1px solid #cbd5e1', borderRadius: 12, padding: '12px 14px' }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: '#0f172a', marginBottom: 8 }}>{label}</div>
+          {!m ? <div style={{ fontSize: 11, color: '#64748b' }}>No trained model yet</div> : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: 11, color: '#475569', marginBottom: 8 }}>
+                <span>Signals trained on: <b style={{ color: '#0f172a' }}>{m.trainedOn}</b></span>
+                <span>Seen-signal accuracy: <b style={{ color: '#0f172a' }}>{pct(m.accuracy)}</b></span>
+                <span>Unseen accuracy: <b style={{ color: '#0f172a' }}>{pct(m.walkForward?.accuracy)}</b></span>
+                <span>Unseen edge: <b style={{ color: (m.oof?.edge ?? 0) > 0 ? '#15803d' : '#b91c1c' }}>{m.oof?.edge ?? '—'}</b></span>
+                <span>Calibration: <b style={{ color: '#0f172a' }}>{m.calibrationSource === 'walk-forward' ? 'on unseen signals' : 'on trained signals'}</b></span>
+                <span>Drift: <b style={{ color: drift?.degraded ? '#b91c1c' : '#15803d' }}>{drift?.degraded ? 'recent results worse' : 'stable'}</b></span>
+              </div>
+              {m.reliability?.length ? (
+                <div style={{ fontSize: 11 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.6fr 1fr 1fr', fontWeight: 700, color: '#475569', borderBottom: '1px solid #e2e8f0', padding: '4px 0' }}>
+                    <span>Model said</span><span>Signals</span><span>Avg said</span><span>Really won</span>
+                  </div>
+                  {m.reliability.map((b) => (
+                    <div key={b.lo} style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.6fr 1fr 1fr', padding: '4px 0', borderBottom: '1px solid #f1f5f9' }}>
+                      <span>{Math.round(b.lo * 100)}–{Math.round(b.hi * 100)}%</span>
+                      <span>{b.n}</span>
+                      <span>{pct(b.pred)}</span>
+                      <b style={{ color: Math.abs(b.pred - b.actual) <= 0.1 ? '#15803d' : '#b91c1c' }}>{pct(b.actual)}</b>
+                    </div>
+                  ))}
+                </div>
+              ) : <div style={{ fontSize: 11, color: '#64748b' }}>Reliability table appears once enough unseen-signal predictions exist.</div>}
+            </>
           )}
         </div>
       ))}
@@ -583,7 +633,7 @@ function MlHistory({ mlSnapshots }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {mlSnapshots.slice(0, 6).map((snap) => (
-        <div key={snap.computedAt} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '7px 0', borderBottom: '1px solid #f1f5f9', fontSize: 9 }}>
+        <div key={snap.computedAt} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '7px 0', borderBottom: '1px solid #f1f5f9', fontSize: 10 }}>
           <span style={{ color: '#64748b', fontSize:12, fontWeight: 700 }}>{new Date(snap.computedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
           <span style={{ color: '#64748b', fontSize:12, fontWeight: 700 }}>Stock: {snap.stock?.trainedOn || 0}</span>
           <span style={{ color: '#64748b', fontSize:12, fontWeight: 700 }}>Option: {snap.option?.trainedOn || 0}</span>
@@ -603,6 +653,7 @@ export default function AnalysisPane() {
   const [days,    setDays]    = useState(30);
   const [dayPopup, setDayPopup] = useState(null);
   const [expandAll, setExpandAll] = useState(null);
+  const [tab, setTab] = useState('summary');
 
   const load = useCallback(async () => {
     if (!gh.token || !gh.user || !gh.repo) { setError('GitHub not configured — go to ⚙ Settings.'); return; }
@@ -652,7 +703,13 @@ export default function AnalysisPane() {
 
         return (
           <ExpandCtx.Provider value={expandAll}>
+          <TabCtx.Provider value={tab}>
           <div key={String(expandAll)}>
+            <div className="tabs-row" role="tablist">
+              {[['summary','Summary'],['insights','Insights'],['ai','AI and model'],['closed','Closed trades']].map(([id,lbl])=>(
+                <button key={id} role="tab" aria-selected={tab===id} className={'tab-btn'+(tab===id?' on':'')} onClick={()=>setTab(id)}>{lbl}</button>
+              ))}
+            </div>
             {/* Alerts */}
             {d.alerts.length > 0 && (
               <div style={{ marginBottom: 14 }}>
@@ -682,16 +739,16 @@ export default function AnalysisPane() {
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <div>
-                    <div style={{ fontSize: 8, color: '#94a3b8', fontWeight: 700, letterSpacing: 1 }}>AVG WIN</div>
+                    <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700, letterSpacing: 1 }}>AVG WIN</div>
                     <div style={{ fontSize: 18, fontWeight: 900, color: '#10b981' }}>{fmt(d.avgPnlTgt)}</div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: 8, color: '#94a3b8', fontWeight: 700, letterSpacing: 1 }}>AVG LOSS</div>
+                    <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700, letterSpacing: 1 }}>AVG LOSS</div>
                     <div style={{ fontSize: 18, fontWeight: 900, color: '#ef4444' }}>{fmt(d.avgPnlSL)}</div>
                   </div>
                 </div>
                 <MiniSparkline points={d.sparkPoints} width={180} height={36} />
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#94a3b8' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#94a3b8' }}>
                   <span>Daily win rate trend ({d.sparkPoints.length} days)</span>
                   <span>{d.streakType === 'W' ? '🔥' : '⚠'} {d.streak}{d.streakType} streak</span>
                 </div>
@@ -718,13 +775,13 @@ export default function AnalysisPane() {
                       { l: 'EXIT SLIPPAGE', v: d.journal.exitSlipAvg != null ? `${d.journal.exitSlipAvg}%` : '—', s: '+ = worse price' },
                     ].map(m => (
                       <div key={m.l} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px' }}>
-                        <div style={{ fontSize: 8, fontWeight: 700, color: '#94a3b8', letterSpacing: 0.5 }}>{m.l}</div>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: 0.5 }}>{m.l}</div>
                         <div style={{ fontSize: 16, fontWeight: 800, color: '#0f172a' }}>{m.v}</div>
-                        <div style={{ fontSize: 9, color: '#94a3b8' }}>{m.s}</div>
+                        <div style={{ fontSize: 10, color: '#94a3b8' }}>{m.s}</div>
                       </div>
                     ))}
                   </div>
-                  <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 8 }}>
+                  <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 8 }}>
                     Mark signals Taken/Skipped on the Signal Log page and enter your actual entry/exit prices. If skipped signals win more than taken ones, your selection is costing you; if actual P&L trails paper P&L, slippage is eating the edge.
                   </div>
                 </Section>
@@ -737,7 +794,7 @@ export default function AnalysisPane() {
                   <StatTile label="Net Avg" value={`${d.netAdjusted.avgNetPct >= 0 ? '+' : ''}${d.netAdjusted.avgNetPct}%`} color={d.netAdjusted.avgNetPct >= 0 ? '#10b981' : '#ef4444'} />
                   <StatTile label="Cost Drag" value={`-${d.netAdjusted.costDragPct}%`} sub={`n=${d.netAdjusted.t}`} color="#f59e0b" />
                 </div>
-                <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
+                <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 8 }}>
                   Net avg uses liquidity-scaled cost estimate (thinner OI on options = wider assumed spread)
                 </div>
               </Section>
@@ -762,11 +819,11 @@ export default function AnalysisPane() {
                   <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
                     {d.sigTypes.map(st => (
                       <div key={st.type} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <div style={{ fontSize: 9, fontWeight: 700, color: '#64748b', minWidth: 60 }}>{st.type}</div>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', minWidth: 60 }}>{st.type}</div>
                         <SparkBar value={st.r || 0} max={100} color={clr(st.r || 0)} height={16} />
                         <span style={{ fontSize: 10, fontWeight: 800, color: clr(st.r || 0), minWidth: 36 }}>{pct(st.r)}</span>
-                        <span style={{ fontSize: 8, color: '#94a3b8', minWidth: 30 }}>n={st.t}</span>
-                        {st.avg !== null && <span style={{ fontSize: 9, fontWeight: 700, color: pnlColor(st.avg) }}>{fmt(st.avg)}</span>}
+                        <span style={{ fontSize: 10, color: '#94a3b8', minWidth: 30 }}>n={st.t}</span>
+                        {st.avg !== null && <span style={{ fontSize: 10, fontWeight: 700, color: pnlColor(st.avg) }}>{fmt(st.avg)}</span>}
                       </div>
                     ))}
                   </div>
@@ -799,7 +856,7 @@ export default function AnalysisPane() {
                       <span style={{ color: r.tooFew ? '#94a3b8' : '#64748b' }}>n={r.n} · {r.wr}% win · net <b style={{ color: (r.net ?? 0) >= 0 ? '#16a34a' : '#dc2626' }}>{r.net ?? '—'}%</b>{r.tooFew ? ' · too few to judge' : ''}</span>
                     </div>
                   ))}
-                  <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 8, lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 8, lineHeight: 1.5 }}>
                     Every signal records the single main reason it fired. Judge a trigger only after 20+ ideas. A trigger that stays negative after enough trades should be dropped, not tuned.
                   </div>
                 </Section>
@@ -813,11 +870,11 @@ export default function AnalysisPane() {
                     {d.timeBreak.map(t => (
                       <div key={t.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <div style={{ width: 6, height: 6, borderRadius: 2, background: clr(t.r || 0), flexShrink: 0 }} />
-                        <div style={{ fontSize: 9, color: '#64748b', flex: 1 }}>
+                        <div style={{ fontSize: 10, color: '#64748b', flex: 1 }}>
                           {t.label.replace('Opening ', '').replace('Early ', '').replace('Mid ', '').replace('Afternoon ', '').replace('Pre-close ', '')}
                         </div>
                         <span style={{ fontSize: 10, fontWeight: 800, color: clr(t.r || 0) }}>{pct(t.r)}</span>
-                        <span style={{ fontSize: 8, color: '#94a3b8' }}>·{t.t}</span>
+                        <span style={{ fontSize: 10, color: '#94a3b8' }}>·{t.t}</span>
                       </div>
                     ))}
                   </div>
@@ -850,7 +907,7 @@ export default function AnalysisPane() {
             {d.regimeShiftBands.length >= 2 && (
               <Section title="Volatility Regime-Shift Impact" summary={''} accent="#d97706">
                 <MetricBars items={d.regimeShiftBands} labelKey="band" labelWidth={130} />
-                <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
+                <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 8 }}>
                   Sharp shift = signal fired right after a VIX move away from its 5-day norm
                 </div>
               </Section>
@@ -868,7 +925,7 @@ export default function AnalysisPane() {
                       <span style={{ color: '#64748b' }}>n={b.n} · {b.wr}% win · net <b style={{ color: (b.net ?? 0) >= 0 ? '#16a34a' : '#dc2626' }}>{b.net ?? '—'}%</b></span>
                     </div>
                   ))}
-                  <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 8, lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 8, lineHeight: 1.5 }}>
                     Uses the probability logged at signal time, so the model had not seen the result. Near-duplicate signals are collapsed to one idea. If the top bucket does not clearly beat the bottom one, the model is not adding skill.
                     {' '}Retire-adaptive-weights check: {d.mlCheck.ready ? 'PASSING (150+ ideas, top bucket ahead by 10+ pts with positive net)' : `not yet (needs 150+ ideas, a 10+ pt spread and positive net in the top bucket; now ${d.mlCheck.ideas} ideas, ${d.mlCheck.spread} pt spread)`}.
                   </div>
@@ -887,7 +944,7 @@ export default function AnalysisPane() {
                     <span style={{ fontWeight: 800, color: '#94a3b8' }}>Before grading</span>
                     <span style={{ color: '#94a3b8' }}>n={d.mtfCheck.ungraded.n} · {d.mtfCheck.ungraded.wr ?? '—'}% win · net {d.mtfCheck.ungraded.net ?? '—'}%</span>
                   </div>
-                  <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 8, lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 8, lineHeight: 1.5 }}>
                     Every signal now carries the grade from weekly, daily, 60-min and 15-min together. A should beat B, and B beat C. Trades graded AVOID are not shown: see "mtf_avoid" in Filter Check for how they would have done.
                   </div>
                 </Section>
@@ -905,9 +962,9 @@ export default function AnalysisPane() {
                           { l: 'REJECTED', wr: d.shadow.shadowWR, net: d.shadow.shadowNet },
                         ].map(m => (
                           <div key={m.l} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px' }}>
-                            <div style={{ fontSize: 8, fontWeight: 700, color: '#94a3b8', letterSpacing: 0.5 }}>{m.l}</div>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: '#94a3b8', letterSpacing: 0.5 }}>{m.l}</div>
                             <div style={{ fontSize: 16, fontWeight: 800, color: '#0f172a' }}>{m.wr}% win</div>
-                            <div style={{ fontSize: 9, color: (m.net ?? 0) >= 0 ? '#16a34a' : '#dc2626' }}>net {m.net ?? '—'}% / trade</div>
+                            <div style={{ fontSize: 10, color: (m.net ?? 0) >= 0 ? '#16a34a' : '#dc2626' }}>net {m.net ?? '—'}% / trade</div>
                           </div>
                         ))}
                       </div>
@@ -917,7 +974,7 @@ export default function AnalysisPane() {
                           <span style={{ color: '#64748b' }}>n={r.n} · {r.wr}% win · net {r.net ?? '—'}%</span>
                         </div>
                       ))}
-                      <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 8 }}>
+                      <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 8 }}>
                         If a rejection reason keeps winning as often as accepted picks (with n of 20+), that filter is costing you good trades — loosen it. If rejected picks lose clearly more, the filter is working.
                       </div>
                     </>
@@ -928,7 +985,7 @@ export default function AnalysisPane() {
             {d.csRows.length >= 3 && (
               <Section title="CompositeScore Calibration" summary={''} accent="#fb923c">
                 <CSArc rows={d.csRows} />
-                <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
+                <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 8 }}>
                   Highest win rate bucket → raise that range weight in computeCtxFromCandles()
                 </div>
               </Section>
@@ -942,11 +999,18 @@ export default function AnalysisPane() {
             {d.modelAttribution.length >= 2 && (
               <Section title="Which Model Served You" summary={''} accent="#7c3aed">
                 <MetricBars items={d.modelAttribution} labelKey="label" labelWidth={110} />
-                <div style={{ fontSize: 8, color: '#94a3b8', marginTop: 8 }}>
+                <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 8 }}>
                   "global" vs a named segment model — fills in as new signals log the field
                 </div>
               </Section>
             )}
+
+            <Section title="AI Reliability (honest check)" summary={''} accent="#7c3aed">
+              <MlReliabilityBoard mlModels={mlModels} />
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 8 }}>
+                "Unseen" = signals the model had not learned from when it predicted them. Seen-signal accuracy is always flattering; trust the unseen figures. Green rows: the model's stated chance matched what happened within 10 points.
+              </div>
+            </Section>
 
             <Section title="AI Feature Drivers" summary={''} accent="#7c3aed">
               <MlFeatureBoard mlModels={mlModels} />
@@ -981,6 +1045,7 @@ export default function AnalysisPane() {
             )}
 
           </div>
+          </TabCtx.Provider>
           </ExpandCtx.Provider>
         );
       })()}

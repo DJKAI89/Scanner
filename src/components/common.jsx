@@ -89,7 +89,7 @@ export function LogDrawer({ open, lines, onClear }) {
         <span>SCAN LOG</span>
         <button
           onClick={onClear}
-          style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 9 }}
+          style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 10 }}
         >
           Clear
         </button>

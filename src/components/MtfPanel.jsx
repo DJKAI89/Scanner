@@ -65,16 +65,16 @@ export default function MtfPanel({ instrumentKey, price, title = 'Multi-Timefram
                 <div key={r.key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, padding: '7px 0', borderTop: '1px solid #f1f5f9', fontSize: 11 }}>
                   <span style={{ fontWeight: 800, color: '#0f172a', minWidth: 62 }}>{r.label}</span>
                   <span style={{ fontWeight: 800, color: r.ok ? TREND_C(r.dir) : '#94a3b8' }}>{r.state}</span>
-                  <span style={{ color: '#94a3b8', fontSize: 9, textAlign: 'right', flex: 1 }}>{r.ok ? `${r.structure} · ${r.rule}` : 'not available'}</span>
+                  <span style={{ color: '#94a3b8', fontSize: 10, textAlign: 'right', flex: 1 }}>{r.ok ? `${r.structure} · ${r.rule}` : 'not available'}</span>
                 </div>
               ))}
               <div style={{ borderTop: '1px solid #f1f5f9', paddingTop: 8, marginTop: 2, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div>
-                  <div style={{ fontSize: 9, fontWeight: 800, color: '#94a3b8', letterSpacing: 0.6, marginBottom: 4 }}>RESISTANCE ABOVE</div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: '#94a3b8', letterSpacing: 0.6, marginBottom: 4 }}>RESISTANCE ABOVE</div>
                   {d.above.length ? d.above.map((l, i) => <div key={i} style={{ fontSize: 10, color: '#b91c1c', padding: '1px 0' }}>{lvl(l.price)} <span style={{ color: '#94a3b8' }}>({l.src}{l.atr != null ? `, ${l.atr} ATR` : ''})</span></div>) : <div style={{ fontSize: 10, color: '#94a3b8' }}>none nearby</div>}
                 </div>
                 <div>
-                  <div style={{ fontSize: 9, fontWeight: 800, color: '#94a3b8', letterSpacing: 0.6, marginBottom: 4 }}>SUPPORT BELOW</div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: '#94a3b8', letterSpacing: 0.6, marginBottom: 4 }}>SUPPORT BELOW</div>
                   {d.below.length ? d.below.map((l, i) => <div key={i} style={{ fontSize: 10, color: '#15803d', padding: '1px 0' }}>{lvl(l.price)} <span style={{ color: '#94a3b8' }}>({l.src}{l.atr != null ? `, ${l.atr} ATR` : ''})</span></div>) : <div style={{ fontSize: 10, color: '#94a3b8' }}>none nearby</div>}
                 </div>
               </div>
@@ -83,7 +83,7 @@ export default function MtfPanel({ instrumentKey, price, title = 'Multi-Timefram
                   {d.long?.why && <div>Long: {d.long.why}</div>}{d.short?.why && <div>Short: {d.short.why}</div>}
                 </div>
               )}
-              <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 8, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 8, lineHeight: 1.5 }}>
                 Higher timeframes (weekly, daily, 60-min) outrank the entry timeframe: a trade against the daily trend plus another higher timeframe is blocked, not just penalised.
                 {d.atrD ? ` Daily ATR ₹${d.atrD}.` : ''}{d.partial ? ' Some timeframes had no data, so the grade uses the rest.' : ''}
               </div>

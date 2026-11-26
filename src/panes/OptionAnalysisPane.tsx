@@ -191,7 +191,7 @@ export default function OptionAnalysisPane() {
                   opacity: chainLoading && !on ? 0.5 : 1,
                 }}>
                   <span style={{ fontSize: 11, fontWeight: 800 }}>{date}</span>
-                  <span style={{ fontSize: 9, fontWeight: 700, opacity: 0.8, marginLeft: 5 }}>{dte === 0 ? 'today' : dte + 'd'}</span>
+                  <span style={{ fontSize: 10, fontWeight: 700, opacity: 0.8, marginLeft: 5 }}>{dte === 0 ? 'today' : dte + 'd'}</span>
                 </button>
               );
             })}

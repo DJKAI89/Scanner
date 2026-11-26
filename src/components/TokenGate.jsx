@@ -39,7 +39,7 @@ export default function TokenGate() {
           </div>
           <div>
             <div style={{ fontSize: 18, fontWeight: 800, color: '#0f172a' }}>Scanner</div>
-            <div style={{ fontSize: 9, color: '#94a3b8', letterSpacing: '1.5px' }}>PROFESSIONAL NSE SCANNER</div>
+            <div style={{ fontSize: 10, color: '#94a3b8', letterSpacing: '1.5px' }}>PROFESSIONAL NSE SCANNER</div>
           </div>
         </div>
 
@@ -95,7 +95,7 @@ export default function TokenGate() {
           {loading ? '⏳ Launching...' : '▶ Launch Scanner'}
         </button>
 
-        <div style={{ marginTop: 12, fontSize: 9, color: '#94a3b8', textAlign: 'center', lineHeight: 1.6 }}>
+        <div style={{ marginTop: 12, fontSize: 10, color: '#94a3b8', textAlign: 'center', lineHeight: 1.6 }}>
           Token is saved on this device · Expires daily · Paste fresh token each morning
         </div>
       </div>

@@ -199,48 +199,43 @@ function decodeContent(content) {
   }
 }
 
-async function readSignalHistory() {
-  const indexPath = `signal-logs/${SCANNER_USER_ID}/index.json`;
-  const indexFile = await ghFetch(indexPath);
-  if (!indexFile) return [];
+// Every logged signal for one user: the real log, plus the shadow log (picks the gate rejected and
+// the monitor later followed to an outcome). Shadow rows teach the model what the filters threw
+// away; without them it only ever sees signals that already passed (selection bias). They carry
+// `shadow: true`, which mlRanking counts at half weight, and a real signal always wins over a
+// shadow copy of the same idea.
+//   AI_INCLUDE_SHADOW=0   never include shadow rows
+//   (anything else)       include every resolved shadow row (default)
+async function readUserSignals(userId) {
+  const indexFile = await ghFetch(`signal-logs/${userId}/index.json`);
+  if (!indexFile) return { real: [], shadow: [] };
   const index = decodeContent(indexFile.content);
-  if (!index) return [];
+  if (!index) {
+    console.log(`⏭️ Skip ${userId}: index.json is empty/unreadable`);
+    return { real: [], shadow: [] };
+  }
   const dates = (index.dates || []).slice(-LOOKBACK_DAYS);
-  const signals = [];
+  const real = [];
   for (const date of dates) {
-    const day = await ghFetch(`signal-logs/${SCANNER_USER_ID}/${date}.json`);
+    const day = await ghFetch(`signal-logs/${userId}/${date}.json`);
     if (!day) continue;
     const payload = decodeContent(day.content);
     if (!payload) continue;
-    signals.push(...(payload.signals || []));
+    real.push(...(payload.signals || []));
   }
-  // Shadow signals = picks the gate rejected, tracked to an outcome. Training only on
-  // signals that PASSED the filters teaches the model nothing about what the filters
-  // threw away (selection bias); adding resolved shadow rows fixes that.
-  //   AI_INCLUDE_SHADOW=1     always include
-  //   AI_INCLUDE_SHADOW=0     never include
-  //   AI_INCLUDE_SHADOW=auto  (default) include once >= SHADOW_AUTO_MIN resolved rows exist
-  const shadowMode = process.env.AI_INCLUDE_SHADOW ?? 'auto';
-  const SHADOW_AUTO_MIN = 200;
-  if (shadowMode !== '0') {
-    const sf = await ghFetch(`signal-logs/${SCANNER_USER_ID}/shadow`);
-    if (Array.isArray(sf)) {
-      const names = sf.map((i) => i.name).filter((n) => /^\d{4}-\d{2}-\d{2}\.json$/.test(n)).sort().slice(-LOOKBACK_DAYS);
-      const shadowRows = [];
+  const shadow = [];
+  if ((process.env.AI_INCLUDE_SHADOW ?? '1') !== '0') {
+    const folder = await ghFetch(`signal-logs/${userId}/shadow`);
+    if (Array.isArray(folder)) {
+      const names = folder.map((i) => i.name).filter((n) => /^\d{4}-\d{2}-\d{2}\.json$/.test(n)).sort().slice(-LOOKBACK_DAYS);
       for (const n of names) {
-        const f = await ghFetch(`signal-logs/${SCANNER_USER_ID}/shadow/${n}`);
+        const f = await ghFetch(`signal-logs/${userId}/shadow/${n}`);
         const p = f && decodeContent(f.content);
-        shadowRows.push(...(p?.signals || []).filter((s) => s.status === 'TARGET_HIT' || s.status === 'SL_HIT'));
-      }
-      if (shadowMode === '1' || shadowRows.length >= SHADOW_AUTO_MIN) {
-        signals.push(...shadowRows);
-        console.log(`  Included ${shadowRows.length} resolved shadow signals in training (mode=${shadowMode})`);
-      } else {
-        console.log(`  Shadow signals: ${shadowRows.length}/${SHADOW_AUTO_MIN} resolved — not included yet`);
+        shadow.push(...(p?.signals || []).filter((x) => x.status === 'TARGET_HIT' || x.status === 'SL_HIT').map((x) => ({ ...x, shadow: true })));
       }
     }
   }
-  return signals;
+  return { real, shadow };
 }
 
 async function listUserIds() {
@@ -296,26 +291,9 @@ async function main() {
     const userStartTime = Date.now();
 
     try {
-      const signals = await (async () => {
-        const indexPath = `signal-logs/${userId}/index.json`;
-        const indexFile = await ghFetch(indexPath);
-        if (!indexFile) return [];
-        const index = decodeContent(indexFile.content);
-        if (!index) {
-          console.log(`⏭️ Skip ${userId}: index.json is empty/unreadable`);
-          return [];
-        }
-        const dates = (index.dates || []).slice(-LOOKBACK_DAYS);
-        const out = [];
-        for (const date of dates) {
-          const day = await ghFetch(`signal-logs/${userId}/${date}.json`);
-          if (!day) continue;
-          const payload = decodeContent(day.content);
-          if (!payload) continue;
-          out.push(...(payload.signals || []));
-        }
-        return out;
-      })();
+      const { real, shadow } = await readUserSignals(userId);
+      const signals = [...real, ...shadow];
+      console.log(`  Loaded ${real.length} real + ${shadow.length} resolved shadow signals`);
 
       const closed = signals.filter((s) => s.status === 'TARGET_HIT' || s.status === 'SL_HIT');
       if (closed.length < 10) {
@@ -350,45 +328,69 @@ async function main() {
 
       // Validate trained model
       if (models.stock) {
-        console.log(`  Stock model: accuracy=${(models.stock.accuracy || 0).toFixed(3)}, edge=${(models.stock.edge || 0).toFixed(4)}, samples=${models.stock.trainedOn}`);
+        console.log(`  Stock model: in-sample accuracy=${(models.stock.accuracy || 0).toFixed(3)}, out-of-fold accuracy=${models.stock.walkForward?.accuracy ?? 'n/a'}, out-of-fold edge=${models.stock.oof?.edge ?? 'n/a'}, calibration=${models.stock.calibrationSource || 'in-sample'}, samples=${models.stock.trainedOn}`);
       }
       if (models.option) {
-        console.log(`  Option model: accuracy=${(models.option.accuracy || 0).toFixed(3)}, edge=${(models.option.edge || 0).toFixed(4)}, samples=${models.option.trainedOn}`);
+        console.log(`  Option model: in-sample accuracy=${(models.option.accuracy || 0).toFixed(3)}, out-of-fold accuracy=${models.option.walkForward?.accuracy ?? 'n/a'}, out-of-fold edge=${models.option.oof?.edge ?? 'n/a'}, calibration=${models.option.calibrationSource || 'in-sample'}, samples=${models.option.trainedOn}`);
       }
 
-      const snapshot = brain.buildModelSnapshot(models);
       const today = new Date().toISOString().slice(0, 10);
       const month = today.slice(0, 7); // YYYY-MM
       // Month-partitioned storage: ai-models/{uid}/{month}/stock.json + option.json.
-      // Each retrain overwrites the CURRENT month's files (still just two small
-      // files, same as before), but a new month starts a fresh pair instead of
-      // growing the same one forever — so file size is bounded going forward
-      // regardless of how long the account has been running. ai-models/{uid}/index.json
-      // tracks which month is current so the app knows where to read from.
-      const stockPath  = `ai-models/${userId}/${month}/stock.json`;
-      const optionPath = `ai-models/${userId}/${month}/option.json`;
+      // ai-models/{uid}/index.json tracks which month is current so the app knows where to read from.
       const modelIndexPath = `ai-models/${userId}/index.json`;
       const historyIndexPath = `ai-models/${userId}/history/index.json`;
       const historyDayPath = `ai-models/${userId}/history/${today}.json`;
       const savedAt = new Date().toISOString();
-
       const { stock, option } = brain.splitModelForStorage(models);
-      if (stock) {
-        const existing = await ghFetch(stockPath);
-        await ghPut(stockPath, { ...stock, trainedOffline: true, userId, month, savedAt }, existing?.sha || null, `SCANNER AI offline retrain (stock) · ${userId} · ${month}`);
-      }
-      if (option) {
-        const existing = await ghFetch(optionPath);
-        await ghPut(optionPath, { ...option, trainedOffline: true, userId, month, savedAt }, existing?.sha || null, `SCANNER AI offline retrain (option) · ${userId} · ${month}`);
-      }
 
+      // ── Champion / challenger ──
+      // The freshly trained model only replaces the live one if it has not regressed on its honest
+      // (out-of-fold) numbers. A rejected candidate leaves the live files untouched.
       const modelIndexExisting = await ghFetch(modelIndexPath);
       const modelIndex = decodeContent(modelIndexExisting?.content) || { months: [] };
-      const months = Array.from(new Set([...(modelIndex.months || []), month])).sort();
-      await ghPut(modelIndexPath, { months, latestMonth: month, updatedAt: savedAt }, modelIndexExisting?.sha || null, `SCANNER AI model index · ${userId} · ${month}`);
+      const liveMonth = modelIndex.latestMonth || month;
+      const readLive = async (fam) => {
+        const f = await ghFetch(`ai-models/${userId}/${liveMonth}/${fam}.json`);
+        let data = null;
+        try { data = f ? decodeContent(f.content) : null; } catch (_) { data = null; }
+        return data;
+      };
+      const live = { stock: await readLive('stock'), option: await readLive('option') };
+      const cand = { stock, option };
+      const decisions = {};
+      for (const fam of ['stock', 'option']) {
+        if (!cand[fam]) continue;
+        decisions[fam] = brain.decidePromotion(cand[fam].family, live[fam]?.family);
+        console.log(`  ${fam}: ${decisions[fam].promote ? '✅ promote' : '⏸️ keep live model'} — ${decisions[fam].reason}`);
+      }
+      for (const fam of ['stock', 'option']) {
+        const path = `ai-models/${userId}/${month}/${fam}.json`;
+        const existing = await ghFetch(path);
+        if (cand[fam] && decisions[fam]?.promote) {
+          // keep the model being replaced, so a bad promotion can be rolled back by hand
+          if (live[fam] && liveMonth === month) {
+            const prevPath = `ai-models/${userId}/${month}/${fam}.prev.json`;
+            const prevExisting = await ghFetch(prevPath);
+            await ghPut(prevPath, { ...live[fam], replacedAt: savedAt }, prevExisting?.sha || null, `SCANNER AI previous ${fam} model · ${userId} · ${month}`);
+          }
+          await ghPut(path, { ...cand[fam], trainedOffline: true, userId, month, savedAt }, existing?.sha || null, `SCANNER AI offline retrain (${fam}) · ${userId} · ${month}`);
+        } else if (live[fam] && liveMonth !== month) {
+          // new month but the live model was kept: carry it forward so the new month folder is complete
+          await ghPut(path, { ...live[fam], carriedForward: true, userId, month }, existing?.sha || null, `SCANNER AI carry forward (${fam}) · ${userId} · ${month}`);
+        }
+      }
+      await ghPut(modelIndexPath, { months: Array.from(new Set([...(modelIndex.months || []), month])).sort(), latestMonth: month, updatedAt: savedAt }, modelIndexExisting?.sha || null, `SCANNER AI model index · ${userId} · ${month}`);
+
+      // history records what is actually LIVE after the decision
+      const liveModels = brain.mergeModelFromStorage(
+        decisions.stock?.promote ? cand.stock : live.stock,
+        decisions.option?.promote ? cand.option : live.option,
+      );
+      const snapshot = brain.buildModelSnapshot(liveModels || models);
 
       const historyDayExisting = await ghFetch(historyDayPath);
-      await ghPut(historyDayPath, { date: today, snapshot, trainedOffline: true, userId }, historyDayExisting?.sha || null, `SCANNER AI history · ${userId} · ${today}`);
+      await ghPut(historyDayPath, { date: today, snapshot, promotion: decisions, trainedOffline: true, userId }, historyDayExisting?.sha || null, `SCANNER AI history · ${userId} · ${today}`);
 
       const historyIndexExisting = await ghFetch(historyIndexPath);
       const historyIndex = decodeContent(historyIndexExisting?.content) || { dates: [] };

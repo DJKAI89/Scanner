@@ -187,7 +187,7 @@ async function loadOneChain(indexKey, expiry, spot, step, lot, niftyBullish, vix
   const pcr  = ceOI > 0 ? +(peOI / ceOI).toFixed(2) : 1;
   const atm  = Math.round(spot / step) * step;
   const rows = scanChainAnalysis(chain, atm, spot, niftyBullish, vixVal, maxPain, pcr, marketCtx, cfg, lot);
-  return { expiry, rows, maxPain, oiWalls, pcr, atm };
+  return { expiry, rows, maxPain, oiWalls, pcr, atm, chain };
 }
 
 // Fetches spot/VIX/expiry-list/market-context ONCE per index selection.

@@ -39,7 +39,7 @@ In short, Scanner is not just a chart app or scanner script — it is a full tra
 ## Technology overview
 
 - Frontend: React + Vite
-- Market data: Upstox API
+- Market data: Currently it support only Upstox API
 - App logic: JavaScript/JSX with some TypeScript-based panes
 - Automation: Node.js scripts and GitHub Actions workflows
 - Storage: GitHub repository as a lightweight backend for logs, settings, and model snapshots
