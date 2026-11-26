@@ -4,7 +4,7 @@ param(
   [string]$TaskName = "ScannerAiRetrainer",
   [string]$WorkDir = "E:\Dhaval\Scanner",
   [string]$NodeExe = "node",
-  [string]$RunAt = "18:10",
+  [string]$RunAt = "17:00",
   [string]$LogFile = "$WorkDir\logs\ai-retrainer.log"
 )
 
