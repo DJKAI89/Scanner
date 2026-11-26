@@ -1,4 +1,4 @@
-name: FRIDAY — Deploy to GitHub Pages
+name: FRIDAY — Build
 
 on:
   push:
@@ -6,19 +6,10 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
 
     steps:
       - name: ⬇️ Checkout
@@ -42,12 +33,3 @@ jobs:
           ls -la dist/
           echo "=== dist/assets ==="
           ls -la dist/assets/
-
-      - name: 📤 Upload Pages artifact
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: ./dist
-
-      - name: 🚀 Deploy to GitHub Pages
-        id: deploy
-        uses: actions/deploy-pages@v4
