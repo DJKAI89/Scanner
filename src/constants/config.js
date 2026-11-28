@@ -23,6 +23,8 @@ export const DEF = {
   minOptConf:   65,
   minOptOI:     500,
   // ML safeguards / risk limits / phone alerts
+  calibrationDays: 60,    // how many logged days the confidence calibration + indicator weights learn from (0 = every day)
+  optionSegmentModels: false, // true = live option picks use the index / stock segment models and thresholds
   mlRulesOnly:    false,  // true = ignore the ML model completely (rules-only scoring)
   maxStopsPerDay: 3,      // warn after this many stop-outs today
   maxOpenSignals: 10,     // warn when this many signals are open at once
