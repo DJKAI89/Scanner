@@ -80,7 +80,7 @@ async function sendTelegram(text) {
 }
 
 async function main() {
-  const [{ DEF }, gh_, stockScan, optionScan, tech, api, learned, marketTime] = await Promise.all([
+  const [{ DEF }, gh_, stockScan, optionScan, tech, api, learned, marketTime, mlRanking] = await Promise.all([
     import('../src/constants/config.js'),
     import('../src/services/github.js'),
     import('../src/services/stockScan.js'),
@@ -89,6 +89,7 @@ async function main() {
     import('../src/services/api.js'),
     import('../src/services/learnedAdjust.js'),
     import('../src/utils/marketTime.js'),
+    import('../src/services/mlRanking.js'),
   ]);
 
   const marketStatus = marketTime.getMarketStatusLocal();
@@ -108,8 +109,10 @@ async function main() {
     const cfg = { ...DEF, ...(saved || {}) };
     const stocks = await loadStocks();
 
-    // Everything logged so far feeds the learned adjustments (no day cut-off).
-    const all = await gh_.ghReadMultipleDays(gh, 3650).catch(() => []);
+    // Same window as the app (Settings -> AI and ML -> calibration learns from).
+    mlRanking.setLivePickSegments(!!cfg.optionSegmentModels);
+    const calDays = +cfg.calibrationDays;
+    const all = await gh_.ghReadMultipleDays(gh, calDays > 0 ? calDays : 3650).catch(() => []);
     const closed = (all || []).filter((s) => s.status && s.status !== 'OPEN' && s.status !== 'EXPIRED');
     const confCalibration = learned.computeConfCalibration(closed);
     const adaptWeights = learned.computeAdaptWeights(closed);
