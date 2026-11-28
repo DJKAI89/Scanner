@@ -663,6 +663,24 @@ export default function SettingsPane() {
           )}
         </div>
 
+        {/* ── Learning options ── */}
+        <div className="setting-card" data-sec="ai" hidden={sec !== 'ai'}>
+          <h4>🧪 Learning options</h4>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#374151', marginBottom: 6 }}>Confidence calibration learns from</div>
+          <select value={String(local.calibrationDays ?? 60)} onChange={(e) => set('calibrationDays', +e.target.value)}
+            style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, marginBottom: 4 }}>
+            <option value="60">Last 60 days (default)</option>
+            <option value="180">Last 180 days</option>
+            <option value="365">Last 365 days</option>
+            <option value="0">Every logged day</option>
+          </select>
+          <div style={{ fontSize: 11, color: '#64748b', marginBottom: 14 }}>Applies to the bucket calibration and the indicator weights. Takes effect the next time the app loads. Model training itself always uses all history.</div>
+          <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', fontSize: 12, color: '#374151', cursor: 'pointer' }}>
+            <input type="checkbox" checked={!!local.optionSegmentModels} onChange={(e) => set('optionSegmentModels', e.target.checked)} style={{ marginTop: 3 }} />
+            <span><b>Use index / stock option models for live picks</b> — live option picks use the model trained for index options (NIFTY, BANKNIFTY) or stock options, and its own thresholds, like logged signals do. Off keeps the single blended option model. Turning it on can move option confidences.</span>
+          </label>
+        </div>
+
         {/* ── AI mode ── */}
         <div className="setting-card" data-sec="ai" hidden={sec !== 'ai'}>
           <h4>🛟 AI safeguard</h4>
