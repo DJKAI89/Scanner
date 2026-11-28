@@ -67,9 +67,13 @@ test('training uses unseen-signal calibration and never stores the prediction li
 test('a live pick (type CE/PE) resolves to the same segment as a logged option signal, and far strikes score lower', { timeout: 240000 }, () => {
   const models = ml.trainSignalMlModels(makeSignals(500, 300));
   const base = { und: 'NIFTY', spot: 1350, entry: 12, iv: 25, _dte: 5, oi: 30000, oiChg: 5, confidence: 60, action: 'BUY', trendAligned: true, maxPain: 1350, sl: 8, tgt: 20, rr: 2, regime: 'trending', volRegimeShift: 0 };
+  ml.setLivePickSegments(true);
   const near = ml.applyMlRanking(60, models, { ...base, type: 'CE', strike: 1360 });
   const far = ml.applyMlRanking(60, models, { ...base, type: 'CE', strike: 1500 });
   const logged = ml.applyMlRanking(60, models, { ...base, type: 'OPTION', optType: 'CE', stock: 'NIFTY', strike: 1360 });
-  assert.equal(near.mlSegment, logged.mlSegment, 'live pick and logged signal use the same model segment');
+  assert.equal(near.mlSegment, logged.mlSegment, 'with the switch on, a live pick and a logged signal use the same model segment');
+  ml.setLivePickSegments(false);
+  const legacy = ml.applyMlRanking(60, models, { ...base, type: 'CE', strike: 1360 });
+  assert.ok(legacy.mlSegment, 'switch off keeps the previous (blended) behaviour');
   assert.ok(near.mlProbability >= far.mlProbability, `near ${near.mlProbability} should not score below far ${far.mlProbability}`);
 });
