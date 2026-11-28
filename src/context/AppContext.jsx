@@ -20,7 +20,7 @@ import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNe
 import { evaluateSignalExit } from '../services/tradeManagement';
 import { fetchQ, resolveAccessToken } from '../services/api';
 import { syncUpstoxTokenToGithub } from '../services/githubSecretSync';
-import { trainSignalMlModels, buildModelSnapshot } from '../services/mlRanking';
+import { trainSignalMlModels, buildModelSnapshot, setLivePickSegments } from '../services/mlRanking';
 import { computeConfCalibration, computeAdaptWeights } from '../services/learnedAdjust';
 
 const AppContext = createContext(null);
@@ -41,6 +41,11 @@ export function AppProvider({ children }) {
     } catch (e) {}
     return { ...DEF };
   });
+
+  // Always-current copy of cfg for long-lived callbacks (they would otherwise see an old value).
+  const cfgRef = useRef(cfg);
+  cfgRef.current = cfg;
+  setLivePickSegments(!!cfg.optionSegmentModels);
 
   // ── Market ──
   const [marketStatus, setMarketStatus] = useState(() =>
@@ -346,7 +351,8 @@ export function AppProvider({ children }) {
       const g = ghCfg || gh;
       if (!g?.token || !g?.user || !g?.repo) return;
       try {
-        const signals = await ghReadMultipleDays(g, 3650); // every logged day: calibration should learn from all history
+        const days = +cfgRef.current?.calibrationDays;                 // Settings -> AI and ML; 0 = every logged day
+        const signals = await ghReadMultipleDays(g, days > 0 ? days : 3650);
         if (!signals?.length) { setMlModels(null); localStorage.removeItem('scanner_ml_models'); return; }
         const closed = signals.filter(s => !s.planned && (s.status === 'TARGET_HIT' || s.status === 'SL_HIT'));
         if (closed.length < 10) { setMlModels(null); localStorage.removeItem('scanner_ml_models'); lg(`Calibration: need 10+ closed signals, have ${closed.length}`, 'w'); return; }
