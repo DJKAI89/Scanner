@@ -232,7 +232,14 @@ function optSide(sig) {
   const t = String(sig?.type || '').toUpperCase();
   return t === 'CE' || t === 'PE' ? t : '';
 }
-function isOptionLike(sig) { return sig?.type === 'OPTION' || sig?.type === 'CE' || sig?.type === 'PE'; }
+// Off by default: live picks (type 'CE'/'PE') keep scoring with the blended option model and thresholds,
+// exactly as before. On: they resolve to the same index / stock segment as logged signals do.
+let LIVE_PICK_SEGMENTS = false;
+export function setLivePickSegments(on) { LIVE_PICK_SEGMENTS = !!on; }
+function isOptionLike(sig) {
+  if (sig?.type === 'OPTION') return true;
+  return LIVE_PICK_SEGMENTS && (sig?.type === 'CE' || sig?.type === 'PE');
+}
 
 function getOptionSubtype(sig) {
   if (!isOptionLike(sig)) return 'stock';
@@ -867,7 +874,7 @@ function getSegmentLabel(sig, type) {
     return phase <= 0.25 ? 'stock_opening' : phase >= 0.65 ? 'stock_midday' : 'stock_late';
   }
   const subtype = getOptionSubtype(sig);
-  const dir = optSide(sig);
+  const dir = (sig?.type === 'OPTION' || LIVE_PICK_SEGMENTS) ? optSide(sig) : String(sig?.optType || '').toUpperCase();
   return `${subtype}_${dir || 'OPTION'}`.toLowerCase();
 }
 
