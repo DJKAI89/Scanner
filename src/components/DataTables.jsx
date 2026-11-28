@@ -168,3 +168,95 @@ export function LogTable({ signals, renderRow, pnlOf }) {
     </div>
   );
 }
+
+
+// ── Option chain as a table ───────────────────────────────────────
+const compact = (n) => {
+  const v = +n; if (!Number.isFinite(v) || v <= 0) return '—';
+  if (v >= 1e7) return (v / 1e7).toFixed(2) + 'Cr';
+  if (v >= 1e5) return (v / 1e5).toFixed(1) + 'L';
+  if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
+  return String(Math.round(v));
+};
+const confColor = (c) => (c >= 70 ? '#15803d' : c >= 55 ? '#b45309' : '#b91c1c');
+
+function CeCells({ c, itm }) {
+  const bg = itm ? { background: '#fffbeb' } : undefined;
+  if (!c) return <><td style={bg} /><td style={bg} /><td style={bg} /><td style={bg} /><td style={bg} /><td style={bg} /></>;
+  const oiChg = c.prevOI > 0 ? ((c.oi - c.prevOI) / c.prevOI) * 100 : null;
+  return (
+    <>
+      <td className="r" style={bg}><b style={{ color: confColor(c.confidence) }}>{c.confidence != null ? Math.round(c.confidence) + '%' : '—'}</b></td>
+      <td className="r" style={bg}>{compact(c.oi)}</td>
+      <td className={'r ' + signCls(oiChg)} style={bg}>{oiChg == null ? '—' : (oiChg > 0 ? '+' : '') + oiChg.toFixed(1) + '%'}</td>
+      <td className="r" style={bg}>{c.iv ? (+c.iv).toFixed(1) : '—'}</td>
+      <td className="r" style={bg}>{c.delta != null ? (+c.delta).toFixed(2) : '—'}</td>
+      <td className="r" style={bg}><b>{num(c.ltp)}</b>{c.ltpChgPct != null && <div className={'dt-sub ' + signCls(c.ltpChgPct)}>{(c.ltpChgPct > 0 ? '+' : '') + (+c.ltpChgPct).toFixed(1)}%</div>}</td>
+    </>
+  );
+}
+function PeCells({ c, itm }) {
+  const bg = itm ? { background: '#fffbeb' } : undefined;
+  if (!c) return <><td style={bg} /><td style={bg} /><td style={bg} /><td style={bg} /><td style={bg} /><td style={bg} /></>;
+  const oiChg = c.prevOI > 0 ? ((c.oi - c.prevOI) / c.prevOI) * 100 : null;
+  return (
+    <>
+      <td className="r" style={bg}><b>{num(c.ltp)}</b>{c.ltpChgPct != null && <div className={'dt-sub ' + signCls(c.ltpChgPct)}>{(c.ltpChgPct > 0 ? '+' : '') + (+c.ltpChgPct).toFixed(1)}%</div>}</td>
+      <td className="r" style={bg}>{c.delta != null ? (+c.delta).toFixed(2) : '—'}</td>
+      <td className="r" style={bg}>{c.iv ? (+c.iv).toFixed(1) : '—'}</td>
+      <td className={'r ' + signCls(oiChg)} style={bg}>{oiChg == null ? '—' : (oiChg > 0 ? '+' : '') + oiChg.toFixed(1) + '%'}</td>
+      <td className="r" style={bg}>{compact(c.oi)}</td>
+      <td className="r" style={bg}><b style={{ color: confColor(c.confidence) }}>{c.confidence != null ? Math.round(c.confidence) + '%' : '—'}</b></td>
+    </>
+  );
+}
+
+/** Option chain: CE on the left, PE on the right, strike in the middle. In-the-money cells are tinted. */
+export function ChainTable({ shownRows, atm, spot, walls, totalStrikes, onLoadMore }) {
+  let spotDone = false;
+  return (
+    <div>
+      <div className="dt-wrap">
+        <table className="dt dt-chain">
+          <thead>
+            <tr>
+              <th colSpan={6} style={{ textAlign: 'center', background: '#fef2f2' }}>CALLS (CE)</th>
+              <th style={{ textAlign: 'center' }}>STRIKE</th>
+              <th colSpan={6} style={{ textAlign: 'center', background: '#f0fdf4' }}>PUTS (PE)</th>
+            </tr>
+            <tr>
+              <th className="r">Conf</th><th className="r">OI</th><th className="r">OI chg</th><th className="r">IV</th><th className="r">Δ</th><th className="r">LTP</th>
+              <th />
+              <th className="r">LTP</th><th className="r">Δ</th><th className="r">IV</th><th className="r">OI chg</th><th className="r">OI</th><th className="r">Conf</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shownRows.map((row) => {
+              const k = row.strike;
+              const marks = [k === walls?.callWall && 'R', k === walls?.putWall && 'S', k === walls?.maxPain && 'MP'].filter(Boolean);
+              const showSpot = !spotDone && spot > 0 && k >= spot;
+              if (showSpot) spotDone = true;
+              return (
+                <React.Fragment key={k}>
+                  {showSpot && (
+                    <tr><td colSpan={13} style={{ background: '#0f172a', color: '#fff', textAlign: 'center', fontSize: 12, fontWeight: 700, padding: '4px 0' }}>Spot {num(spot)}</td></tr>
+                  )}
+                  <tr className={'dt-row' + (k === atm ? ' sel' : '')} style={{ cursor: 'default' }}>
+                    <CeCells c={row.CE} itm={k < spot} />
+                    <td style={{ textAlign: 'center', background: '#f8fafc', fontWeight: 800 }}>
+                      {fmt(k, 0)}{k === atm && <span className="dt-pill bl" style={{ marginLeft: 6 }}>ATM</span>}
+                      {marks.length > 0 && <div className="dt-sub">{marks.join(' · ')}</div>}
+                    </td>
+                    <PeCells c={row.PE} itm={k > spot} />
+                  </tr>
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="m" style={{ margin: '4px 0 8px' }}>Tinted cells are in the money. R / S / MP = call wall, put wall, max pain. Confidence uses the same model as the Options page.</div>
+      {totalStrikes > shownRows.length && <button className="chip" onClick={onLoadMore}>Show more strikes ({totalStrikes - shownRows.length} left)</button>}
+    </div>
+  );
+}

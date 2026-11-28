@@ -14,6 +14,7 @@ import {
   applyAdaptWeights, applyCalibration, classifyMarketRegime, applyRegimeAdjustment, computeConfluence, calcVolumeSurge, calcEMA, calcADX, computeVixPercentile, vixRegimeShiftScore,
 } from './technical';
 import { applyMlRanking, limitLearnedAdj } from './mlRanking';
+import { detectGap } from './technical';
 import { getIST, getISTDate, sleep } from '../utils/marketTime';
 import { interpVIXSc, interpPCR, getDeliveryPct } from './stockScan';
 
@@ -67,6 +68,7 @@ export async function lookupInstrument(ctx, callbacks) {
   // vixSc/pcrSc regardless of actual market regime, causing Lookup's rec to diverge
   // from Stocks/Options on days where real VIX/PCR meaningfully shift the picture.
   let vixSc = 50, marketPcr = null, vixVal = 0;
+  let niftyChg = 0;
   let niftyBull = true; // same definition as the Options page: NIFTY not down more than 0.3%
   try {
     const mQ = await fetchQ('NSE_INDEX|India VIX,NSE_INDEX|Nifty 50', token, onTokenExpired);
@@ -75,7 +77,8 @@ export async function lookupInstrument(ctx, callbacks) {
     const nQ = mQ['NSE_INDEX|Nifty 50'];
     if (nQ?.last_price) {
       const nNet = nQ.net_change ?? (nQ.ohlc?.close ? nQ.last_price - nQ.ohlc.close : 0);
-      niftyBull = ((nNet / nQ.last_price) * 100) > -0.3;
+      niftyChg = (nNet / nQ.last_price) * 100;
+      niftyBull = niftyChg > -0.3;
     }
   } catch (e) {}
   try {
@@ -189,7 +192,8 @@ export async function lookupInstrument(ctx, callbacks) {
       conf = applyAdaptWeights(conf, adaptWeights?.stock || null, _indSnap);
       const _preMl = conf;
       const mlRank = applyMlRanking(conf, mlModels || null, { type:'STOCK', confidence: conf, numInds, risk, pot, rec: preRec, reversal, vix: vixVal, regime: stockRegime, volRegimeShift, _indSnap,
-        entry: ltp, atr, ema50: ema?.ema50, ema200: ema?.ema200, hi52: sr?.week52H||0, lo52: sr?.week52L||0, dayChg: chgPct });
+        entry: ltp, atr, ema50: ema?.ema50, ema200: ema?.ema200, hi52: sr?.week52H||0, lo52: sr?.week52L||0, dayChg: chgPct,
+        volRatio: volObj?.ratio ?? null, gapPct: detectGap(candles)?.gapPct ?? null, niftyChg });
       // Same cap on the combined learned effect as the scanner (stockScan.js).
       const _learnedRaw = (_preMl - _confBase) + (mlRank.mlAdj || 0);
       const _capDelta = limitLearnedAdj(_learnedRaw) - _learnedRaw;

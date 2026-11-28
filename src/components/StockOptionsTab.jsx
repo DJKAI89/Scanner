@@ -7,6 +7,7 @@ import { getIST } from '../utils/marketTime';
 import { loadOptionMeta, loadChainForExpiry, selectStrikesAroundATM, summarizeChain } from '../services/optionAnalysisService';
 import { effectiveOptionCfg, scoreChainForGrid } from '../services/optionScan';
 import { SnapshotCard, ChainSection, expiryLabel } from './OptionChainParts';
+import { ChainTable, useIsDesktop } from './DataTables.jsx';
 
 const PAGE_SIZE = 20;
 const ACCENT = '#d97706';
@@ -38,6 +39,9 @@ export default function StockOptionsTab({ inst, ltp: ltpIn, chgPct: chgPctIn, ch
   const [expiry, setExpiry] = useState('');
   const [visible, setVisible] = useState(PAGE_SIZE);
   const [upd, setUpd] = useState('');
+  const isDesktop = useIsDesktop();
+  const [viewMode, setViewMode] = useState(null);   // null = follow the screen size
+  const view = viewMode || (isDesktop ? 'table' : 'cards');
 
   const spot0 = ltp || 0;
   const step = useMemo(() => strikeStep(foChain, spot0), [foChain, spot0]);
@@ -141,7 +145,15 @@ export default function StockOptionsTab({ inst, ltp: ltpIn, chgPct: chgPctIn, ch
           );
         })}
       </div>
-      {chainLoading ? <Spinner label={`Loading ${expiry}...`} /> : (
+      <div className="chip-row">
+        {[['table', 'Table'], ['cards', 'Cards']].map(([id, l]) => (
+          <button key={id} className={'chip' + (view === id ? ' on' : '')} onClick={() => setViewMode(id)}>{l}</button>
+        ))}
+      </div>
+      {chainLoading ? <Spinner label={`Loading ${expiry}...`} /> : view === 'table' ? (
+        <ChainTable shownRows={shownRows} atm={chain.atm} spot={spot} walls={walls} totalStrikes={chain.rows.length}
+          onLoadMore={() => setVisible((v) => v + PAGE_SIZE)} />
+      ) : (
         <ChainSection chain={chain} shownRows={shownRows} totalStrikes={chain.rows.length} spot={spot}
           accentColor={ACCENT} walls={walls} maxOi={maxOi} onLoadMore={() => setVisible((v) => v + PAGE_SIZE)} />
       )}

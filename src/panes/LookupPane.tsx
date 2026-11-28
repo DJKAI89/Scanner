@@ -251,6 +251,7 @@ export default function LookupPane() {
   const [tab, setTab] = useState('overview');
   // True right after a stock is picked, so the suggestion list stays closed once analysis starts
   const ddSuppress = useRef(false);
+  const lookupRef = useRef<any>(null);
 
   const activeKey = result?.inst?.key ? [result.inst.key] : [];
 
@@ -330,6 +331,14 @@ export default function LookupPane() {
       setLoading(false);
     }
   }
+
+  // "Analyse" buttons elsewhere (e.g. the Competitors list) ask this page to look a symbol up.
+  lookupRef.current = lookup;
+  useEffect(() => {
+    const h = (e: any) => { if (e?.detail) lookupRef.current?.(String(e.detail)); };
+    window.addEventListener('scanner:lookup', h);
+    return () => window.removeEventListener('scanner:lookup', h);
+  }, []);
 
   const r = result;
   const recColors = { 'STRONG BUY':'#16a34a', BUY:'#22c55e', MODERATE:'#0ea5e9', WATCH:'#d97706', AVOID:'#dc2626' };

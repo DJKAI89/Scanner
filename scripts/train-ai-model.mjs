@@ -256,6 +256,14 @@ async function main() {
   let brain;
   try {
     brain = await loadBrainModule();
+    // Assumptions that decide what counts as a win: override with your real numbers (repo variables).
+    const envNum = (k) => (process.env[k] ? Number(process.env[k]) : undefined);
+    const cost = brain.setCostModel({
+      stockPct: envNum('AI_STOCK_COST_PCT'), optionFlatPct: envNum('AI_OPTION_FLAT_COST_PCT'),
+      orderFeeRs: envNum('AI_OPTION_ORDER_FEE_RS'), statPct: envNum('AI_OPTION_STAT_PCT'),
+    });
+    brain.setIdeaKeyMode({ byStrike: process.env.AI_DEDUPE_BY_STRIKE === '1' });
+    console.log(`  Cost model: stock ${cost.STOCK}% · option flat ${cost.OPTION}% · ₹${cost.orderFeeRs}/order + ${cost.statPct}% statutory · de-dupe by strike: ${process.env.AI_DEDUPE_BY_STRIKE === '1'}`);
     console.log('✅ ML brain module loaded');
   } catch (e) {
     console.error('❌ Failed to load ML module:', e.message);
@@ -319,6 +327,7 @@ async function main() {
         }
       }
 
+      console.log(`  Idea de-dupe: ${JSON.stringify(brain.describeDedupe(signals))}`);
       const models = brain.trainSignalMlModels(closed);
       if (!models) {
         console.log(`⚠️ Skip ${userId}: training returned null (insufficient/unbalanced data)`);
@@ -361,8 +370,26 @@ async function main() {
       const decisions = {};
       for (const fam of ['stock', 'option']) {
         if (!cand[fam]) continue;
-        decisions[fam] = brain.decidePromotion(cand[fam].family, live[fam]?.family);
+        decisions[fam] = brain.decidePromotion(cand[fam].family, live[fam]?.family, { force: process.env.AI_FORCE_PROMOTE === '1' });
         console.log(`  ${fam}: ${decisions[fam].promote ? '✅ promote' : '⏸️ keep live model'} — ${decisions[fam].reason}`);
+      }
+      // GitHub's contents API only returns file content inline up to 1 MB. Keep each model file well
+      // under that: drop the segment models with the least data first (never the one being served).
+      const SIZE_BUDGET = 700 * 1024;
+      for (const fam of ['stock', 'option']) {
+        if (!cand[fam]) continue;
+        const sizeOf = () => Buffer.byteLength(JSON.stringify(cand[fam]));
+        const segs = cand[fam].family?.segments || {};
+        const dropOrder = Object.keys(segs).filter((k) => k !== cand[fam].family.servingLabel)
+          .sort((a, b) => (segs[a].trainedOn || 0) - (segs[b].trainedOn || 0));
+        let size = sizeOf();
+        while (size > SIZE_BUDGET && dropOrder.length) {
+          const k = dropOrder.shift();
+          delete segs[k];
+          console.warn(`  ⚠️ ${fam} model ${Math.round(size / 1024)} KB over budget — dropped segment ${k}`);
+          size = sizeOf();
+        }
+        console.log(`  ${fam} model file: ${Math.round(size / 1024)} KB${size > 900 * 1024 ? ' ❌ close to the 1 MB GitHub read limit' : ''}`);
       }
       for (const fam of ['stock', 'option']) {
         const path = `ai-models/${userId}/${month}/${fam}.json`;
@@ -399,6 +426,7 @@ async function main() {
 
       const elapsed = Math.round((Date.now() - userStartTime) / 1000);
       console.log(`✅ Trained ${userId}: ${closed.length} closed signals in ${elapsed}s`);
+      if (elapsed > 1200) console.warn(`⚠️ Training took ${Math.round(elapsed / 60)} min — consider trimming data or raising the workflow timeout.`);
       trained++;
     } catch (e) {
       console.error(`❌ Error training ${userId}: ${e.message}`);

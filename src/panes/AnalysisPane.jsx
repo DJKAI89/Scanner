@@ -604,6 +604,7 @@ function MlReliabilityBoard({ mlModels }) {
                 <span>Unseen edge: <b style={{ color: (m.oof?.edge ?? 0) > 0 ? '#15803d' : '#b91c1c' }}>{m.oof?.edge ?? '—'}</b></span>
                 <span>Calibration: <b style={{ color: '#0f172a' }}>{m.calibrationSource === 'walk-forward' ? 'on unseen signals' : 'on trained signals'}</b></span>
                 <span>Drift: <b style={{ color: drift?.degraded ? '#b91c1c' : '#15803d' }}>{drift?.degraded ? 'recent results worse' : 'stable'}</b></span>
+                {m.holdout && <span style={{ gridColumn: '1 / -1' }}>Final untouched check ({m.holdout.n} signals): accuracy <b style={{ color: '#0f172a' }}>{pct(m.holdout.accuracy)}</b> · edge <b style={{ color: m.holdout.edge > 0 ? '#15803d' : '#b91c1c' }}>{m.holdout.edge}</b></span>}
               </div>
               {m.reliability?.length ? (
                 <div style={{ fontSize: 11 }}>
@@ -624,6 +625,39 @@ function MlReliabilityBoard({ mlModels }) {
           )}
         </div>
       ))}
+    </div>
+  );
+}
+
+// Does the AI update help? Win rate per confidence band for signals logged before vs after the first
+// retrain that carries the new honest calibration. "After" is every closed signal from that date on.
+function ConfBandCompare({ closed, mlSnapshots }) {
+  const cutoff = (mlSnapshots || [])
+    .filter((x) => x?.stock?.calibration || x?.option?.calibration)
+    .map((x) => String(x.date || x.computedAt || x.savedAt || '').slice(0, 10))
+    .filter(Boolean).sort()[0] || null;
+  if (!cutoff) {
+    return <div style={{ fontSize: 12, color: '#64748b' }}>Appears after the first retrain with the new training logic (nothing to compare yet).</div>;
+  }
+  const bands = [[0, 50], [50, 60], [60, 70], [70, 80], [80, 101]];
+  const stat = (list) => ({ n: list.length, wr: list.length ? Math.round((list.filter((x) => x.status === 'TARGET_HIT').length / list.length) * 100) : null });
+  const before = closed.filter((x) => String(x.date) < cutoff);
+  const after = closed.filter((x) => String(x.date) >= cutoff);
+  const cell = (st) => (st.n ? <span><b>{st.wr}%</b> <span style={{ color: '#64748b' }}>({st.n})</span></span> : <span style={{ color: '#94a3b8' }}>—</span>);
+  return (
+    <div style={{ fontSize: 12 }}>
+      <div style={{ color: '#64748b', marginBottom: 6 }}>Cut-over: {cutoff}. Needs about 30 signals per cell before a difference means anything.</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1.2fr', fontWeight: 700, color: '#475569', borderBottom: '1px solid #e2e8f0', padding: '4px 0' }}>
+        <span>Confidence</span><span>Before ({before.length})</span><span>After ({after.length})</span>
+      </div>
+      {bands.map(([lo, hi]) => {
+        const inBand = (x) => (x.confidence || 0) >= lo && (x.confidence || 0) < hi;
+        return (
+          <div key={lo} style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1.2fr', padding: '5px 0', borderBottom: '1px solid #f1f5f9' }}>
+            <span>{lo}–{Math.min(hi, 100)}%</span>{cell(stat(before.filter(inBand)))}{cell(stat(after.filter(inBand)))}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1010,6 +1044,10 @@ export default function AnalysisPane() {
               <div style={{ fontSize: 11, color: '#64748b', marginTop: 8 }}>
                 "Unseen" = signals the model had not learned from when it predicted them. Seen-signal accuracy is always flattering; trust the unseen figures. Green rows: the model's stated chance matched what happened within 10 points.
               </div>
+            </Section>
+
+            <Section title="Win Rate by Confidence: Before vs After AI Update" summary={''} accent="#7c3aed">
+              <ConfBandCompare closed={d.closed} mlSnapshots={mlSnapshots} />
             </Section>
 
             <Section title="AI Feature Drivers" summary={''} accent="#7c3aed">

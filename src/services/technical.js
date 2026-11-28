@@ -1127,7 +1127,7 @@ export function calcOIWalls(chain) {
 // in range so the chain table can show a number next to every row, the way a
 // broker's option-chain screen does. Reuses the same confidence formula and OI
 // buildup classification as scanChain for consistency with the rest of the app.
-export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, stockPCR, marketCtx, cfg, lot = 1) {
+export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, stockPCR, marketCtx, cfg, lot = 1, expiry = null) {
   const rows = [];
   const compositeScore = marketCtx?.compositeScore ?? (niftyBullish ? 1 : -1);
   const priceBull = compositeScore > 0.5, priceBear = compositeScore < -0.5;
@@ -1197,8 +1197,9 @@ export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, 
       else if (priceZone === 'mid')                   zoneAdj = -6;
       if (priceZone === 'belowPDL' &&  isCEOpt) zoneAdj = -25;
       if (priceZone === 'abovePDH' && !isCEOpt) zoneAdj = -25;
-      const baseConfidence = Math.round(Math.min(100, Math.max(0, confidence + zoneAdj + dirFlipPenalty)));
-      confidence = Math.round(Math.min(100, Math.max(0, baseConfidence + oiBuildBonus)));
+      const _dist = optDistanceCap({ spot, strike: sp, optType, premium: ltp, iv, expiry });
+      const baseConfidence = Math.min(_dist.cap, Math.round(Math.min(100, Math.max(0, confidence + zoneAdj + dirFlipPenalty))));
+      confidence = Math.min(_dist.cap, Math.round(Math.min(100, Math.max(0, baseConfidence + oiBuildBonus))));
 
       // Margin here is simply lot size × LTP — the capital tied up per lot at
       // the current premium. It is NOT a SPAN+exposure margin (that's set by
@@ -1210,6 +1211,7 @@ export function scanChainAnalysis(chain, atm, spot, niftyBullish, vix, maxPain, 
         ltp: +ltp.toFixed(2), ltpChgPct, spreadPct, oi, oiChg: +oiChg.toFixed(1), delta: +delta.toFixed(2), iv: +iv.toFixed(1), theta: +theta.toFixed(2),
         confidence, baseConfidence, prevOI, isCE: isCEOpt, oiBuildType, oiBuildBonus, marginEst,
         signals, zoneAdj, dirFlipPenalty, stockPCR,
+        distCap: _dist.cap < 100 ? _dist.cap : null, moveRatio: +_dist.ratio.toFixed(2),
         instrKey: opt.instrument_key || null,
       };
     }
@@ -1516,6 +1518,22 @@ export function computeCtxFromCandles(candlesIn, spot, chgPct, vix, pdhl = null)
 }
 
 // ── Full calcOptConfidence — EXACT port with marketCtx ────────
+// ── Strike-distance cap ───────────────────────────────────────
+// How big a move the underlying must make just to break even, compared with the normal (1-sigma,
+// IV-based) move to expiry. A contract that needs 2-3x the normal move is a lottery ticket however
+// good the other signals look, so its confidence is capped.
+export function optDistanceCap({ spot, strike, optType, premium, iv, expiry }) {
+  if (!(spot > 0) || !(strike > 0) || !optType) return { cap: 100, ratio: 0 };
+  const prem = Math.max(0, +premium || 0);
+  const need = optType === 'CE' ? Math.max(0, strike + prem - spot) : Math.max(0, spot - (strike - prem));
+  let dte = 3;
+  if (expiry) { const d = (new Date(expiry) - new Date()) / 86400000; if (Number.isFinite(d)) dte = Math.max(0.5, d); }
+  const expMove = spot * (Math.max(+iv || 0, 5) / 100) * Math.sqrt(dte / 365);
+  const ratio = expMove > 0 ? need / expMove : 0;
+  const cap = ratio <= 1 ? 100 : ratio <= 1.5 ? 65 : ratio <= 2 ? 50 : ratio <= 3 ? 38 : 25;
+  return { cap, ratio };
+}
+
 export function calcOptConfidenceFull(delta, iv, oiChg, theta, signals, spot, strike, optType, niftyBullish, vix, maxPain, stockPCR, marketCtx) {
   const absD = Math.abs(delta), isCE = optType === 'CE';
 
@@ -1744,6 +1762,8 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
       if (priceZone === 'abovePDH' && !isCE_) zoneAdj = -25;
 
       confidence = Math.round(Math.min(100, Math.max(0, confidence + zoneAdj + dirFlipPenalty + oiBuildBonus)));
+      const _dist = optDistanceCap({ spot, strike: sp, optType, premium: entry, iv, expiry });
+      if (_dist.cap < confidence) confidence = _dist.cap;
 
       // Direction
       // Raised from 1.0 to 1.5 — weak direction signals generated too many WATCH/low-conf picks
@@ -1824,6 +1844,7 @@ export function scanChain(chain, atm, spot, name, expiry, lotSize, niftyBullish,
         mtfVetoedAction,
         mtf: mtfG ? { grade: mtfG.grade, score: mtfG.score, dirs: mtfG.dirs, support: mtfG.support, resistance: mtfG.resistance, roomATR: mtfG.roomATR, veto: mtfG.veto, why: mtfG.why, partial: mtfG.partial } : null,
         _dte: _optAdj.dte,
+        distCap: _dist.cap < 100 ? _dist.cap : null, moveRatio: +_dist.ratio.toFixed(2),
         stockPCR: stockPCR || null, vix: vix || 15, priceZone,
         pdh: pdh || null, pdl: pdl || null,
         zoneAdj, dirFlipPenalty, oiBuildType, oiBuildBonus, ivEnv,

@@ -186,7 +186,7 @@ async function loadOneChain(indexKey, expiry, spot, step, lot, niftyBullish, vix
   const peOI = chain.reduce((s, x) => s + (x.put_options?.market_data?.oi  || 0), 0);
   const pcr  = ceOI > 0 ? +(peOI / ceOI).toFixed(2) : 1;
   const atm  = Math.round(spot / step) * step;
-  const rows = scanChainAnalysis(chain, atm, spot, niftyBullish, vixVal, maxPain, pcr, marketCtx, cfg, lot);
+  const rows = scanChainAnalysis(chain, atm, spot, niftyBullish, vixVal, maxPain, pcr, marketCtx, cfg, lot, expiry);
   return { expiry, rows, maxPain, oiWalls, pcr, atm, chain };
 }
 

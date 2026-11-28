@@ -1,3 +1,4 @@
+import RiskBanner from '../components/RiskBanner.jsx';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
@@ -37,6 +38,9 @@ function OptionCard({ pick, cfg: cardCfg }) {
   const minConf = cardCfg?.minOptConf || 65;
   const slPct   = pick.entry > 0 ? ((pick.entry - pick.sl) / pick.entry * 100).toFixed(2) : 0;
   const tgtPct  = pick.entry > 0 ? ((pick.tgt - pick.entry) / pick.entry * 100).toFixed(2) : 0;
+  // Signed from the real prices (not from the action): a WATCH pick used to show the stop as + and the target as -.
+  const slMove  = pick.entry > 0 ? (pick.sl  - pick.entry) / pick.entry * 100 : 0;
+  const tgtMove = pick.entry > 0 ? (pick.tgt - pick.entry) / pick.entry * 100 : 0;
   const vix_    = pick.vix || 15;
   const ivRatio = pick.iv > 0 && vix_ > 0 ? +(pick.iv / vix_).toFixed(2) : null;
   const ivCheap = ivRatio != null && ivRatio < 0.80;
@@ -144,8 +148,8 @@ function OptionCard({ pick, cfg: cardCfg }) {
         sl={fmt(pick.sl||0)}
         target={fmt(pick.tgt||0)}
         entrySub="LTP"
-        slSub={`${pick.action==='BUY'?'-':'+'}${slPct}%`}
-        tgtSub={`${pick.action==='BUY'?'+':'-'}${tgtPct}% · R:R ${(pick.rr||0).toFixed?pick.rr.toFixed(1):pick.rr}`}
+        slSub={`${slMove > 0 ? '+' : ''}${slMove.toFixed(1)}%`}
+        tgtSub={`${tgtMove > 0 ? '+' : ''}${tgtMove.toFixed(1)}% · R:R ${(pick.rr||0).toFixed?pick.rr.toFixed(1):pick.rr}`}
       />
       {pick.slTgtMethod && <div style={{fontSize:10,color:'#94a3b8',marginTop:-4,marginBottom:9}}>📐 {pick.slTgtMethod}</div>}
 
@@ -377,6 +381,7 @@ export default function OptionsPane() {
 
   return (
     <div>
+      <RiskBanner />
       {!marketStatus.open && <MarketClosedBanner msg={marketStatus.msg || '🔔 NSE Market Closed'} />}
       {error && <ErrorBanner title="⚠ Options Error" message={error} onRetry={() => loadOptions(true)} />}
       {loading ? (

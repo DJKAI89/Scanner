@@ -472,6 +472,9 @@ export function buildStockSignal(p, vixVal) {
     holdDays,
     atr:            p.atr || 0,
     dayChg:         p.chgPct ?? null,     // the stock's own move today, at signal time
+    volRatio:       p.volRatio ?? null,   // today's volume vs its 20-day average
+    gapPct:         p.gapPct ?? null,     // opening gap vs previous close
+    niftyChg:       p.niftyChg ?? null,   // NIFTY's move at signal time (for relative strength)
     // ── Trade management: multi-target partial exits + ATR trailing stop ──
     targetT1:       +(p.pot?.cons || p.target || 0).toFixed(2),
     targetT2:       +(p.target   || p.pot?.mod || 0).toFixed(2),
@@ -722,7 +725,8 @@ export async function logShadowSignals(gh, items, vixVal, lg = () => {}) {
       const existing = f ? (_decode(f.content).signals || []) : [];
       const have = new Set(existing.map(s => s.id));
       const room = Math.max(0, SHADOW_MAX_PER_DAY - existing.length);
-      const fresh = built.filter(s => !have.has(s.id)).slice(0, room);
+      // When the daily cap bites, keep the strongest candidates (they teach the most).
+      const fresh = built.filter(s => !have.has(s.id)).sort((a, b) => (b.confidence || 0) - (a.confidence || 0)).slice(0, room);
       if (!fresh.length) return;
       const payload = { signals: [...existing, ...fresh], date, lastUpdated: new Date().toISOString() };
       const r = await _ghPut(gh, getShadowPath(date), payload, f?.sha, `SCANNER shadow log · ${date}`);

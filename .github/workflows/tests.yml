@@ -1,0 +1,23 @@
+name: Tests
+
+# Build and test on every push and pull request (separate from the Pages deploy workflow in ci.yml),
+# so a broken scoring or training change is caught before the nightly jobs run on it.
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install
+        run: npm ci --ignore-scripts
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm test

@@ -5,6 +5,7 @@ import { sanitiseGH, testGitHubConnection, pushLocalSettingsToGH } from '../serv
 import { getIST } from '../utils/marketTime';
 import Icon from '../components/Icon.jsx';
 import MtfDiagnostics from '../components/MtfDiagnostics.jsx';
+import { applyTheme, getTheme } from '../utils/theme';
 
 function SetRow({ label, sub, children }) {
   return (
@@ -419,6 +420,7 @@ export default function SettingsPane() {
   }, [cfg, gh, ghSettingsPulled]);
 
   const set = (k, v) => setLocal(p => ({ ...p, [k]: v }));
+  const [darkOn, setDarkOn] = React.useState(() => getTheme() === 'dark');
 
   function handleSave() {
     const cleaned = sanitiseGH(ghLocal);
@@ -659,6 +661,45 @@ export default function SettingsPane() {
               {ghStatus}
             </div>
           )}
+        </div>
+
+        {/* ── AI mode ── */}
+        <div className="setting-card" data-sec="ai" hidden={sec !== 'ai'}>
+          <h4>🛟 AI safeguard</h4>
+          <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', fontSize: 12, color: '#374151', cursor: 'pointer' }}>
+            <input type="checkbox" checked={!!local.mlRulesOnly} onChange={(e) => set('mlRulesOnly', e.target.checked)} style={{ marginTop: 3 }} />
+            <span><b>Rules-only mode</b> — ignore the ML model completely and score signals with the rules alone.
+              Use it if the AI Reliability panel (Performance → AI and model) shows no edge on unseen signals, or while you investigate odd scores.
+              The model's influence already grows with training data: none below 150 trained signals, full from 400.</span>
+          </label>
+        </div>
+
+        {/* ── Risk limits ── */}
+        <div className="setting-card" data-sec="trade" hidden={sec !== 'trade'}>
+          <h4>🚧 Risk limits</h4>
+          <div style={{ fontSize: 11, color: '#64748b', marginBottom: 10 }}>A warning banner appears on the Stocks and F&amp;O pages when a limit is reached. Nothing is blocked.</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#374151', marginBottom: 8 }}>Max stop-outs today</div>
+              <Inp value={local.maxStopsPerDay} onChange={v => set('maxStopsPerDay', v)} min={1} max={50} width={70} />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#374151', marginBottom: 8 }}>Max open signals</div>
+              <Inp value={local.maxOpenSignals} onChange={v => set('maxOpenSignals', v)} min={1} max={200} width={70} />
+            </div>
+          </div>
+        </div>
+
+        {/* ── Appearance + phone alerts ── */}
+        <div className="setting-card" data-sec="notifications" hidden={sec !== 'notifications'}>
+          <h4>🎨 Appearance and phone alerts</h4>
+          <label style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 12, color: '#374151', cursor: 'pointer', marginBottom: 14 }}>
+            <input type="checkbox" checked={darkOn} onChange={(e) => { setDarkOn(e.target.checked); applyTheme(e.target.checked ? 'dark' : 'light'); }} />
+            <span><b>Dark theme</b> (this device)</span>
+          </label>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#374151', marginBottom: 8 }}>Phone alert minimum confidence (Telegram)</div>
+          <Inp value={local.alertMinConf} onChange={v => set('alertMinConf', v)} min={0} max={100} width={70} />
+          <div style={{ fontSize: 11, color: '#64748b', marginTop: 8 }}>Used by the scheduled scan. Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID as repository secrets to turn alerts on. Stop, target and expiry alerts need no setting.</div>
         </div>
 
         {/* ── Notifications ── */}

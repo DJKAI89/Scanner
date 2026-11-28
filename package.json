@@ -12,7 +12,8 @@
     "format": "prettier --write \"src/**/*.{js,jsx,tsx}\" \"scripts/**/*.mjs\"",
     "format:check": "prettier --check \"src/**/*.{js,jsx,tsx}\" \"scripts/**/*.mjs\"",
     "prepare": "husky",
-    "ai:train": "node scripts/train-ai-model.mjs"
+    "ai:train": "node scripts/train-ai-model.mjs",
+    "test": "node --test"
   },
   "lint-staged": {
     "src/**/*.{js,jsx,tsx}": [

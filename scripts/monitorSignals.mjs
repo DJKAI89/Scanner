@@ -9,6 +9,7 @@
 // signal-logs/ (same pattern as scripts/train-ai-model.mjs) — no per-user
 // secret needed.
 import { evaluateSignalExit } from '../src/services/tradeManagement.js';
+import { isBullSignal } from '../src/services/github.js';
 import { snapshotChains } from './snapshotChains.mjs';
 
 const GH_API = 'https://api.github.com';
@@ -116,6 +117,142 @@ async function fetchNseHolidays() {
   }
 }
 
+// ── Phone alerts (optional) ─────────────────────────────────────
+// Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID as repo secrets to receive a message when a REAL signal
+// hits target/stop or expires. Silent no-op when either is missing. Shadow signals never notify.
+async function sendTelegram(text) {
+  const tok = process.env.TELEGRAM_BOT_TOKEN, chat = process.env.TELEGRAM_CHAT_ID;
+  if (!tok || !chat) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${tok}/sendMessage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chat, text, disable_web_page_preview: true }),
+    });
+  } catch (e) { console.warn('telegram failed (ignored): ' + e.message); }
+}
+function describeSignal(s) {
+  return s.type === 'OPTION' ? `${s.stock || s.sym} ${s.strike || ''} ${s.optType || ''}`.trim() : (s.stock || s.sym);
+}
+async function notifyClosed(before, after) {
+  const label = { TARGET_HIT: '✅ Target hit', SL_HIT: '🛑 Stop hit', EXPIRED: '⌛ Expired' }[after.status];
+  if (!label) return;
+  const pnl = typeof after.pnlPct === 'number' ? ` ${after.pnlPct > 0 ? '+' : ''}${after.pnlPct.toFixed(1)}%` : '';
+  await sendTelegram(`${label}: ${describeSignal(before)}${pnl}\nEntry ${before.entry} → exit ${after.exitPrice ?? '—'}`);
+}
+
+// ── Intraday outcome labels ─────────────────────────────────────
+// The last traded price can miss a target or stop that was touched between two checks. Replaying the
+// 5-minute candles since entry finds what was really hit first. Inside one candle the order is not
+// known, so the adverse side is applied first (a stop wins over a target in the same candle).
+const IST_OFFSET_MS = 330 * 60000;
+const istDate = (ms) => new Date(ms + IST_OFFSET_MS).toISOString().slice(0, 10);
+const istTime = (ms) => new Date(ms + IST_OFFSET_MS).toISOString().slice(11, 19);
+const entryEpoch = (s) => {
+  const t = String(s.time || '09:15');
+  const hhmmss = t.length === 5 ? t + ':00' : t;
+  const ms = Date.parse(`${s.date}T${hhmmss}+05:30`);
+  return Number.isFinite(ms) ? ms : 0;
+};
+const MAX_CANDLE_KEYS_PER_RUN = 150;
+const candleCache = new Map();
+let candleCalls = 0;
+
+async function fetchCandles5m(key, fromDate, toDate) {
+  const ck = `${key}|${fromDate}`;
+  if (candleCache.has(ck)) return candleCache.get(ck);
+  if (candleCalls >= MAX_CANDLE_KEYS_PER_RUN) return [];
+  candleCalls++;
+  const enc = encodeURIComponent(key);
+  const urls = fromDate === toDate
+    ? [`https://api.upstox.com/v3/historical-candle/intraday/${enc}/minutes/5`]
+    : [`https://api.upstox.com/v3/historical-candle/${enc}/minutes/5/${toDate}/${fromDate}`,
+       `https://api.upstox.com/v3/historical-candle/intraday/${enc}/minutes/5`];
+  let rows = [];
+  for (const url of urls) {
+    try {
+      const r = await fetch(url, { headers: { Authorization: `Bearer ${upstoxToken}`, Accept: 'application/json' } });
+      if (!r.ok) continue;
+      const d = await r.json();
+      rows = rows.concat(d?.data?.candles || []);
+    } catch (_) { /* try next */ }
+  }
+  // [ts, o, h, l, c, v, oi] newest-first -> oldest-first, de-duplicated
+  const seen = new Set();
+  const asc = rows.filter((c) => !seen.has(c[0]) && seen.add(c[0])).sort((a, b) => Date.parse(a[0]) - Date.parse(b[0]));
+  candleCache.set(ck, asc);
+  await new Promise((res) => setTimeout(res, 120)); // stay well inside Upstox rate limits
+  return asc;
+}
+
+// Walks the candles with evaluateSignalExit so partial targets, break-even and trailing stops behave
+// exactly as in live monitoring. Returns { state, closed }.
+function replayCandles(sig, candles) {
+  let state = sig;
+  const isBuy = isBullSignal(sig);
+  const startAt = entryEpoch(sig);
+  for (const c of candles) {
+    const start = Date.parse(c[0]);
+    if (!Number.isFinite(start) || start < startAt) continue;   // skip the candle the signal was born in
+    const hi = +c[2], lo = +c[3];
+    if (!(hi > 0) || !(lo > 0)) continue;
+    const d = istDate(start), t = istTime(start + 5 * 60000);
+    const feed = (price) => {
+      const r = evaluateSignalExit(state, price, d, t, {});
+      if (!r) return null;
+      state = { ...state, ...r };
+      return r.status ? r : null;
+    };
+    const adverse = isBuy ? lo : hi;
+    const effSL = state.trailSL != null ? state.trailSL : state.sl;
+    const stopHit = effSL > 0 && (isBuy ? adverse <= effSL : adverse >= effSL);
+    if (feed(stopHit ? effSL : adverse)) return { state, closed: true };      // exit at the stop level, not the wick
+    const fav = isBuy ? hi : lo;
+    // Every target level, nearest first (T1, T2, T3 and the single `target` of older signals).
+    const levels = [...new Set([state.targetT1, state.targetT2, state.targetT3, state.target].filter((v) => v > 0))]
+      .sort((a, b) => (isBuy ? a - b : b - a));
+    for (const lvl of levels) {
+      if (isBuy ? fav >= lvl : fav <= lvl) { if (feed(lvl)) return { state, closed: true }; }
+    }
+  }
+  return { state, closed: false };
+}
+
+// Shared by real and shadow signals: candle replay first, then the live price (time stops, expiry,
+// anything the candles did not decide).
+async function resolveSignals(signals, today, now, quotes, { notify, tag, uid }) {
+  let changed = false;
+  const fromDateFor = (s) => (s.date < today ? s.date : today);
+  const out = [];
+  for (const s of signals) {
+    if (s.status !== 'OPEN') { out.push(s); continue; }
+    const key = s.instrKey || s.key;
+    let state = s;
+    let result = null;
+    if (key && !(s.type === 'OPTION' && s.expiry && today > s.expiry)) {
+      const candles = await fetchCandles5m(key, fromDateFor(s), today);
+      if (candles.length) {
+        const rp = replayCandles(s, candles);
+        state = rp.state;
+        if (rp.closed) result = state;
+      }
+    }
+    if (!result) {
+      const ltp = quotes[key]?.last_price ?? null;
+      if (ltp || (s.type === 'OPTION' && s.expiry && today > s.expiry)) {
+        const r = evaluateSignalExit(state, ltp ?? s.entry, today, now, {});
+        if (r) { state = { ...state, ...r }; if (r.status) result = state; }
+      }
+    }
+    if (state !== s) {
+      changed = true;
+      console.log(`[${uid}] ${tag}${state.status && state.status !== 'OPEN' ? state.status : 'update'}: ${s.stock || s.sym}`);
+      if (notify && state.status && state.status !== 'OPEN') await notifyClosed(s, state);
+    }
+    out.push(state);
+  }
+  return { updated: out, changed };
+}
+
 async function processUser(uid, today, now) {
   const folder = `signal-logs/${uid}`;
   const index = await ghGet(`${folder}/index.json`);
@@ -147,18 +284,7 @@ async function processUser(uid, today, now) {
     const keys = [...new Set(open.map((s) => s.instrKey || s.key).filter(Boolean))];
     const quotes = await fetchQuotes(keys);
 
-    let changed = false;
-    const updated = signals.map((s) => {
-      if (s.status !== 'OPEN') return s;
-      const instrK = s.instrKey || s.key;
-      const ltp = quotes[instrK]?.last_price ?? null;
-      if (!ltp && !(s.type === 'OPTION' && s.expiry && today > s.expiry)) return s;
-      const result = evaluateSignalExit(s, ltp ?? s.entry, today, now, {});
-      if (!result) return s;
-      changed = true;
-      console.log(`[${uid}] ${result.status ? result.status : 'update'}: ${s.stock || s.sym}`);
-      return { ...s, ...result };
-    });
+    const { updated, changed } = await resolveSignals(signals, today, now, quotes, { notify: true, tag: '', uid });
 
     if (changed) {
       const payload = { signals: updated, lastUpdated: new Date().toISOString(), date, stats: computeLogStats(updated) };
@@ -186,17 +312,7 @@ async function processShadow(uid, today, now) {
     if (!open.length) continue;
     const keys = [...new Set(open.map((s) => s.instrKey || s.key).filter(Boolean))];
     const quotes = await fetchQuotes(keys);
-    let changed = false;
-    const updated = signals.map((s) => {
-      if (s.status !== 'OPEN') return s;
-      const ltp = quotes[s.instrKey || s.key]?.last_price ?? null;
-      if (!ltp && !(s.type === 'OPTION' && s.expiry && today > s.expiry)) return s;
-      const result = evaluateSignalExit(s, ltp ?? s.entry, today, now, {});
-      if (!result) return s;
-      changed = true;
-      console.log(`[${uid}] shadow ${result.status || 'update'}: ${s.stock || s.sym} (${s.shadowReason})`);
-      return { ...s, ...result };
-    });
+    const { updated, changed } = await resolveSignals(signals, today, now, quotes, { notify: false, tag: 'shadow ', uid });
     if (changed) await ghPut(path, { ...wrapper, signals: updated, lastUpdated: new Date().toISOString() }, file.sha);
   }
 }

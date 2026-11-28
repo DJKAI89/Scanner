@@ -1,0 +1,44 @@
+name: Server Scan
+
+# Runs the stock, breakout and F&O scanners during market hours so signals and shadow picks keep
+# being logged even when the app is closed. 04:00-09:59 UTC = 09:30-15:29 IST, every 30 minutes,
+# Monday-Friday. The script exits immediately if the market is closed (holidays included).
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Scan even if the market looks closed (testing)"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "*/30 4-9 * * 1-5"
+
+concurrency:
+  group: server-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install
+        run: npm ci --ignore-scripts
+      - name: Bundle scanner
+        run: npx esbuild scripts/server-scan.mjs --bundle --platform=node --format=esm --outfile=.server-scan.mjs --define:import.meta.env='{}' --loader:.js=jsx --log-level=warning
+      - name: Scan
+        env:
+          GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
+          GH_USER: ${{ secrets.AI_GH_USER }}
+          GH_REPO: ${{ secrets.AI_GH_REPO }}
+          UPSTOX_ACCESS_TOKEN: ${{ secrets.UPSTOX_ACCESS_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SCAN_FORCE: ${{ inputs.force && '1' || '0' }}
+        run: node .server-scan.mjs

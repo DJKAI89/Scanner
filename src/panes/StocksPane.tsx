@@ -1,3 +1,4 @@
+import RiskBanner from '../components/RiskBanner.jsx';
 import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppContext';
 import { Spinner, ErrorBanner, MarketClosedBanner, LastUpdated, StatCard, EmptyState } from '../components/common.jsx';
@@ -703,6 +704,7 @@ export default function StocksPane() {
 
   return (
     <div>
+      <RiskBanner />
       {/* Mode tabs */}
       <div style={{display:'flex',gap:0,marginBottom:14,background:'#f1f5f9',borderRadius:10,padding:3}}>
         {[{id:'picks',label:'📊 Picks',color:'#1d4ed8'},{id:'breakout',label:'🚀 Breakout',color:'#7c3aed'}].map(m=>(

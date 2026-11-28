@@ -9,6 +9,7 @@ import { useMarketFeed } from '../hooks/useMarketFeed';
 import { loadOptionMeta, loadChainForExpiry, mergeLiveIntoRows, selectStrikesAroundATM, summarizeChain } from '../services/optionAnalysisService';
 import { effectiveOptionCfg } from '../services/optionScan';
 import { SnapshotCard, ChainSection, expiryLabel } from '../components/OptionChainParts';
+import { ChainTable, useIsDesktop } from '../components/DataTables.jsx';
 import ScanProgress from '../components/ScanProgress';
 
 const INDEX_FILTERS = [
@@ -21,6 +22,9 @@ const VIX_KEY = 'NSE_INDEX|India VIX';
 const PAGE_SIZE = 20;
 
 export default function OptionAnalysisPane() {
+  const isDesktop = useIsDesktop();
+  const [viewMode, setViewMode] = React.useState<string | null>(null);   // null = follow screen size
+  const chainView = viewMode || (isDesktop ? 'table' : 'cards');
   const { token, cfg: cfgBase, mlModels, marketStatus, lg, onTokenExpired, updateBadge } = useApp();
   const accessToken = resolveAccessToken(token);
   // Same learned delta/IV gates every other option page applies (optionScan.effectiveOptionCfg)
@@ -197,8 +201,23 @@ export default function OptionAnalysisPane() {
             })}
           </div>
 
+          <div className="chip-row">
+            {[['table', 'Table'], ['cards', 'Cards']].map(([id, l]) => (
+              <button key={id} className={'chip' + (chainView === id ? ' on' : '')} onClick={() => setViewMode(id)}>{l}</button>
+            ))}
+          </div>
+
           {chainLoading ? (
             <Spinner label={`Loading ${expiry}...`} />
+          ) : chainView === 'table' ? (
+            <ChainTable
+              shownRows={liveShownRows}
+              atm={chain?.atm}
+              spot={liveSpot}
+              walls={walls}
+              totalStrikes={chain?.rows.length || 0}
+              onLoadMore={() => setVisibleStrikes((v) => v + PAGE_SIZE)}
+            />
           ) : (
             <ChainSection
               chain={chain}

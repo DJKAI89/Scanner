@@ -22,6 +22,11 @@ export const DEF = {
   optTgt:       50,
   minOptConf:   65,
   minOptOI:     500,
+  // ML safeguards / risk limits / phone alerts
+  mlRulesOnly:    false,  // true = ignore the ML model completely (rules-only scoring)
+  maxStopsPerDay: 3,      // warn after this many stop-outs today
+  maxOpenSignals: 10,     // warn when this many signals are open at once
+  alertMinConf:   75,     // phone (Telegram) alert only for new signals at or above this confidence
   maxOptCapital: 0,
   sectorRsPenalty: 10,      // stocks: confidence penalty when a long/short isn't leading its sector and the sector isn't leading Nifty (0 = off)
   oiWallBufferPct: 0.5,     // options: block longs within this % of spot under the Call OI wall (shorts over the Put wall); 0 = off

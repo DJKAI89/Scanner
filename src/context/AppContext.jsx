@@ -20,7 +20,8 @@ import { pullSettingsFromGH, pushSettingsToGH, ghReadMultipleDays, ghMigrateIfNe
 import { evaluateSignalExit } from '../services/tradeManagement';
 import { fetchQ, resolveAccessToken } from '../services/api';
 import { syncUpstoxTokenToGithub } from '../services/githubSecretSync';
-import { trainSignalMlModels, buildModelSnapshot, signalWin } from '../services/mlRanking';
+import { trainSignalMlModels, buildModelSnapshot } from '../services/mlRanking';
+import { computeConfCalibration, computeAdaptWeights } from '../services/learnedAdjust';
 
 const AppContext = createContext(null);
 
@@ -345,7 +346,7 @@ export function AppProvider({ children }) {
       const g = ghCfg || gh;
       if (!g?.token || !g?.user || !g?.repo) return;
       try {
-        const signals = await ghReadMultipleDays(g, 60); // 60 days for better sample size
+        const signals = await ghReadMultipleDays(g, 3650); // every logged day: calibration should learn from all history
         if (!signals?.length) { setMlModels(null); localStorage.removeItem('scanner_ml_models'); return; }
         const closed = signals.filter(s => !s.planned && (s.status === 'TARGET_HIT' || s.status === 'SL_HIT'));
         if (closed.length < 10) { setMlModels(null); localStorage.removeItem('scanner_ml_models'); lg(`Calibration: need 10+ closed signals, have ${closed.length}`, 'w'); return; }
@@ -421,114 +422,20 @@ export function AppProvider({ children }) {
         }
 
       // ── Layer 1: Bucket calibration (existing logic) ──
-      const bands = {};
-      for (const s of closed) {
-        const bucket = Math.floor((s.confidence || 50) / 10) * 10;
-        if (!bands[bucket]) bands[bucket] = { hits:0, total:0 };
-        bands[bucket].total++;
-        if (signalWin(s)) bands[bucket].hits++;
-      }
-      const calibration = {};
-      for (const [band, data] of Object.entries(bands)) {
-        if (data.total < 3) continue;
-        const b = parseInt(band);
-        const actualWR = data.hits / data.total;
-        const expectedWR = b / 100;
-        const rawAdj = Math.round((actualWR - expectedWR) * 100);
-        calibration[b] = { adj: Math.max(-15, Math.min(15, rawAdj)), hits:data.hits, total:data.total, winRate:Math.round(actualWR*100) };
-      }
+      const calibration = computeConfCalibration(closed);
       setConfCalibration(calibration);
       const summary = Object.entries(calibration).map(([b,d]) => `${b}%→${d.winRate}%WR(n=${d.total})`).join(' ');
       lg('Calibration loaded: ' + summary, 'o');
 
       // ── Layer 2: Per-indicator adaptWeights ──
       // Only compute when we have enough closed signals with indicator snapshots
-      const withInds = closed.filter(s => s.indicators && typeof s.indicators === 'object');
-      if (withInds.length < 15) {
-        lg(`adaptWeights: need 15+ signals with indicator data, have ${withInds.length} (accumulating...)`, 'w');
+      const adaptW = computeAdaptWeights(closed);
+      if (!adaptW) {
+        lg(`adaptWeights: need 15+ signals with indicator data, have ${closed.filter(s => s.indicators && typeof s.indicators === 'object').length} (accumulating...)`, 'w');
         return;
       }
-
-      // Baseline win rate across ALL closed signals
-      const baselineWR = closed.filter(s => signalWin(s)).length / closed.length;
-
-      // Per-type analysis: stocks and options separately
-      const stockClosed = withInds.filter(s => s.type === 'STOCK');
-      const optClosed   = withInds.filter(s => s.type === 'OPTION');
-
-      // ── Stock indicator analysis ──
-      const STOCK_INDICATORS = [
-        'macdBull','macdBullCross','macdHistRising','macdBearCross','bbSqueeze','bbNearLower','bbAboveUpper',
-        'adxBull','adxBear','adxNoTrend','rsiDiv','rsiDivHidden','rsiBearDiv','rsiBearDivHidden',
-        'a50','a200','nearSupp','aboveVWAP','vwapNearLower','vwapFarAbove',
-        'engulfing','hammer','morningStar','reversalFired','reversalBullish','reversalBearish',
-        'delivHigh','delivLow','rsiOversold','rsiOverbought','vixVeryLow','vixHighFear',
-        'pcrBearishExtreme','pcrBullishExtreme','near52wLow','near52wHigh',
-        'confluenceStrong','confluenceWeak','confluenceConflict','fiiAligned','fiiAgainst',
-      ];
-      const OPT_INDICATORS = [
-        'trendAligned','emaBull','emaBearish','freshCross','momentumFresh',
-        'volSpike','lowVol','nearPDH','nearPDL','oiBuildUp',
-        'compositeHigh','compositeMed','atm','vixVeryLow','vixHighFear',
-        'confluenceStrong','confluenceWeak','confluenceConflict','fiiAligned','fiiAgainst',
-      ];
-
-      const MIN_SAMPLES = 8; // minimum signals per indicator before trusting it
-      const MAX_ADJ     = 12; // max pts adjustment in either direction
-
-      function computeIndWeights(signals, indicators, baseWR) {
-        if (!signals.length) return {};
-        const weights = {};
-        for (const ind of indicators) {
-          const withInd    = signals.filter(s => s.indicators[ind] === true);
-          const withoutInd = signals.filter(s => s.indicators[ind] === false);
-          if (withInd.length < MIN_SAMPLES) continue; // not enough data yet
-
-          const wrWith    = withInd.filter(s => signalWin(s)).length / withInd.length;
-          const wrWithout = withoutInd.length >= MIN_SAMPLES
-            ? withoutInd.filter(s => signalWin(s)).length / withoutInd.length
-            : baseWR;
-
-          // Lift = how much better/worse this indicator is vs baseline
-          const liftVsBaseline = wrWith - baseWR;
-          // Differential = how much better/worse with vs without
-          const liftVsWithout  = wrWith - wrWithout;
-          // Weighted average of both measures (baseline more stable, differential more specific)
-          const rawLift = liftVsBaseline * 0.6 + liftVsWithout * 0.4;
-          // Convert to confidence pts: 10% lift → ~8 pts (diminishing returns)
-          const adjPts  = Math.sign(rawLift) * Math.min(MAX_ADJ, Math.abs(rawLift) * 80);
-
-          weights[ind] = {
-            adj:     +adjPts.toFixed(1),
-            wrWith:  Math.round(wrWith * 100),
-            wrBase:  Math.round(baseWR * 100),
-            n:       withInd.length,
-            lift:    +(liftVsBaseline * 100).toFixed(1),
-          };
-        }
-        return weights;
-      }
-
-      const stockWR  = stockClosed.length
-        ? stockClosed.filter(s => signalWin(s)).length / stockClosed.length
-        : baselineWR;
-      const optWR    = optClosed.length
-        ? optClosed.filter(s => signalWin(s)).length / optClosed.length
-        : baselineWR;
-
-      const stockWeights = computeIndWeights(stockClosed, STOCK_INDICATORS, stockWR);
-      const optWeights   = computeIndWeights(optClosed,   OPT_INDICATORS,   optWR);
-
-      const adaptW = {
-        stock:        stockWeights,
-        option:       optWeights,
-        baselineWR:   +baselineWR.toFixed(3),
-        stockBaseWR:  +stockWR.toFixed(3),
-        optBaseWR:    +optWR.toFixed(3),
-        totalSignals: closed.length,
-        withIndData:  withInds.length,
-        computedAt:   new Date().toISOString(),
-      };
+      const withInds = { length: adaptW.withIndData };
+      const stockWeights = adaptW.stock, optWeights = adaptW.option;
       setAdaptWeights(adaptW);
 
       const topStock = Object.entries(stockWeights)
@@ -839,7 +746,7 @@ export function AppProvider({ children }) {
     // data
     stocks,   setStocks,   stocksStatus, loadStocks,
     fiiData,  fiiInterp,   loadFIIDII,
-      userName, userId, adaptWeights, mlModels, mlSnapshots,
+      userName, userId, adaptWeights, mlModels: cfg?.mlRulesOnly ? null : mlModels, mlSnapshots,
     tickerStats, setTickerStats,
     confCalibration, setConfCalibration, loadConfCalibration,
     openSignalCount, runSignalMonitor,

@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useIsDesktop } from '../components/DataTables.jsx';
+import { squarify } from '../utils/treemap';
 import { useApp } from '../context/AppContext';
 import { resolveAccessToken, fetchIntraday } from '../services/api';
 import { useMarketFeed } from '../hooks/useMarketFeed';
@@ -83,6 +85,48 @@ function HeatTile({ stock, ltp, chgPct, chgPt, volRank, hasSignal, squeeze, onTa
   );
 }
 
+// ── Treemap ───────────────────────────────────────────────────
+// Tile area follows how much money is changing hands today (price x volume, square-rooted so a few
+// giants do not swallow the rest). Colour is still the % change. Squarified layout keeps tiles close
+// to square so the labels stay readable.
+function TreemapView({ stocks, openSignalSymbols, squeezeMap, onTap }) {
+  const ref = useRef(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = ref.current; if (!el) return undefined;
+    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    ro.observe(el); setWidth(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+  const height = Math.max(380, Math.min(640, Math.round(width * 0.55)));
+  const tiles = useMemo(() => {
+    const raw = stocks.map((st) => ({ st, w: Math.sqrt(Math.max(0, (st.ltp || 0) * (st.volume || 0))) }));
+    const pos = raw.filter((r) => r.w > 0).map((r) => r.w).sort((a, b) => a - b);
+    const floor = pos.length ? pos[Math.floor(pos.length / 2)] * 0.2 : 1;   // keep unloaded / quiet stocks visible
+    const items = raw.map((r) => ({ st: r.st, weight: Math.max(r.w, floor) })).sort((a, b) => b.weight - a.weight);
+    return squarify(items, width, height);
+  }, [stocks, width, height]);
+  return (
+    <div ref={ref} style={{ position: 'relative', width: '100%', height, background: '#e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
+      {tiles.map(({ item, x, y, w, h }) => {
+        const st = item.st, has = st.ltp > 0, c = heatColor(st.chgPct || 0);
+        const big = w >= 92 && h >= 54, mid = w >= 56 && h >= 34;
+        const flags = (openSignalSymbols?.has(st.s) ? '🎯' : '') + (squeezeMap[st.key] === 'extreme' ? '⚡' : squeezeMap[st.key] === 'squeeze' ? '🔸' : '');
+        return (
+          <div key={st.instrKey || st.s} onClick={() => onTap(st)} role="button" tabIndex={0}
+            title={`${st.s}  ${has ? '₹' + fmt(st.ltp) + '  ' + fmtP(st.chgPct) : 'no price yet'}`}
+            style={{ position: 'absolute', left: x, top: y, width: w, height: h, boxSizing: 'border-box', border: '1px solid rgba(255,255,255,.55)',
+              background: has ? c.bg : '#cbd5e1', color: has ? c.text : '#475569', padding: '3px 4px', overflow: 'hidden', cursor: 'pointer', transition: 'background .3s' }}>
+            {mid && <div style={{ fontSize: big ? 13 : 10, fontWeight: 800, lineHeight: 1.1, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{st.s}{flags && ' ' + flags}</div>}
+            {mid && has && <div style={{ fontSize: 10, fontWeight: 700, color: c.sub, lineHeight: 1.2 }}>{fmtP(st.chgPct)}</div>}
+            {big && has && <div style={{ fontSize: 10, color: c.sub, lineHeight: 1.2 }}>₹{fmt(st.ltp)}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Breadth bar ───────────────────────────────────────────────
 function BreadthBar({ enriched }) {
   let adv = 0, dec = 0, flat = 0;
@@ -151,6 +195,9 @@ export default function HeatmapPane() {
 
   const [sector,   setSector]   = useState('ALL');
   const [sortBy,   setSortBy]   = useState('chg');
+  const isDesktop = useIsDesktop();
+  const [hmView, setHmView] = useState(null);       // null = follow screen size
+  const hmMode = hmView || (isDesktop ? 'treemap' : 'grid');
   const [basePrices, setBasePrices] = useState({});
   const [loading,    setLoading]    = useState(false);
   const [updTime,    setUpdTime]    = useState('');
@@ -331,7 +378,17 @@ export default function HeatmapPane() {
         </div>
       )}
 
-      <div className="heatmap-grid">
+      <div className="chip-row">
+        {[['treemap', 'Treemap (size = turnover)'], ['grid', 'Grid']].map(([id, l]) => (
+          <button key={id} className={'chip' + (hmMode === id ? ' on' : '')} onClick={() => setHmView(id)}>{l}</button>
+        ))}
+      </div>
+
+      {hmMode === 'treemap' && (
+        <TreemapView stocks={sorted} openSignalSymbols={openSignalSymbols} squeezeMap={squeezeMap} onTap={openTile} />
+      )}
+
+      {hmMode === 'grid' && <div className="heatmap-grid">
         {sorted.map(stock => (
           <HeatTile
             key={stock.instrKey || stock.s}
@@ -345,7 +402,7 @@ export default function HeatmapPane() {
             onTap={() => openTile(stock)}
           />
         ))}
-      </div>
+      </div>}
 
       {/* Legend */}
       <div style={{ marginTop: 14, padding: '10px 12px', background: '#f8fafc', borderRadius: 10, border: '1px solid #e2e8f0', boxShadow: 'var(--shadow-flat)' }}>

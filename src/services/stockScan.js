@@ -404,6 +404,8 @@ export async function runPicksScan(ctx, callbacks) {
     const mtfPick = _mtfG ? { grade: _mtfG.grade, score: _mtfG.score, dirs: _mtfG.dirs, support: _mtfG.support, resistance: _mtfG.resistance, roomATR: _mtfG.roomATR, veto: _mtfG.veto, why: _mtfG.why, partial: _mtfG.partial } : null;
     const _mtfAdj = _mtfG ? _mtfG.adj : 0;
     if (_mtfAdj) conf = Math.max(1, Math.min(99, conf + _mtfAdj));
+    const _gapPct = detectGap(t.candles)?.gapPct ?? null;
+    const _volRatio = avgVol20 > 0 ? +(vol / avgVol20).toFixed(2) : null;
     const mlRank = applyMlRanking(conf, mlModels || null, {
       type: 'STOCK',
       mtf: mtfPick,
@@ -425,6 +427,7 @@ export async function runPicksScan(ctx, callbacks) {
       _indSnap,
       // Inputs the model trains on (logged on every signal) — passed so live scoring sees them too.
       entry: ltp, atr: t.atr||0, ema50: t.ema50, ema200: t.ema200, hi52: sr?.week52H||0, lo52: sr?.week52L||0, dayChg: chgPct,
+      volRatio: _volRatio, gapPct: _gapPct, niftyChg: niftyChgPct,
     });
     // Cap the combined learned effect (calibration + regime + learned weights + ML). Rule-based steps
     // (MTF, sector RS, confluence) are not part of it. The cut comes out of mlAdj so the logged
@@ -487,6 +490,7 @@ export async function runPicksScan(ctx, callbacks) {
       mtf: mtfPick, mtfUnavailable: !_mtfG, mtfBoost: _mtfAdj, mtfNote: _mtfG ? `${_mtfG.grade} ${_mtfG.dirs}` : null,
       trigger, turnoverCr: t.turnoverCr ?? null, ema50: t.ema50 ?? null, ema200: t.ema200 ?? null,
       hi52: sr?.week52H||null, lo52: sr?.week52L||null,
+      volRatio: _volRatio, gapPct: _gapPct, niftyChg: niftyChgPct ?? null,
       mlProbability: mlRank.mlProbability,
       mlAdj: _mlAdjEff,
       mlExplain: mlRank.explanation,

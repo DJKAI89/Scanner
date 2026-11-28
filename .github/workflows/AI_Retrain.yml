@@ -2,6 +2,11 @@ name: AI Retrain
 
 on:
   workflow_dispatch:
+    inputs:
+      force_promote:
+        description: "Replace the live model with the newly trained one even if the safety checks say keep (use once after deploying a new trainer)"
+        type: boolean
+        default: false
   schedule:
     # 11:30 UTC = 17:00 IST, Mon-Fri: well after the 15:30 market close, so each trading day
     # is trained on the same evening. GitHub may start a scheduled run some minutes late;
@@ -38,6 +43,8 @@ jobs:
           GH_USER: ${{ secrets.AI_GH_USER }}
           GH_REPO: ${{ secrets.AI_GH_REPO }}
           UPSTOX_ACCESS_TOKEN: ${{ secrets.UPSTOX_ACCESS_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node scripts/monitorSignals.mjs
 
       - name: Run AI retrainer
@@ -51,5 +58,13 @@ jobs:
           # Resolved shadow signals (rejected picks followed to an outcome) are included by default;
           # set the repository variable AI_INCLUDE_SHADOW to 0 to turn that off.
           AI_INCLUDE_SHADOW: ${{ vars.AI_INCLUDE_SHADOW || '1' }}
+          AI_FORCE_PROMOTE: ${{ inputs.force_promote && '1' || '0' }}
+          # Cost assumptions behind win/loss labels. Leave the repository variables unset to keep the
+          # defaults (stock 0.28%, option flat 0.45%, Rs 20/order, 0.12% statutory).
+          AI_STOCK_COST_PCT: ${{ vars.AI_STOCK_COST_PCT }}
+          AI_OPTION_FLAT_COST_PCT: ${{ vars.AI_OPTION_FLAT_COST_PCT }}
+          AI_OPTION_ORDER_FEE_RS: ${{ vars.AI_OPTION_ORDER_FEE_RS }}
+          AI_OPTION_STAT_PCT: ${{ vars.AI_OPTION_STAT_PCT }}
+          AI_DEDUPE_BY_STRIKE: ${{ vars.AI_DEDUPE_BY_STRIKE || '0' }}
           NODE_OPTIONS: "--max-old-space-size=2048"
         run: npm run ai:train
