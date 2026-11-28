@@ -43,6 +43,13 @@ Optional repository variables (Settings → Secrets and variables → Actions �
 Each promotion saves the previous model next to the new one: `ai-models/<user>/<month>/stock.prev.json` and `option.prev.json`.
 To roll back, copy the contents of the `.prev.json` file over `stock.json` / `option.json` and commit.
 
+## Learning options (Settings → AI and ML → Learning options)
+
+Both are off / at the old value by default, so nothing changes until you choose:
+
+- **Confidence calibration learns from** — last 60 days (default), 180, 365 or every logged day. Applies to the bucket calibration and the indicator weights; effective at the next app load. The scheduled scan uses the same setting. Model training itself always uses all history.
+- **Use index / stock option models for live picks** — off keeps the single blended option model for live picks. On, live picks use the model and thresholds trained for index options or stock options, like logged signals do. Turn it on only after the AI Reliability panel shows a positive unseen edge; it can move option confidences.
+
 ## Rules-only mode
 
 Settings → AI and ML → **Rules-only mode** turns the ML model off for scoring (calibration and learned indicator weights still apply). Use it if the Performance → AI Reliability panel shows no edge on unseen signals.
